@@ -116,6 +116,7 @@ suite or any indirect `tsc` execution.
 | Persistence/events/clocks | Disposable PostgreSQL transactions, failure injection, fencing, uncertain append responses, genesis/snapshot-tail comparison, historical fixtures, projection rebuild. |
 | Transport/credentials | Cross-origin/CSRF attempts, cookie/session/refresh revocation, queued private delivery after capability loss, protected native credential storage, and denied native IPC/navigation. |
 | Frontend state/forms/network | Focused unit/component/browser checks, validation, keyboard alternatives, live-update continuity, reconnect and uncertain-command handling. |
+| Responsive workspace/onboarding | Core role flows at 320/390/768/1280/1920 CSS px and wider reference displays; portrait/landscape, zoom, touch, virtual keyboard/IME, browser Back, inspector/detail continuity, phone suspension/resume, and no duplicated submissions/subscriptions. Readiness/hints use real rules and cannot create assets, unlocks, or a tutorial gate. |
 | Cuisine-map selection | Equal-area reference fixtures, all cuisine footprints/IDs, proportional resizing and hit alignment, small/overlapping regions, Eastern Thrace selecting/highlighting Turkish only, synchronized keyboard/screen-reader list, both locales, packaged assets, and failure fallback; preview has no economic effects. |
 | English/Japanese text and layout | Catalog keys/typed placeholders, terminology and unit checks, both-locale workflows, viewport/zoom checks, glyphs, IME and character/storage boundaries. |
 | Packaging/deployment | Relevant browser/native flows, install/launch/connection checks, font/runtime coverage and recovery/compatibility evidence from the exact built revision. |
@@ -202,6 +203,10 @@ localization coverage until a final release phase. Planned gates are:
    survivors. Broader exploration runs separately with explicit budgets.
 4. Browser and native verification of affected owner, visitor, helper, reviewer,
    main/drink/dessert, absence/cleaning, and recovery flows in English and Japanese.
+   Include narrow/wide layouts and real supported phone browsers, coarse-pointer
+   tasks, virtual keyboard/IME, text zoom, suspension/network changes, and novice
+   discovery through ordinary screens. Uncoached playtests assess understanding;
+   automated checks enforce the contracts, not a claim that ease of use is proven.
 5. Release qualification of the specified 150-stall/mixed-session workload,
    backup/restore, historical compatibility, and Linux/macOS packages. Reuse valid
    evidence for the exact source/artifact rather than rerunning unrelated work.

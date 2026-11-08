@@ -20,6 +20,9 @@ owns the required release scope.
 - Web and Tauri Linux/macOS clients use the same service and protocol. Desktop
   packages contain frontend assets/native integration, not another canonical
   economy. The packaged webview remains the runtime for the browser frontend.
+- The web release includes usable smartphone layouts and supported phone-browser
+  flows. Qualify actual mobile browser input, suspension, reconnect, and reduced
+  rendering as well as desktop sizes; native iOS/Android packages remain later scope.
 - Bun installs dependencies and runs frontend build scripts. Oxlint is the
   frontend linter; `bun check` and qualified Svelte diagnostics run in hosted CI
   under [the testing policy](TESTING.md#frontend-toolchain). Keep the Svelte

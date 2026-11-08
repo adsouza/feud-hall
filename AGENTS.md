@@ -150,6 +150,12 @@ Consult the full design for conditions and tuning; these are common failure poin
 - Preserve drafts, focus, selections, camera position, and IME composition during
   live updates. Provide keyboard/menu equivalents for dragging and a usable HTML
   management/list view if WebGL is unavailable.
+- Owners land on a business overview with live hall context. Teach through real
+  readiness, quotes, inline explanations, and outcomes rather than a mandatory
+  tutorial or special economy. Responsive phone-browser layouts expose the same
+  core actions as desktop; inspectors become detail views while preserving scope,
+  drafts, input, pending IDs, and current authorization. Native phone apps remain
+  later scope. Follow the design's responsive/onboarding contracts.
 - Select cuisines through an equal-area world map with available regions
   highlighted and a synchronized accessible list. Keep regional footprints and
   projection data in presentation assets keyed by stable cuisine IDs; handle

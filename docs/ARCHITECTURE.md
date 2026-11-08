@@ -780,6 +780,44 @@ The lack of a paid Apple Developer account is a distribution constraint. Initial
 
 English and Japanese are launch locales under the [game-design contract](GAME_DESIGN.md#ui-languages-and-localization). Implement shared internationalization in the Svelte client used by web and Tauri, with application/presentation adapters for server-rendered player messages. Keep locale out of economic decisions, identifiers, random state, prices, clock rules, and authorization. Per-installation/browser language preference is presentation state; changing it performs no economic command or clock advance.
 
+### Responsive workspace and contextual guidance
+
+The [interaction model](GAME_DESIGN.md#gameplay-interaction-model),
+[in-context onboarding](GAME_DESIGN.md#learning-through-ordinary-play), and
+[responsive layout](GAME_DESIGN.md#responsive-layout-and-input) own the user
+experience. Use one Svelte application/use-case boundary across phone browsers,
+desktop browsers, and Tauri. Small screens must not fork the economic rules or
+drop a core role workflow. Native phone packaging remains outside launch scope.
+
+Keep route, business/stall scope, selected entity, editor draft, pending command
+ID, and projection revision in one coherent presentation state. Desktop
+inspectors and phone detail routes use the same editor/action model; do not
+create two independently submitting forms or duplicate socket subscriptions
+because both layouts exist. Reflow, orientation, browser Back, and virtual
+keyboard changes preserve composition/drafts and cannot submit a command.
+Revalidate any restored quote against current authority and content.
+
+Use content-driven CSS layout and available container/viewport width, with input
+capability and text zoom considered independently of device names or physical
+pixel resolution. Keep active actions above keyboards/safe areas and essential
+information available without hover/drag. Bound public/private subscriptions and
+rendering detail; a contextual hall view and full hall share one renderer/model
+where possible rather than mounting duplicate worlds. Hall navigation replaces
+the contextual preview with the full workspace, and returning to Business
+restores it; never display both hall views together. Low-detail/list fallback
+preserves management, dining, helper, and review use cases. Qualify actual mobile
+browser suspension and reconnect behavior; cosmetic render suspension never
+pauses gameplay or changes the server attendance policy.
+
+Readiness, explanations, and suggested actions are authorized read models built
+from existing domain predicates and quotes, with explicit blockers and estimates.
+They do not repair state, accrue clocks, unlock features, or auto-execute policy.
+Hint visibility is presentation preference, not a tutorial-completion domain
+gate. Retain mandatory costs/risk/authorization information when optional help
+is dismissed. Show real eligibility, licensing waits, funding limits, and
+cleaning state; never create tutorial customers, grants, or an independent economy.
+Domain events remain the source of real outcome explanations and durable notices.
+
 ### Message and content contracts
 
 Use stable message codes with typed, named parameters, and catalog lookups for all player-facing text. Translate whole sentences, including count/select variants, rather than concatenating English fragments. A maintained formatter must support parameter reordering and locale-specific grammar; select/pin it during implementation instead of creating a second ad hoc formatting language. Catalog validation checks matching keys, parameter names/types, and required variants across English/Japanese. Translation catalogs have their own presentation versions mapped to stable content IDs; editing a translation does not activate new economic rules or alter accepted historical terms. Fallback remains a runtime resilience path; complete Japanese coverage is a release requirement.

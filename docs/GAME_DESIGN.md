@@ -1,6 +1,6 @@
 # Feud Hall Game Design
 
-Version 0.30 · Design baseline for implementation planning
+Version 0.31 · Design baseline for implementation planning
 
 Feud Hall is a persistent multiplayer business simulation about building a restaurant business inside a shared food hall. Players compete twice: first for wholesale ingredients, then for diners. They choose cuisines and menus, set prices, hire and schedule staff, improve equipment, and expand into additional stalls. Staff perform kitchen work automatically. A successful business balances demand, quality, capacity, and costs while rivals make their own decisions in the same economy.
 
@@ -32,13 +32,15 @@ The constraints in the following table are **owner-confirmed**. Other rules in t
 | Ingredient substitutes | Most ingredients have a cheaper or more readily available substitute, with a slight reduction in dish quality. |
 | Customer dietary needs | Dietary requirements exclude incompatible dishes before customer preferences are scored; vegetarian diners consider only vegetarian food. Support differing requirements, including carbohydrate-restricted choices, through explicit game diet profiles rather than assuming a medical diagnosis determines a diet. |
 | Visual direction | A dark background with bright colors. |
+| Interaction and onboarding | Owners land on a business overview with live hall context. Teach through ordinary gameplay, contextual explanations, and useful defaults rather than a separate mandatory tutorial. |
+| Responsive UI | Core gameplay is usable on smartphone browser screens and takes advantage of larger desktop displays. Screen size changes presentation, not economic rules or permissions. |
 | Cuisine selection | Use an equal-area world map with the available cuisine regions highlighted. Eastern Thrace belongs exclusively to the Turkish cuisine region and is excluded from the European cuisine region. |
 | UI languages | Ship English and Japanese UI from the first playable release to prove localization works well. |
 | Time | One game day lasts one real hour; frequent active management should be useful. |
 | Opening hours | The entire hall closes every game day from 03:00 to 05:00 for cleaning: two game hours, or five real minutes while the service is available. No customers are allowed in. Players may review results and plan. Owners choose additional closures outside this mandatory window. |
 | Absence | Default to closing. Unattended trading is an explicit option, supported by automation and safety limits. |
 | Account invitations | Maintain a durable player-account invitation tree across restaurant failures and restarts. Earn one invitation per 7 cumulative game days of solvent trading. Detailed admission, quota, and expiry rules below are proposed defaults. |
-| Platforms | Web, Linux, and macOS. Windows is outside the initial target. |
+| Platforms | Web, including responsive smartphone browsers, plus Linux and macOS desktop clients. Windows and native iOS/Android apps are outside the initial target. |
 | Linux distribution | Hosted CI must generate both Flatpak and Debian `.deb` packages for the Linux client as release artifacts. Both formats are required. |
 | Architecture | Svelte frontend; authoritative Elixir/Phoenix server on Render; hosted web client and native clients connect to that server. Use Domain-Driven Design and Clean Architecture where they provide practical value, retain functional core / imperative shell, and borrow AOP and CQRS techniques where appropriate. |
 | Frontend tooling | Use Bun and Oxlint for the TypeScript frontend, with `bun check` for local and hosted type checking instead of a separate `tsc` CLI step; use Oxlint rather than ESLint. |
@@ -155,7 +157,7 @@ Visitors can choose **Visit as a customer** immediately: browse the hall, inspec
 1. Inspect the public hall and obtain a license through invitation redemption or an approved application. Continue on the same principal and see human and NPC competitors. An existing owner signs in to the same account; a full hall offers the waiting list before charging setup costs.
 2. Name a restaurant and choose a starting cuisine through the equal-area world map, with the twenty available cuisine regions highlighted and an equivalent searchable list. Preview its equipment, ingredient exposure, and starter recipe before committing.
 3. Compare available stall locations by foot-traffic exposure, rent, holding cost, setup cost, and estimated break-even sales. Choose an affordable location and receive the standard starter package. Starting locations have meaningful, openly disclosed tradeoffs; the game does not silently assign a superior location.
-4. Review the supplied staff, basic shift coverage, opening hours, menu price, and initial stock. A guided checklist explains costs and the break-even estimate.
+4. Review the supplied staff, basic shift coverage, opening hours, menu price, and initial stock in the ordinary business overview. A persistent service-readiness panel explains actual blockers, costs, and the break-even estimate; it is not a tutorial checklist that must be completed in sequence.
 5. Open the stall. Staff automatically prepare and serve incoming orders. The first sale should occur within two real minutes under normal opening conditions outside cleaning; onboarding during cleaning shows the 05:00 reopening countdown and allows setup/planning immediately.
 6. Inspect a clear operating report, make a pricing or staffing decision, and see the effect.
 7. Before leaving, see whether the business will close or remain open under explicitly enabled automation, along with the expected costs and safety limits.
@@ -166,7 +168,7 @@ Allow one active onboarding/vacancy-offer draft per principal per hall, across
 devices. Switching an unconfirmed slot atomically releases the old claim and
 does not extend that draft's original deadline or bypass waiting-list priority.
 
-Setup is recoverable until the first opening: the original unused starter kit can be exchanged for another starter cuisine at its published price difference, without another grant or replenishment of used stock. Ordinary market purchases do not become refundable starter stock. The tutorial does not simulate free sales into the real economy.
+Setup is recoverable until the first opening: the original unused starter kit can be exchanged for another starter cuisine at its published price difference, without another grant or replenishment of used stock. Ordinary market purchases do not become refundable starter stock. In-context onboarding uses real decisions and outcomes; it never simulates free sales, pauses the shared hall, or awards tutorial-only economic advantages.
 
 ## 5. Time, opening hours, and owner absence
 
@@ -902,6 +904,149 @@ NPC retirement and replacement should not cause abrupt supply or demand jumps. U
 
 The business overview is the default management home. The player can inspect a competitor's public menu and visible queue without seeing its private finances, inventory, wage contracts, or policy thresholds. Public comparison uses awards, service indicators, and visible business behavior; a mandatory public cash-balance leaderboard is not required.
 
+### Gameplay interaction model
+
+The owner-confirmed landing view is **Business overview with live hall context**.
+Players manage by selecting a business/stall, inspecting an issue or opportunity,
+previewing a change, and explicitly applying it. Staff continue ordinary work
+without repeated player clicks. There is no required avatar travel, camera
+precision, drag gesture, or reflex interaction to manage a restaurant. The full
+hall is one primary navigation action away; its scene and equivalent stall list
+select the same entities as business controls.
+
+Proposed owner navigation is **Business, Hall, Market, Inbox**, with account,
+language, and accessibility controls in the shared header. Business contains
+Overview, Menu, Stock, Staff, Development, and Reports, plus an explicit
+all-stalls/selected-stall scope. Show that scope beside edits so changing a
+branch menu cannot look like a business-wide policy change. Visitors instead
+get visiting/dining, available work, their receipts/inbox, and account access;
+licensed owners without a lease see setup/waiting-list options. Reviewer actions
+appear only under current explicit capability. Role changes preserve the same
+principal and never imply permission merely because a navigation item is shown.
+
+The owner-approved visitor UX is **hall-first**, with **Hall, My visit, Work,
+Profile** navigation. Hall opens the shared live 3D scene with an equivalent
+stall list; selecting a stall exposes its public menu, prices, availability,
+waits, and dietary compatibility. Desktop can place the selected menu beside
+the scene; a phone opens it as a detail screen with Back, rather than keeping
+the scene behind the form. Browsing requires no owner invitation or avatar
+travel, and never exposes private business controls.
+
+My visit contains main/optional-drink checkout, accepted-order tracking, and
+the later same-stall dessert offer. Work contains available offers, disclosed
+pay/duration and success criteria, and a focused counter view showing the ready
+tray's components, selection deadline, and actual handover progress. Profile
+contains dining credit with available/reserved amounts, receipts/notices, work
+history, account access, and license eligibility/application status. A successful
+shift offers an explicit application; the pending view explains manual review
+without promising approval, review timing, or a vacant stall. These screens
+teach through ordinary play and use the existing dining, workforce, identity,
+and cleaning rules. Mockup prices, balances, and frozen progress snapshots are
+illustrative, not approved tuning or client authority over game outcomes.
+
+The overview answers **Are we trading? What needs attention? Are we making money?
+What can I change?** Show current operating state, available cash versus committed
+cash, clearly labeled period profit, stock/coverage risks, and the next relevant
+clock boundary. Keep a compact live hall/selected-stall view alongside those
+decisions on larger screens. Exploring the hall replaces that compact preview
+with the full hall workspace; returning to Business restores the preview. Show
+only one hall view at a time. The hall clock, connection status, critical stop,
+and cleaning countdown remain easy to find without crowding every metric into
+a persistent phone header.
+
+Selecting a recipe, product, worker, lease, or notice opens its context and next
+valid actions. Quick reversible edits use a labeled draft and Apply/Cancel;
+economic purchases show the bound quote, affected scope, total, recurring cost
+where relevant, and pending/settled distinction. Only consequential actions such
+as accepting bankruptcy need a separate consequence confirmation; do not put an
+extra modal after every price edit or helper selection. Pending requests cannot
+be submitted twice by repeat taps, and stale quotes show what changed. Use the
+same offers, rejection reasons, and command receipts at every screen size.
+
+### Learning through ordinary play
+
+There is no separate mandatory tutorial, scripted practice economy, or sequence
+of screens that must be visited to unlock normal management. The ordinary entry
+view offers **Visit the hall**, **Work a shift**, and **Run a restaurant**, with
+accurate admission requirements. A guest may explore cuisines and startup costs
+without an owner license, but draft previews grant no lease, money, or owner
+capability. License approval remains manual with no promised wait; full halls,
+missing shift offers, exhausted dining allowance, and cleaning show truthful next
+options rather than invented work/customers or a tutorial bypass.
+
+Use progressive disclosure within actual tasks:
+
+- **Service readiness** remains useful throughout a venture: show the actual
+  feasible main, stock, scheduled coverage, opening/attendance policy, and each
+  blocking state with a direct action. Warn about a weak margin without making
+  profit a new hard opening requirement. Starter defaults are prefilled and
+  disclosed through normal setup confirmation; they never secretly enable
+  unattended trading, purchasing, hiring, or optional recipe unlocks.
+- **Explain at the decision:** menu prices show contribution and dietary reach;
+  stock shows servings/reservations and expiry; staffing shows game hours and
+  their real duration; leases show exposure and open/closed rates. Short inline
+  definitions and expandable details replace a glossary that must be read first.
+- **Explain the result:** real sale/fill/wage receipts and reports show what
+  happened and why. Suggestions point to current opportunities, such as missing
+  stock or an upcoming coverage gap, without guaranteeing profit or spending
+  automatically. Keep noncritical hints dismissible and available again in
+  context; essential costs, failures, and authorization reasons stay visible.
+- **Teach visitor work at the counter:** show the ready tray, selection deadline,
+  ordinary handover time, actual pay/standby, and license-success criteria beside
+  the controls. One clear tap/keyboard action selects a tray; no tutorial overlay
+  or decorative movement can obscure the short actionable window.
+
+Guidance reacts to committed state and is not a quest system. Opening an
+explanation performs no domain action, resets no deadline, and produces no
+reward. During 03:00–05:00, readiness explains the real reopening conditions and
+offers planning/manual management; it cannot promise immediate service or clear
+absence/safety holds. Measure uncoached first-time play by time to a useful
+action and understanding of costs/absence, rather than promising instant owner
+admission. Validate English/Japanese context and input without introducing a
+fluent-speaker review gate.
+
+### Responsive layout and input
+
+Smartphone browser support is part of the core web game, not a reduced companion
+dashboard. Ownership/setup, map/list cuisine choice, menus, stock/market,
+staffing, dining with drink/dessert, helper tasks, licensing/review, recovery,
+history, and settings must remain usable. Native phone apps remain later scope.
+
+Proposed layout ranges use **available CSS width**, not physical screen pixels
+or a device-name test; tune the exact breakpoints with content and text zoom:
+
+| Available space | Proposed arrangement |
+| --- | --- |
+| Narrow, below about 720 CSS px | One main column, labeled bottom navigation, and nested business screens. Context/editing opens a full-screen detail view with Back and a visible action area. The hall is a compact optional preview or its full view/list, never a mandatory canvas behind a form. |
+| Intermediate, about 720–1199 CSS px | Workspace with collapsible navigation and an optional detail drawer where it fits; preserve comfortable field/row widths. |
+| Wide, about 1200 CSS px and above | Navigation rail, business workspace, and selected-item inspector/live hall context. Extra-wide screens can expose more stall comparisons, market rows, and report detail alongside the active task. |
+
+More space provides useful simultaneous context rather than oversized text or
+the same narrow phone column surrounded by empty margins. Keep prose/controls
+readable; do not require panels to be permanently visible when unused. The same
+editor becomes an inspector on desktop and a full detail route on phone,
+preserving drafts, selected IDs, scroll/focus, and IME composition through resize,
+orientation, language changes, and browser Back. Price/cost confirmation cannot
+disappear behind the virtual keyboard or device safe areas.
+
+Reflow essential management content at 320 CSS px and test larger widths and
+zoom; maps and genuinely wide ledgers may have their own labeled pan/scroll
+surface with equivalent usable summaries/actions. Product/staff rows become
+readable stacked rows/cards rather than shrinking a desktop spreadsheet. Do not
+hide critical costs, deadlines, warnings, or Apply/Cancel actions to make them
+fit. Use approximately 44×44 CSS px or larger primary touch targets, readable
+editable text, no hover-only information, and menu alternatives to drag/pinch.
+See W3C guidance on [reflow](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html)
+and [touch targets](https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html).
+
+Bound scene detail/resolution on high-DPI phones and large displays. Reduce or
+pause cosmetic rendering when appropriate, while keeping the HTML management
+game available. Layout changes do not pause the economy or change attendance;
+phone suspension/disconnection follows the existing server liveness/grace rules.
+On return, preserve drafts, mark stale state, resynchronize, and resolve uncertain
+commands by their original IDs. Never silently enable unattended trading or
+replay a stale purchase because a phone resumed.
+
 ### Cuisine selection map
 
 The cuisine picker uses an **equal-area world map**, with all available cuisine
@@ -1150,6 +1295,9 @@ Proposed initial targets are sub-500 ms server-side acknowledgement for ordinary
 69. Main/drink checkout consolidates shared ingredients, capacity, exact funding slices, and dietary/carbohydrate commitments atomically. Any requested component becoming unavailable or changing confirmed terms rejects the whole guest checkout without partial acceptance. Simulated optional choice preserves one arrival and its original budget. One tray queue place and one counter handover cannot duplicate staff or bypass drink preparation.
 70. Both tray components must be ready and fresh before joint service. Failure/expiry, cancellation, absence, distress, bankruptcy, and the exact cleaning cutoff settle or cancel the complete tray once, with actual consumed costs as waste, unconsumed commitments released, and no standalone drink payment. Voluntary cancellation ends when either preparation starts. Helper-selected tray completion counts as one task; replay/reconnect preserve tray membership and the consumed drink slot.
 71. Main-only, main/drink, main/dessert, and main/drink/dessert visits finalize once with normalized main:drink:dessert weights 4:1:2 over accepted components. Optional items declined/unavailable add no penalty. Cleaning exemptions, independent later-dessert settlement, shared budget/carbohydrate limits, source eligibility, and fixed award review cuts remain intact. All drink names, quoted prices/ingredients, tray controls, reports, and failure states work in English/Japanese web/native flows.
+72. A new guest can discover dining, real helper work, and license admission without a tutorial or economic bypass. An admitted owner can understand readiness, inspect real costs, open when eligible, explain a sale/loss, and choose an absence policy using ordinary screens. Full halls, manual-review waits, no work/allowance, cleaning, distress, and recovery remain truthful; hints never grant assets, change permissions, or reset deadlines.
+73. All core role flows work at 320 CSS px and larger phone/tablet/desktop widths in English/Japanese, with touch, keyboard, zoom, and virtual keyboards. Responsive reflow/orientation, context-detail navigation and browser Back preserve scope, drafts, focus/IME, selected IDs, active work, and uncertain command identity. Essential prices, costs, clocks, and actions remain visible; no hover/drag/WebGL dependency blocks play.
+74. Large displays provide useful simultaneous business/hall/detail context without another simulation subscription, duplicated editor, or extra economic action. Phone backgrounding, network change, and resumption obey ordinary absence/recovery rules, keep stale views explicit, and cannot enable automation, resume a safety-stopped stall, or repeat a purchase. Reference-device rendering and input performance are measured rather than inferred from a desktop screenshot.
 
 ### Property-based testing
 
@@ -1186,7 +1334,7 @@ Mutation and property workloads have explicit case/action/shrink/time limits and
 
 ### Required first playable scope
 
-The first playable version includes the entire economic loop, all twenty cuisines with three savory recipes, one dessert, and one drink each, an equal-area world-map cuisine picker with highlighted regions and an accessible list, optional same-stall main/drink trays and later dessert ordering, hard dietary compatibility and profile-based demand, ingredient substitutes, automatic kitchen work, staff/shift management, shared supply and diner competition, default closure and optional unattended automation, mandatory daily hall cleaning/planning, NPC competitors, finite hall leases with visible location/traffic/rent tradeoffs, same-hall expansion, awards, optional nonlinear milestones, full gameplay event sourcing with saving/replay/recovery, bankruptcy with a persistent owner history, invitation-tree accounts with recovery, visitor customer play, optional counter-helper shifts with payroll-backed dining credit, successful-shift license applications with seed/admin review, and durable notices. English and Japanese UI are required across the complete first-playable flow. Basic dark, brightly accented 3D presentation must reflect real state. Clean Architecture/DDD boundaries and property/mutation verification develop alongside these features.
+The first playable version includes the entire economic loop, all twenty cuisines with three savory recipes, one dessert, and one drink each, an equal-area world-map cuisine picker with highlighted regions and an accessible list, optional same-stall main/drink trays and later dessert ordering, hard dietary compatibility and profile-based demand, ingredient substitutes, automatic kitchen work, staff/shift management, shared supply and diner competition, default closure and optional unattended automation, mandatory daily hall cleaning/planning, NPC competitors, finite hall leases with visible location/traffic/rent tradeoffs, same-hall expansion, awards, optional nonlinear milestones, full gameplay event sourcing with saving/replay/recovery, bankruptcy with a persistent owner history, invitation-tree accounts with recovery, visitor customer play, optional counter-helper shifts with payroll-backed dining credit, successful-shift license applications with seed/admin review, and durable notices. English and Japanese UI, in-context onboarding, and responsive smartphone-to-desktop web layouts are required across the complete first-playable flow. Basic dark, brightly accented 3D presentation must reflect real state. Clean Architecture/DDD boundaries and property/mutation verification develop alongside these features.
 
 Shipping just a 3D scene or just a collection of GenServers is not a playable version. A smaller initial internal slice is useful, but does not satisfy this scope.
 
@@ -1205,7 +1353,7 @@ An internal vertical slice may use one cuisine and a few stalls, then expand the
 
 ### Later scope
 
-Private halls; additional public halls; player-to-player trade or gifts; restaurant co-ownership/shared management; detailed cooking minigames and additional visitor staff specialties; tips; staff poaching; loans; standalone drinks, refills, and adding drinks after main acceptance; physical seating or crowd congestion as economic constraints; freeform kitchen construction; complex equipment failures; regional or offsite expansion; mobile/Windows clients; offline local play; campaigns; monetization; and automatic desktop updates are outside the first release.
+Private halls; additional public halls; player-to-player trade or gifts; restaurant co-ownership/shared management; detailed cooking minigames and additional visitor staff specialties; tips; staff poaching; loans; standalone drinks, refills, and adding drinks after main acceptance; physical seating or crowd congestion as economic constraints; freeform kitchen construction; complex equipment failures; regional or offsite expansion; native iOS/Android and Windows clients; offline local play; campaigns; monetization; and automatic desktop updates are outside the first release.
 
 Private-hall compatibility requires service-level accounts plus hall-scoped memberships, leases, economy, configuration, and authorization now. Account invitations ship in the first release; separate private-hall invitations, access administration, and billing remain later work.
 
@@ -1256,6 +1404,8 @@ The owner has resolved the central concept, population, time, absence policy, fa
 | Deployment capacity | Choose an always-running Render configuration using measured simulation and database demand. |
 | Localization | English and Japanese at launch; complete catalogs, contextual time/currency language, IME-safe forms, Japanese glyphs in packaged clients, and automated terminology/placeholder checks. Select a message-formatting library and font strategy against the architecture contracts. |
 | Client support | Record minimum browser/webview/OS versions and a rendering benchmark machine. Verify macOS installation under the signing constraint. |
+| Interaction/onboarding | Confirmed business overview with live hall context and learning through normal play. Proposed readiness explanations, contextual action/result guidance, Business/Hall/Market/Inbox owner navigation, and shared inspectors/details; validate uncoached first-time use and returning-player usefulness. |
+| Responsive web | Confirmed smartphone usability with richer large-screen layouts. Proposed 320 CSS px core reflow, coarse-pointer targets around 44×44 CSS px, and content-driven single/two/three-region layouts. Qualify mobile Safari/Chrome and desktop targets, virtual keyboard/IME, suspension/resume, and reference hardware before publishing supported versions. |
 
 An implementation plan should turn these defaults into explicit versioned data and acceptance checks. Unvalidated tuning should remain easy to change without rewriting domain logic.
 
@@ -1302,6 +1452,7 @@ Primary design source: the 174-page PDF supplied as `feud-hall-design-discussion
 | Owner ingredient-substitution decision | Most ingredients should have a cheaper or more readily available substitute that slightly reduces quality. Product mappings, owner policies, quantity conversions, and small penalty values above are proposed defaults. |
 | Owner dietary-demand decision, November 8, 2026 | Incorporate varying dietary needs into customer choice, excluding incompatible dishes such as nonvegetarian meals for vegetarian diners. Profile definitions, weights, composition rules, and shared-course carbohydrate limits above are proposed defaults. Model eating requirements directly; diabetes is not equated with a mandatory keto diet. |
 | Owner drink addition, November 8, 2026 | Add one cuisine-reflecting drink to each of the twenty cuisines, optionally ordered alongside the main dish. The catalog becomes 100 recipes: 60 savory, 20 dessert, and 20 drink. Drink selections, independent unlocks, same-stall checkout, joint tray fulfillment, and scoring details above are proposed defaults; earlier 80-recipe counts describe the pre-drink catalog. |
+| Owner UX/onboarding/responsive decision, November 8, 2026 | Use the business overview with live hall context as the owner's default. Incorporate onboarding transparently into ordinary play without an explicit tutorial; make the UI usable on smartphone screens and take advantage of larger desktop displays. Navigation, layout ranges, contextual guidance, and qualification targets above are proposed design details. |
 | Owner restaurant-license decision | Successful staff shifts offer visitors the opportunity to apply for a restaurant license, with applications listed for seed/admin approval. Success criteria, sponsorship, application lifecycle, and race handling above are proposed defaults. |
 
 The PDF's final “complete specification” responses do not replace the earlier decisions or provide a complete working implementation. Several code blocks are visibly clipped. This document does not adopt their claims of guaranteed shutdown persistence, independently rounded customer allocations, repeated ingredient deductions, permanent prestige benefits, or superseded local sidecars. It supplies explicit contracts for those areas instead.
