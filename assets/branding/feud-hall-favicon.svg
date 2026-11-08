@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Feud Hall favicon</title>
+  <desc id="desc">Simplified coral and mint hall roof and golden serving dish, optimized for small icons.</desc>
+
+  <rect width="64" height="64" rx="14" fill="#101523"/>
+  <path d="M10 28 32 13" fill="none" stroke="#FF6B5E" stroke-width="6" stroke-linecap="round"/>
+  <path d="M32 13 54 28" fill="none" stroke="#58E0BB" stroke-width="6" stroke-linecap="round"/>
+  <path d="M14 33V50H50V33" fill="none" stroke="#FFF4DC" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M23 40a9 9 0 0 1 18 0Z" fill="#FFC75B"/>
+  <path d="M22 44H42" stroke="#FFC75B" stroke-width="3" stroke-linecap="round"/>
+</svg>

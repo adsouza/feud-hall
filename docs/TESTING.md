@@ -1,0 +1,214 @@
+# Feud Hall Testing
+
+Status: verification plan. Application manifests, test runners, and hosted CI
+workflows are not implemented yet. Commands below are planned interfaces, not
+claims of installed tooling or passing checks. Pin versions and verify command
+chains when the first application slice lands.
+
+The [game design](GAME_DESIGN.md#required-correctness-scenarios) owns gameplay
+acceptance scenarios; [architecture](ARCHITECTURE.md#architecture-verification)
+owns implementation invariants. This document owns how to select, run, and report
+checks. Release execution belongs in [Deployment](DEPLOYMENT.md).
+
+## Frontend toolchain
+
+Use **Bun** for dependency management, TypeScript execution, scripts, and suitable
+unit/property tests. Commit `bun.lock`, pin the Bun release, and install CI
+packages with `bun install --frozen-lockfile`. Use the locked **Oxlint** dependency
+as the JavaScript/TypeScript linter. Do not introduce ESLint or a separate `tsc`
+CLI step. Keep Svelte's browser compilation pipeline and invoke its build scripts
+through Bun; successful transpilation/build is not evidence of type correctness.
+
+Use **`bun check` locally and in hosted CI** for TypeScript type checking. It is a separate
+check from running TypeScript or tests without checking. See the official
+[Bun type-checking documentation](https://bun.sh/docs/runtime/check). Avoid a
+package script named `check` that shadows the native command; validate the actual
+entry point in the pinned version and record its invocation in the workflow.
+
+Qualify Svelte coverage with deliberately invalid component-prop, template
+expression, and script fixtures. Oxlint's [compatibility matrix](https://oxc.rs/compatibility)
+currently identifies a template-linting gap, so linting scripts alone cannot
+establish coverage of `.svelte` files. If the pinned Bun checker does not diagnose
+those component/template cases, add a pinned Svelte-aware CI check invoked through
+Bun, such as the component diagnostics described in the official
+[Svelte TypeScript guide](https://svelte.dev/docs/svelte/typescript). Record which
+files and error classes each check covers; do not silently drop uncovered cases
+or add ESLint/`tsc` to conceal the gap. The exact Svelte integration is an early
+frontend qualification task, not an already demonstrated capability.
+
+Oxlint's [type-aware mode](https://oxc.rs/docs/guide/usage/linter/type-aware) is an
+optional additional check after qualification. Inspect configuration and flags so
+the scope, child tools, and resource use are known. Local type analysis is not
+banned in general; indirect `tsc` calls remain prohibited.
+
+## Code formatting
+
+Use Elixir's built-in [`mix format`](https://hexdocs.pm/mix/Mix.Tasks.Format.html)
+for backend code, with a committed `.formatter.exs` defining the application,
+configuration, migration, and test inputs. Pin Elixir so developer and CI
+formatter output agrees. Run `mix format` locally to apply formatting and
+`mix format --check-formatted` in CI to reject unformatted code.
+
+Use **Prettier** for frontend TypeScript/JavaScript, Svelte, CSS, and JSON, with
+the Svelte-maintained
+[`prettier-plugin-svelte`](https://github.com/sveltejs/prettier-plugin-svelte)
+explicitly loaded in the committed Prettier configuration. Lock compatible
+Prettier/plugin versions in `bun.lock`. Define frontend-scoped file patterns and
+a `.prettierignore` excluding generated, dependency, build, and coverage output;
+do not sweep backend code or original artwork into frontend formatting.
+Keep Prettier configuration minimal and use the same configuration in editors
+and command-line checks. Oxlint handles linting; formatting does not replace
+linting, type checking, or Svelte diagnostics.
+
+Provide `bun run format` for Prettier's `--write` mode and
+`bun run format:check` for its `--check` mode. CI runs the check commands for
+both languages without rewriting source. Add the configurations and scripts
+when their application manifests are created; they are not installed yet.
+
+## Local execution policy
+
+- Never run local `tsc`, directly or through scripts, hooks, aliases, or child
+  tools, because of its RAM use. Local `bun check` is allowed, including checks
+  of the entire configured project; it is not a full test-suite run. Other
+  diagnostic tools must avoid invoking `tsc` and obey the same resource budgets.
+- A full local suite requires the owner's express advance permission. Focused,
+  bounded tests and lint/format checks are allowed after inspecting
+  their complete command chain. A default `bun test` or `mix test` may run the
+  whole suite; selecting a package alone is not proof of a focused scope.
+- Run memory-heavy local work serially and stop above 2 GiB combined RSS. Bound
+  worker counts and property/mutation budgets. If a dependency launches Node,
+  cap its old space at 1536 MB per process; that flag is not a Bun memory limit.
+- Use disposable databases for SQL, replay, and failure-injection checks. Never
+  point destructive test setup or projection-rebuild fixtures at a live hall.
+- Documentation/artwork changes need relevant link, syntax, or render checks,
+  not an application suite. Report unavailable checks without claiming a pass.
+
+## Planned entry points
+
+Establish the actual working directory, versions, and scripts during scaffolding.
+Keep format, lint, build, type, and test entry points explicit so their costs are visible.
+Local `bun check` is permitted; these examples do not authorize a full local test
+suite or any indirect `tsc` execution.
+
+| Check | Planned entry point | Where and scope |
+| --- | --- | --- |
+| Dependency install | `bun install --frozen-lockfile` | Frontend directory containing `package.json` and `bun.lock`; inspect lifecycle scripts first. |
+| Backend formatting | `mix format`; CI: `mix format --check-formatted` | Committed `.formatter.exs` defines backend scope; inspect aliases/plugins before local execution. |
+| Frontend formatting | `bun run format`; CI: `bun run format:check` | Locked Prettier plus Svelte plugin; explicit frontend scope, write locally and check in CI. |
+| Frontend lint | `bun run lint` resolving to locked Oxlint | Inspect selected modes/configuration and local resource use; applicable project scope in CI. |
+| TypeScript types | Native `bun check` | Local and hosted CI; check the whole configured project, not just changed files. |
+| Svelte diagnostics | `bun run check:svelte` | After coverage qualification; document the script/tool. Local use must avoid `tsc` and respect memory limits. |
+| Frontend unit/property test | `bun test <test-file>` | Focused locally after command inspection; bounded suite in hosted CI. |
+| Browser/component tests | Bun-invoked scripts | Pin the browser/component harness when added; use actual browser/webview checks for interaction, IME, and rendering. |
+| Backend unit/property test | `mix test <test-file>` | Focused ExUnit/StreamData or equivalent; inspect Mix aliases and setup first. |
+| SQL, replay, mutation, load, package checks | Dedicated scripts/jobs | Implement explicit bounded entry points; run broad/heavy work in hosted CI. |
+
+## Choose checks by change
+
+| Changed behavior | Required evidence |
+| --- | --- |
+| Pure rules, arithmetic, content | Success/rejection/boundary examples; independent conservation and stateful properties; validate affected definitions. |
+| Dietary demand | Hard exclusion before choice scoring, full-bill vegetarian/vegan and carbohydrate facts, substitutions/missing metadata, enabled-profile coverage, unchanged finite arrival totals, and shared main/drink/dessert ceilings across acceptance/service/cancellation/replay. |
+| Main/drink trays | All twenty drink recipes, initial-only add-on, combined stock/funding/carbohydrate feasibility, one queue/helper handover, atomic paired acceptance/service/cancellation, component waste, freshness/cleaning cutoff, and all four main/drink/dessert combinations. |
+| Commands, permissions, resource lifetime | Wrapped use-case tests, retries/conflicts, current authorization, settled-state resource oracle, deferred settlement. |
+| Dining acceptance/cancellation | Confirmed-term mismatches, revised command IDs, one active visit with atomic main admission, pre-preparation cancellation races, exact funding/waste, and no cancellation of served courses. |
+| Capacity/admission | Compatible FIFO offers, one active entry/draft, expiry/rejoin, dormant reopening, no direct/NPC bypass, and atomic confirmation under contention. |
+| Persistence/events/clocks | Disposable PostgreSQL transactions, failure injection, fencing, uncertain append responses, genesis/snapshot-tail comparison, historical fixtures, projection rebuild. |
+| Transport/credentials | Cross-origin/CSRF attempts, cookie/session/refresh revocation, queued private delivery after capability loss, protected native credential storage, and denied native IPC/navigation. |
+| Frontend state/forms/network | Focused unit/component/browser checks, validation, keyboard alternatives, live-update continuity, reconnect and uncertain-command handling. |
+| Cuisine-map selection | Equal-area reference fixtures, all cuisine footprints/IDs, proportional resizing and hit alignment, small/overlapping regions, Eastern Thrace selecting/highlighting Turkish only, synchronized keyboard/screen-reader list, both locales, packaged assets, and failure fallback; preview has no economic effects. |
+| English/Japanese text and layout | Catalog keys/typed placeholders, terminology and unit checks, both-locale workflows, viewport/zoom checks, glyphs, IME and character/storage boundaries. |
+| Packaging/deployment | Relevant browser/native flows, install/launch/connection checks, font/runtime coverage and recovery/compatibility evidence from the exact built revision. |
+| Documentation/artwork | Links/anchors, file validity, SVG/PNG dimensions and visual inspection as appropriate. |
+
+Do not add tests that merely duplicate implementation expressions. An independent
+oracle should fail when the protected behavior is removed, not reproduce the same
+mistake. Add tests proportional to behavioral risk; avoid testing reversible prose
+or cosmetic edits through a game suite.
+
+## Properties, replay, and mutation
+
+Use explicit clocks, deterministic seeds/IDs, versioned content, and bounded
+case/action/shrink/time budgets. Include meaningful accepted transitions and
+completed lifecycle states so an all-rejected trace cannot pass. Preserve failing
+seeds, minimized traces, content hashes, and the independent assertion.
+
+Conservation covers declared sources/sinks: grants, wholesale replenishment,
+simulated spending, allowances, payroll, spoilage, and salvage. Test resource
+release after cancellation, closure, handover, distress, refit, and bankruptcy.
+Compare canonical live, genesis, and snapshot-tail state at the same committed
+batch. Recovery reconciliation is a new transition; compare again at its new
+position instead of expecting old sockets/helper control to survive unchanged.
+
+Run a smaller sampled property set through real PostgreSQL adapters with restarts
+and injected failures. Cover original immutable receipts versus later settlement,
+source-lotted guest funds, multiple courses in one visit, full-bill substitutions,
+identity admission races, the 03:00/05:00 cutoff, and cross-clock deadlines. The
+[architecture's early qualification plan](ARCHITECTURE.md#early-qualification-and-ongoing-tests)
+defines the capacity/recovery proof and retained-history measurements.
+
+Include midnight budgets versus 03:00 reports, initialization's partial report,
+invitation activity becoming eligible/ineligible inside an advance, and earning
+thresholds tied with closure. Exercise repeated recovery with a stable recovery
+identity and newer fencing epochs, fresh NPC presence after restart, and a
+migration requiring the old writer to stop. Curated mutations bypass confirmed
+terms, allow post-preparation voluntary cancellation, skip a waiting-list entry,
+retroactively accrue invitation time, reuse old presence, or deliver a queued
+private payload after revocation; each needs a named failing assertion.
+
+Dietary properties generate resolved ingredient bills, hidden animal-derived
+components, substitute/yield conversions, missing metadata, profile intersections,
+and carbohydrate quantities just below/at/above each limit. Check deterministic
+incompatibility even at extreme price/prestige, one profile per existing arrival,
+and exact per-visit served/reserved totals across courses, cancellation, locale,
+reconnect, and content changes. Exercise both simulated choice and guest quotes
+through the application boundary. Mutations bypass the filter, trust a client
+badge, ignore sauce/side ingredients, round carbohydrate downward, reset the
+ceiling for dessert, or reclassify an accepted course using new content; require
+the independent behavioral assertion to fail.
+
+Mutation cohorts start with one worker in an isolated copy or hosted job. Pass
+the unchanged baseline, retain exact patches and selected tests, observe a real
+behavioral assertion, then restore and recheck the baseline. Report killed,
+survived, untested, invalid/compile failure, timeout, and harness/setup failure
+separately. Replay valid survivors against the broader applicable scope before
+classifying a selection miss or missing assertion; an unproven equivalent claim
+is not a pass. Include semantic faults as well as generated arithmetic/Boolean
+mutations. The [game-design mutation policy](GAME_DESIGN.md#mutation-testing)
+specifies required evidence and budgets.
+
+Drink/tray traces cover all twenty recipes and all four optional-item
+combinations. Contend for a shared ingredient used by both main and drink;
+reject combined over-budget, over-capacity, or over-carbohydrate requests without
+partial reservations. Vary component completion order, ready-food expiry,
+counter control, cancellation after only one preparation starts, 03:00 cutoffs,
+recovery, and dessert eligibility after joint service. Mutations admit a late
+drink, reset its slot, accept/serve half a tray, count a second meal/helper task,
+skip drink work or a shared-stock check, double a debit, or grant a new dietary
+allowance. An independent settled-state/accounting assertion must detect each
+protected fault. Include paired-tray attachment and contention in load/replay
+measurements rather than assuming a main-only workload covers them.
+
+## Hosted CI and release evidence
+
+Build checks alongside each implementation slice; do not defer event/replay or
+localization coverage until a final release phase. Planned gates are:
+
+1. Frozen installs and applicable format/lint, definition/catalog validation,
+   dependency-direction and command/query ownership checks.
+2. `bun check`, qualified Svelte diagnostics, backend checks, focused regression
+   suites, bounded property traces, and relevant PostgreSQL/authorization tests.
+3. A bounded risk-based mutation cohort for critical changes, with reviewed valid
+   survivors. Broader exploration runs separately with explicit budgets.
+4. Browser and native verification of affected owner, visitor, helper, reviewer,
+   main/drink/dessert, absence/cleaning, and recovery flows in English and Japanese.
+5. Release qualification of the specified 150-stall/mixed-session workload,
+   backup/restore, historical compatibility, and Linux/macOS packages. Reuse valid
+   evidence for the exact source/artifact rather than rerunning unrelated work.
+
+Store source revision, tool/config/lockfile versions, commands and scope, seeds,
+failures/survivors, timings, and artifact identifiers with results. Clearly
+separate planned, run, passing, failing, and unverified checks. A linter score,
+coverage percentage, successful bundle, or screenshot does not alone prove types,
+translation quality, economic correctness, or capacity. No fluent Japanese review
+is required; localization qualification uses the documented automated checks.
