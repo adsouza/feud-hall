@@ -88,6 +88,9 @@ without the actual built artifact is insufficient for rollback or verification.
    hall/environment. Production verification must avoid fabricated transactions
    or altering real businesses merely to generate test evidence. Retain results
    and monitor unexpected errors, backlog, resource use, and recovery failures.
+   Qualify diagnostic collection/search and the
+   [logging contract](ARCHITECTURE.md#observability-and-diagnostic-logging) for
+   the exact server and browser/native builds before public release.
 
 Prepare compatible readers/decoders before enabling new event writers, or use a
 coordinated unavailable interval when mixed versions cannot safely coexist.
@@ -143,6 +146,44 @@ replace an installed client's assets or remove protocol compatibility obligation
 - State what interval is unavailable, which deadlines pause, the affected revision,
   and the current recovery status. Credentials still obey their wall-time expiry;
   current safety/absence holds and recorded cleaning state survive recovery.
+
+## Diagnostic operations and retention
+
+Before public launch, provision centralized searchable structured logs and linked
+traces for server, background workers, browser, and packaged clients under the
+[architecture contract](ARCHITECTURE.md#observability-and-diagnostic-logging).
+Do not rely solely on a live process console, a player's open browser, or a
+provider's unspecified default retention. Keep collector/vendor export credentials
+out of client artifacts; client reports enter a bounded, validated ingestion endpoint
+and cannot forge trusted server records.
+
+Record actual configuration and verified procedures for:
+
+- Searchable-log and trace retention durations, size/cost limits, sampling and
+  burst policies, per-operation slow thresholds, automatic expiry, and restricted
+  incident-export retention.
+  Set explicit values before release and prove expiry. These policies are
+  separate from authoritative event/receipt history and backup retention; log
+  cleanup cannot prune the facts required for replay or command deduplication.
+- Authorized operator roles, access auditing, protected transport/storage, and
+  redaction. Neither an owner account nor gameplay review permission alone
+  grants diagnostic access. Restrict source maps/debug symbols and retain the
+  build mappings needed for the supported investigation window.
+- Collection-lag, dropped-record, exporter-failure and queue/disk-pressure
+  monitoring, including an independent indication when the collector is down.
+  Verify bounded resource use and continued gameplay during a diagnostic outage.
+- Investigation from a support reference, command/order/shift ID, or time/hall
+  range: find attempts and rejections, follow asynchronous work, resolve the
+  immutable receipt and committed batches, compare projection/delivery progress,
+  and identify exact builds and rules/content. Document access-controlled history
+  queries and isolated replay steps; investigation must not mutate a live hall.
+
+Use isolated release-test flows to prove cross-client/server correlation,
+post-restart search, sanitized client-error interpretation, and recovery of an
+uncertain command's original outcome. Preserve appropriately redacted evidence
+and record gaps caused by sampling or collection failure. Diagnostic delivery is
+best effort, so reconcile economic facts against durable receipts/events rather
+than treating a missing log or trace as a rollback.
 
 ## Operational qualification to complete
 

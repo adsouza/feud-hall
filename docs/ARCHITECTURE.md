@@ -13,6 +13,7 @@ changes must preserve those contracts. Storage/recovery contracts live here so t
 Navigation: [system shape](#system-shape), [DDD](#domain-driven-design),
 [Clean Architecture](#clean-architecture-and-aggregate-ownership),
 [CQRS](#cqrs), [AOP techniques](#aop-techniques-and-cross-cutting-wrappers),
+[observability](#observability-and-diagnostic-logging),
 [pure core](#functional-core-and-imperative-shell), [scheduling](#simulation-scheduling),
 [commands and authorization](#commands-state-synchronization-and-authorization),
 [event persistence](#event-persistence), [deployment](#deployment-and-clients), [localization](#localization-and-presentation-boundaries),
@@ -198,6 +199,93 @@ Keep the transaction/receipt workflow visible rather than burying it in an
 eligibility remain domain policies/transitions, even if authentication and audit
 wrappers apply uniformly. Query handlers share applicable read guards and
 telemetry but never inherit an economic-write transaction interceptor.
+
+## Observability and diagnostic logging
+
+Pervasive structured diagnostic logging and linked traces are first-release
+requirements, implemented alongside each application slice. Committed gameplay
+events and immutable command receipts remain the durable evidence of economic
+outcomes. Diagnostic records explain attempts, rejections, timing, failures, and
+delivery; they are separately retained operational data and cannot replace the
+event store, authorize an action, or establish that an uncertain append rolled
+back. Investigation must work after the original process or client has gone.
+
+### Coverage and correlation
+
+Instrument the browser/Svelte and Three.js boundaries, Tauri native integration,
+Phoenix HTTP/Channel entry points, application command/query wrappers, NPC and
+unattended planners, scheduler/authority lifecycle, persistence, projections,
+outbox workers, and external delivery adapters. Required coverage includes:
+
+- Operation attempts and terminal outcomes: accepted/committed, domain-rejected,
+  unauthorized, rate-limited, conflicted/retried, failed, or commit-unknown.
+  Record stable reason codes, retry attempts, and receipt replay versus new work.
+  Never emit committed success before the append succeeds; later settlement is
+  a linked operation rather than a rewrite of the acceptance result.
+- Meal/course preparation, handover and settlement; market fills; helper control
+  and payroll; licensing and admission; and their cancellations/timeouts. Link
+  lifecycle records to their originating command and committed batch references
+  without copying full domain events, private ledgers, or request bodies.
+- Scheduler lateness and slow advances, cleaning boundaries, authority/fencing
+  changes, NPC planner failures, storage failures, invariant violations, startup,
+  replay/recovery, projection/delivery backlog, and external-delivery failures.
+- Client exceptions/unhandled rejections, rendering or WebGL fallback failures,
+  slow operations, connection loss/resume, rejected protocol versions, and
+  uncertain-command resynchronization. An accepted order remains traceable after
+  a browser disconnect or a server restart.
+
+Use a versioned structured schema with stable event/operation names, severity,
+UTC timestamp, monotonic elapsed duration, component/environment, server/client
+build and protocol versions, and applicable rules/content versions. Include
+request/attempt ID, trace/span and correlation/causation IDs, canonical command
+ID, authorized internal actor/system reference, hall/entity/job IDs, batch and
+stream positions, authority epoch, and relevant gameplay-clock context where
+available. Missing pre-authentication or pre-commit fields stay absent; logs must
+not invent a principal, receipt, or committed version. Keep exact economic values
+in their canonical representation when an allowlisted diagnostic field needs one.
+
+Propagate context through asynchronous work and link delayed settlement/delivery
+to its cause even after a request span ends. Retries retain the command identity
+and get distinct attempt references. Validate/bound incoming context; a client
+trace ID or client-reported error is untrusted diagnostic evidence, never proof
+of identity or outcome. Provide an opaque support reference for user-visible
+failures that operators can resolve without exposing internal logs to players.
+
+### Privacy, volume, and failure isolation
+
+Use allowlisted fields and redaction at emission, before client upload or server
+export. Do not collect passwords, session/device/invitation/email-link tokens,
+authorization headers, contact addresses, player-entered text, raw request or
+response bodies, database parameters, or full private projections. Sanitize
+exception messages/stacks and URL fields; URLs must not leak query credentials.
+Keep build-matched source maps/debug symbols in restricted operational storage
+for interpreting sanitized stacks. Operator log access is separate from public
+hall access and seed/admin gameplay capabilities.
+
+Record meaningful operations and transitions, not animation frames, camera moves,
+crowd interpolation, every heartbeat, or a line per unchanged simulation tick.
+Keep minimum command/lifecycle outcome records unsampled during normal operation;
+sample verbose successful spans/reads under an explicit policy. Retain error,
+invariant, and slow-operation diagnostics under bounded burst limits. Aggregate
+repeated malformed/unauthenticated traffic with counts and safe examples rather
+than allowing an attacker to fill storage. Any sampling, aggregation, or loss
+must be measurable; absence of a diagnostic record is not proof of no action.
+
+Telemetry uses bounded asynchronous queues, payload limits, rate limits, and
+export timeouts. Collector outages, serialization errors, full queues, and log
+rotation cannot block the hall authority, change a domain result, trigger an
+economic retry, or grow memory/disk without bound. Expose dropped-record/export
+failure counters and collector health outside the failing export path. Durable
+events, receipts, and required operational commits retain their existing
+fail-closed persistence guarantees; optional diagnostic failure does not weaken
+them. Pure decision/evolution functions have no logging side effects; wrappers
+observe their results. Replay diagnostics identify the replay run and historical
+positions and cannot masquerade as new live sales or trigger external delivery.
+
+Centralized search, retention/access policy, and operational investigation are
+required by [Deployment](DEPLOYMENT.md#diagnostic-operations-and-retention).
+Coverage, redaction, correlation, and failure-isolation evidence are defined in
+[Testing](TESTING.md#observability-qualification).
 
 ## Functional core and imperative shell
 

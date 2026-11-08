@@ -120,6 +120,7 @@ suite or any indirect `tsc` execution.
 | Cuisine-map selection | Equal-area reference fixtures, all cuisine footprints/IDs, proportional resizing and hit alignment, small/overlapping regions, Eastern Thrace selecting/highlighting Turkish only, synchronized keyboard/screen-reader list, both locales, packaged assets, and failure fallback; preview has no economic effects. |
 | English/Japanese text and layout | Catalog keys/typed placeholders, terminology and unit checks, both-locale workflows, viewport/zoom checks, glyphs, IME and character/storage boundaries. |
 | Packaging/deployment | Relevant browser/native flows, install/launch/connection checks, font/runtime coverage and recovery/compatibility evidence from the exact built revision. |
+| Observability | Boundary coverage, asynchronous correlation, redaction, post-restart search, and bounded telemetry-failure behavior under the [qualification contract](#observability-qualification). |
 | Documentation/artwork | Links/anchors, file validity, SVG/PNG dimensions and visual inspection as appropriate. |
 
 Do not add tests that merely duplicate implementation expressions. An independent
@@ -190,6 +191,42 @@ allowance. An independent settled-state/accounting assertion must detect each
 protected fault. Include paired-tray attachment and contention in load/replay
 measurements rather than assuming a main-only workload covers them.
 
+## Observability qualification
+
+Build focused checks for the
+[logging contract](ARCHITECTURE.md#observability-and-diagnostic-logging) with
+each boundary, using an in-memory diagnostic sink and controlled exporter faults:
+
+- Exercise human, NPC, timer, unattended and admin paths plus authorized/rejected
+  queries. Check structured schema, stable reason codes, attempt versus command
+  identity, build/rules/clock context, and accepted versus settled outcomes.
+  Follow one main/drink/dessert visit and one helper/payroll or licensing flow
+  through command, durable batch, asynchronous work, delivery and reconnect.
+- Inject pre-append failure and commit-before-acknowledgement loss. Assert no
+  premature committed-success record, explicit uncertainty, and same-command
+  receipt resolution after restart. Verify operators can join diagnostics to
+  durable history without a running original process or full request-body logs.
+- Inject sentinel credentials, contact values, invitation links, player text,
+  database parameters and malicious exception/URL content. Assert exclusion or
+  redaction before both client transmission and server export. Check spoofed
+  client context cannot claim trusted identity, versions, or server outcomes.
+- Fail or stall serialization/export, exhaust queues, and flood repeated errors.
+  Check bounded buffers/timeouts and visible drop/aggregation counters. Compare
+  deterministic domain events, receipts, balances and external-delivery intents
+  against the same workload with diagnostics disabled; failure must not change
+  outcomes, retry economics, block progress, or perform side effects in pure replay.
+- In an isolated release environment, verify searchable persisted records across
+  a process restart, both web/native build mappings, support-reference lookup,
+  operator-access denial, retention expiry, and collector-loss monitoring. Retain
+  redacted evidence under the deployment policy; an in-memory sink alone does
+  not prove production collection, retention, or access control.
+
+Include bounded property cases for untrusted-field redaction, context propagation
+and telemetry-failure noninterference. Curated mutations remove correlation or
+redaction, report success before commit, or retry an economic command on exporter
+failure; require a named behavioral assertion to detect each fault. Use the
+existing local/hosted resource budgets rather than adding an unrestricted suite.
+
 ## Hosted CI and release evidence
 
 Build checks alongside each implementation slice; do not defer event/replay or
@@ -208,8 +245,9 @@ localization coverage until a final release phase. Planned gates are:
    discovery through ordinary screens. Uncoached playtests assess understanding;
    automated checks enforce the contracts, not a claim that ease of use is proven.
 5. Release qualification of the specified 150-stall/mixed-session workload,
-   backup/restore, historical compatibility, and Linux/macOS packages. Reuse valid
-   evidence for the exact source/artifact rather than rerunning unrelated work.
+   backup/restore, historical compatibility, diagnostic collection/retention/access,
+   and Linux/macOS packages. Reuse valid evidence for the exact source/artifact
+   rather than rerunning unrelated work.
 
 Store source revision, tool/config/lockfile versions, commands and scope, seeds,
 failures/survivors, timings, and artifact identifiers with results. Clearly
