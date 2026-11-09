@@ -29,6 +29,13 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   Receipts are stored as Base64 external term format and decoded with
   `[:safe]`, so they round-trip as the exact Elixir terms that were written.
 
+  The `:lock_timeout_ms` option bounds how long an append waits for any of
+  those locks (`set local lock_timeout` at the start of its transaction, so the
+  connection's own setting is untouched afterwards); without it the
+  connection's configured `lock_timeout` applies. A writer that hangs while
+  holding the head lock therefore makes the next writer fail as `:unavailable`
+  within that bound instead of queueing behind it indefinitely.
+
   Connection failures and lock timeouts are `:unavailable`. A connection
   failure after the transaction body finished (while committing) cannot prove
   a rollback, so it is reported as `:unknown_outcome`.
@@ -52,23 +59,31 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   @accounts Map.new(Evolver.ledger_accounts(), &{Atom.to_string(&1), &1})
 
   @enforce_keys [:repo, :scope]
-  defstruct repo: nil, scope: nil, owner: nil, epoch: nil, hooks: @default_hooks
+  defstruct repo: nil, scope: nil, owner: nil, epoch: nil, lock_timeout_ms: nil, hooks: @default_hooks
 
   @type t :: %__MODULE__{
           repo: module(),
           scope: String.t(),
           owner: String.t() | nil,
           epoch: pos_integer() | nil,
+          lock_timeout_ms: pos_integer() | nil,
           hooks: %{before_commit: (-> any()) | nil, lost_reply: boolean(), refuse: nil | :fenced | :unavailable}
         }
 
-  @doc "A handle for `scope` on `repo`. Options: `:owner`, `:epoch`, `:hooks`."
+  @doc "A handle for `scope` on `repo`. Options: `:owner`, `:epoch`, `:lock_timeout_ms`, `:hooks`."
   def new(repo, scope, opts \\ []) when is_atom(repo) and is_binary(scope) do
+    lock_timeout_ms = Keyword.get(opts, :lock_timeout_ms)
+
+    unless is_nil(lock_timeout_ms) or (is_integer(lock_timeout_ms) and lock_timeout_ms > 0) do
+      raise ArgumentError, "lock_timeout_ms must be a positive integer, got: #{inspect(lock_timeout_ms)}"
+    end
+
     %__MODULE__{
       repo: repo,
       scope: scope,
       owner: Keyword.get(opts, :owner),
       epoch: Keyword.get(opts, :epoch),
+      lock_timeout_ms: lock_timeout_ms,
       hooks: Map.merge(@default_hooks, Map.new(Keyword.get(opts, :hooks, %{})))
     }
   end
@@ -150,6 +165,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   defp write(store, request, hooks, committing) do
     repo = store.repo
+    set_lock_timeout(repo, store.lock_timeout_ms)
     position = lock_head(repo)
     if position != request.expected_position, do: repo.rollback(:conflict)
     if authority_epoch(repo, store.scope) != store.epoch, do: repo.rollback(:fenced)
@@ -176,6 +192,10 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     Process.put(committing, true)
     position
   end
+
+  # `set` takes no bind parameters; the value is a validated positive integer (milliseconds).
+  defp set_lock_timeout(_repo, nil), do: :ok
+  defp set_lock_timeout(repo, ms) when is_integer(ms) and ms > 0, do: repo.query!("set local lock_timeout = #{ms}")
 
   defp lock_head(repo) do
     %{rows: [[position]]} = repo.query!("select position from append_head where id = 1 for update")
