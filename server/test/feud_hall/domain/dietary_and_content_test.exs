@@ -140,6 +140,94 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
   end
 
+  describe "simulation content" do
+    defp broken(path, value), do: put_in(SliceCatalog.catalog(), path, value)
+
+    defp problems!(catalog) do
+      assert {:error, problems} = Content.validate(catalog)
+      problems
+    end
+
+    test "the shipped simulation content is complete" do
+      catalog = SliceCatalog.catalog()
+      assert length(catalog.layout) == 150
+      assert Enum.map(catalog.npc_profiles, & &1.id) == ~w(budget mainstream premium)
+      assert Enum.map(catalog.rules.demand.segments, & &1.id) == ~w(value time_sensitive enthusiast quality)
+
+      assert catalog.rules.seed in 0..18_446_744_073_709_551_615
+      assert Content.hash(catalog) == Content.hash(SliceCatalog.catalog())
+    end
+
+    test "kitchen capacity must be positive" do
+      assert {:kitchen, :bad_capacity} in problems!(broken([:rules, :kitchen, :prep_stations], 0))
+    end
+
+    test "every product needs a market target and a cap of at least three targets" do
+      catalog =
+        update_in(SliceCatalog.catalog(), [:rules, :market, :target_stock_per_equivalent], &Map.delete(&1, "sugar"))
+
+      assert {:market, "sugar", :missing_target} in problems!(catalog)
+
+      target = SliceCatalog.catalog().rules.market.target_stock_per_equivalent["onion"]
+
+      assert {:market, "onion", :bad_cap} in problems!(
+               broken([:rules, :market, :replenish_cap, "onion"], target * 3 - 1)
+             )
+
+      assert :ok = Content.validate(broken([:rules, :market, :replenish_cap, "onion"], target * 3))
+    end
+
+    test "market price bounds must be ordered" do
+      assert {:market, :bad_price_bounds} in problems!(broken([:rules, :market, :price_floor_permille], 4_000))
+    end
+
+    test "hourly weights need 24 non-negative entries, zero during cleaning" do
+      good = SliceCatalog.catalog().rules.demand.hourly_weights
+      bad = [good |> tl(), List.replace_at(good, 0, -1), List.replace_at(good, 3, 1), List.replace_at(good, 4, 1)]
+
+      for weights <- bad do
+        assert {:demand, :bad_hourly_weights} in problems!(broken([:rules, :demand, :hourly_weights], weights))
+      end
+    end
+
+    test "segment ranges must be ordered and positive" do
+      assert {:demand, "value", :bad_range} in problems!(
+               broken([:rules, :demand, :segments], bad_segment(:budget, [9, 3]))
+             )
+
+      assert {:demand, "value", :bad_range} in problems!(
+               broken([:rules, :demand, :segments], bad_segment(:patience_service_ms, [0, 3]))
+             )
+    end
+
+    test "layout is capped at 150 slots with unique ids" do
+      layout = SliceCatalog.catalog().layout
+      extra = layout ++ [%{slot_id: "s151", tier: :quiet}]
+      assert {:layout, :too_many_slots} in problems!(broken([:layout], extra))
+
+      dup = List.replace_at(layout, 1, %{slot_id: "s001", tier: :quiet})
+      assert {:layout, "s001", :duplicate} in problems!(broken([:layout], dup))
+    end
+
+    test "NPC profiles are validated" do
+      [first | rest] = SliceCatalog.catalog().npc_profiles
+
+      for bad <- [
+            %{first | price_permille: 0},
+            %{first | policy: :bogus},
+            %{first | restock_days: 0},
+            %{first | preferred_tier: :nowhere}
+          ] do
+        assert {:npc, "budget", :bad_profile} in problems!(broken([:npc_profiles], [bad | rest]))
+      end
+    end
+
+    defp bad_segment(key, value) do
+      [first | rest] = SliceCatalog.catalog().rules.demand.segments
+      [Map.put(first, key, value) | rest]
+    end
+  end
+
   defp bean_lines(catalog, sub_fun) do
     Enum.map(catalog.recipes["bean_tacos"].lines, fn
       %{line_id: "tortilla", substitute: s} = l -> %{l | substitute: sub_fun.(s)}

@@ -12,6 +12,7 @@ defmodule FeudHall.Domain.Content.SliceCatalog do
   """
 
   @minute 60_000
+  @hour 60 * @minute
 
   @vegetarian_excludes [:meat, :fish, :gelatin, :animal_rennet, :animal_fat_stock]
   @vegan_excludes @vegetarian_excludes ++ [:dairy, :egg, :honey]
@@ -24,6 +25,8 @@ defmodule FeudHall.Domain.Content.SliceCatalog do
       id: "slice",
       version: 1,
       rules: rules(),
+      layout: layout(),
+      npc_profiles: npc_profiles(),
       products: Map.new(products(), &{&1.id, &1}),
       recipes: Map.new(recipes(), &{&1.id, &1}),
       profiles: Map.new(profiles(), fn p -> {p.id, Map.put(p, :enabled, p.id in enabled)} end)
@@ -45,8 +48,139 @@ defmodule FeudHall.Domain.Content.SliceCatalog do
       starter_grant: 500_000,
       storage_capacity: 300_000,
       visitor_fund: 200_000,
-      max_allowance_grant: 2_500
+      max_allowance_grant: 2_500,
+      # Default hall seed, passed to `Random.new/1` (non-negative, below 2^64).
+      seed: 20_261_109,
+      exposure_permille: %{quiet: 800, standard: 1_000, busy: 1_250, prime: 1_500},
+      kitchen: %{prep_stations: 2, finish_stations: 1, queue_limit: 6},
+      market: market(),
+      demand: demand()
     }
+  end
+
+  defp market do
+    ids = Enum.map(products(), & &1.id)
+
+    # Proposed target stock per demand equivalent; perishables stay small.
+    targets =
+      Map.new(ids, fn id ->
+        {id, Map.get(%{"cilantro" => 100, "filtered_water" => 5_000, "milk_whole" => 3_000}, id, 400)}
+      end)
+
+    %{
+      clear_every_hall_ms: 4 * @minute,
+      price_floor_permille: 500,
+      price_ceiling_permille: 3_000,
+      target_stock_per_equivalent: targets,
+      replenish_cap: Map.new(targets, fn {id, qty} -> {id, qty * 4} end)
+    }
+  end
+
+  defp demand do
+    %{
+      arrivals_per_equivalent: 90,
+      equivalent_floor_millis: 3_000,
+      operating_hours_ms: 22 * @hour,
+      # Index is the hall hour; 03:00 to 05:00 is scheduled cleaning.
+      hourly_weights: [
+        2,
+        1,
+        1,
+        0,
+        0,
+        1,
+        2,
+        4,
+        6,
+        6,
+        8,
+        12,
+        14,
+        12,
+        8,
+        6,
+        6,
+        8,
+        12,
+        14,
+        10,
+        8,
+        5,
+        3
+      ],
+      segments: [
+        segment("value", 40, [400, 1_200], [10 * @minute, 25 * @minute], 200, 300, 600, 100, 100, 400, %{
+          "bean_tacos" => 3,
+          "chicken_tacos" => 2,
+          "vegetable_quesadilla" => 2
+        }),
+        segment("time_sensitive", 25, [800, 2_000], [5 * @minute, 12 * @minute], 300, 150, 200, 100, 200, 600, %{
+          "bean_tacos" => 2,
+          "chicken_tacos" => 3,
+          "vegetable_quesadilla" => 2
+        }),
+        segment("enthusiast", 20, [800, 2_500], [15 * @minute, 40 * @minute], 400, 400, 200, 300, 100, 200, %{
+          "bean_tacos" => 2,
+          "chicken_tacos" => 2,
+          "vegetable_quesadilla" => 3
+        }),
+        segment("quality", 15, [1_500, 4_000], [12 * @minute, 30 * @minute], 500, 500, 100, 600, 100, 300, %{
+          "bean_tacos" => 1,
+          "chicken_tacos" => 3,
+          "vegetable_quesadilla" => 3
+        })
+      ],
+      # The keto weight applies only when that profile is enabled; disabled
+      # profiles are dropped and the mix renormalised at draw time.
+      profile_mix: %{
+        "unrestricted" => 60,
+        "vegetarian" => 20,
+        "vegan" => 10,
+        "carb_conscious" => 7,
+        "keto_style" => 3
+      },
+      variety_weight: 50,
+      variety_cap: 3
+    }
+  end
+
+  defp segment(id, weight, budget, patience, drink, dessert, price_w, quality_w, wait_w, leave_w, mains) do
+    %{
+      id: id,
+      weight: weight,
+      budget: budget,
+      patience_service_ms: patience,
+      drink_attach_permille: drink,
+      dessert_appetite_permille: dessert,
+      price_weight: price_w,
+      quality_weight: quality_w,
+      wait_weight: wait_w,
+      leave_weight: leave_w,
+      main_preference: mains
+    }
+  end
+
+  # 150 physical slots; tier by position: 40 quiet, 60 standard, 35 busy, 15 prime.
+  defp layout do
+    for n <- 1..150 do
+      tier =
+        cond do
+          n <= 40 -> :quiet
+          n <= 100 -> :standard
+          n <= 135 -> :busy
+          true -> :prime
+        end
+
+      %{slot_id: "s" <> String.pad_leading(Integer.to_string(n), 3, "0"), tier: tier}
+    end
+  end
+
+  defp npc_profiles do
+    [
+      %{id: "budget", price_permille: 850, policy: :prefer_substitute, restock_days: 3, preferred_tier: :quiet},
+      %{id: "mainstream", price_permille: 1_000, policy: :prefer_primary, restock_days: 2, preferred_tier: :standard},
+      %{id: "premium", price_permille: 1_250, policy: :primary_only, restock_days: 1, preferred_tier: :prime}
+    ]
   end
 
   # carb_mg_per_kunit: milligrams of carbohydrate per 1000 base units.

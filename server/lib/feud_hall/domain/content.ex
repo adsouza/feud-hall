@@ -39,9 +39,90 @@ defmodule FeudHall.Domain.Content do
 
     # Profile viability evaluates recipes, so it only runs on structurally
     # valid content; structural problems are reported first.
-    problems = if structural == [], do: profile_problems(catalog), else: structural
+    problems =
+      if(structural == [], do: profile_problems(catalog), else: structural) ++ simulation_problems(catalog)
 
     if problems == [], do: :ok, else: {:error, problems}
+  end
+
+  @tiers [:quiet, :standard, :busy, :prime]
+  @policies [:prefer_substitute, :prefer_primary, :primary_only]
+  @max_slots 150
+
+  defp simulation_problems(catalog) do
+    kitchen_problems(catalog.rules.kitchen) ++
+      market_problems(catalog, catalog.rules.market) ++
+      demand_problems(catalog.rules.demand) ++
+      layout_problems(catalog.layout) ++
+      Enum.flat_map(catalog.npc_profiles, &npc_problems/1)
+  end
+
+  defp pos_int?(v), do: is_integer(v) and v > 0
+
+  defp kitchen_problems(k) do
+    if Enum.all?([k.prep_stations, k.finish_stations, k.queue_limit], &pos_int?/1),
+      do: [],
+      else: [{:kitchen, :bad_capacity}]
+  end
+
+  defp market_problems(catalog, m) do
+    bounds_ok =
+      pos_int?(m.clear_every_hall_ms) and pos_int?(m.price_floor_permille) and
+        is_integer(m.price_ceiling_permille) and m.price_floor_permille <= m.price_ceiling_permille
+
+    per_product =
+      for id <- catalog.products |> Map.keys() |> Enum.sort(),
+          problem <- market_product_problems(m, id),
+          do: {:market, id, problem}
+
+    if(bounds_ok, do: [], else: [{:market, :bad_price_bounds}]) ++ per_product
+  end
+
+  defp market_product_problems(m, id) do
+    target = Map.get(m.target_stock_per_equivalent, id)
+    cap = Map.get(m.replenish_cap, id)
+
+    cond do
+      not pos_int?(target) -> [:missing_target]
+      not is_integer(cap) or cap < target * 3 -> [:bad_cap]
+      true -> []
+    end
+  end
+
+  defp demand_problems(d) do
+    w = d.hourly_weights
+
+    weights_ok =
+      is_list(w) and length(w) == 24 and Enum.all?(w, &(is_integer(&1) and &1 >= 0)) and
+        Enum.at(w, 3) == 0 and Enum.at(w, 4) == 0
+
+    if(weights_ok, do: [], else: [{:demand, :bad_hourly_weights}]) ++
+      for(s <- d.segments, not (range?(s.budget) and range?(s.patience_service_ms)), do: {:demand, s.id, :bad_range})
+  end
+
+  defp range?([lo, hi]), do: is_integer(lo) and is_integer(hi) and lo > 0 and lo <= hi
+  defp range?(_), do: false
+
+  defp layout_problems(layout) do
+    too_many = if length(layout) > @max_slots, do: [{:layout, :too_many_slots}], else: []
+
+    duplicates =
+      layout
+      |> Enum.map(& &1.slot_id)
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_, n} -> n > 1 end)
+      |> Enum.map(fn {id, _} -> {:layout, id, :duplicate} end)
+      |> Enum.sort()
+
+    too_many ++ duplicates
+  end
+
+  defp npc_problems(p) do
+    ok =
+      pos_int?(p.price_permille) and p.policy in @policies and pos_int?(p.restock_days) and
+        p.preferred_tier in @tiers
+
+    if ok, do: [], else: [{:npc, p.id, :bad_profile}]
   end
 
   defp product_problems(p) do

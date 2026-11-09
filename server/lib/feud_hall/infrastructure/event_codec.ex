@@ -35,6 +35,13 @@ defmodule FeudHall.Infrastructure.EventCodec do
     prep_ms finish_ms holding_ms substitute num den enabled stricter_than
     availability_started availability_resumed hall_resumed epoch_id recovery_id hall_ms catalog_ref
     owner_kind npc
+    seed exposure_permille kitchen market demand layout npc_profiles prep_stations finish_stations
+    queue_limit clear_every_hall_ms price_floor_permille price_ceiling_permille
+    target_stock_per_equivalent replenish_cap arrivals_per_equivalent equivalent_floor_millis
+    operating_hours_ms hourly_weights segments profile_mix variety_weight variety_cap
+    patience_service_ms drink_attach_permille dessert_appetite_permille price_weight quality_weight
+    wait_weight leave_weight main_preference slot_id tier quiet standard busy prime price_permille
+    restock_days preferred_tier
   )a
 
   @by_name Map.new(@atoms, &{Atom.to_string(&1), &1})
