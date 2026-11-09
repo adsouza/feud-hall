@@ -106,6 +106,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
             snapshot_every_events: 10_000,
             snapshot_every_service_ms: 300_000,
             runtime: nil,
+            held_epoch: nil,
             recovery: nil,
             anchor: 0,
             service_ms: 0,
@@ -262,7 +263,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     elapsed = now - s.anchor
 
     if elapsed > s.max_gap_ms do
-      case recover(s, s.runtime.store, s.runtime.epoch) do
+      case recover(s, s.runtime.store, s.held_epoch) do
         {:ok, s} ->
           emit(s, :scheduler_gap, %{lateness_ms: elapsed - @nominal_ms, position: s.runtime.position})
           {:recovered, s}
@@ -348,7 +349,10 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   # --- recovery ----------------------------------------------------------------
 
-  # `expected_epoch` is nil at start-up and the held epoch when re-recovering after a gap.
+  # `expected_epoch` is nil at start-up and the held epoch when re-recovering after a gap. A failed
+  # recovery hands back the store as it stood after its last successful step: once the acquisition
+  # committed, that handle holds the newer epoch, so it is adopted (with its epoch) for the retry.
+  # Only the store is adopted; the runtime keeps the last committed head until a recovery succeeds.
   defp recover(s, store, expected_epoch) do
     opts = [
       scope: s.scope,
@@ -357,15 +361,26 @@ defmodule FeudHall.Infrastructure.HallAuthority do
       diagnostics: s.diagnostics
     ]
 
-    case shielded(fn -> Recovery.recover(s.store_mod, store, s.owner, opts) end, {:error, :unavailable}) do
+    case shielded(fn -> Recovery.recover(s.store_mod, store, s.owner, opts) end, {:error, :unavailable, store}) do
       {:ok, runtime, report} ->
-        s = %{s | runtime: runtime, recovery: report, anchor: now(s), service_ms: service_of(runtime)}
+        s = %{
+          s
+          | runtime: runtime,
+            held_epoch: runtime.epoch,
+            recovery: report,
+            anchor: now(s),
+            service_ms: service_of(runtime)
+        }
+
         s = snapshot_baseline(s)
         emit(s, :authority_acquired, %{position: runtime.position})
         {:ok, s}
 
-      {:error, reason} ->
+      {:error, reason, _store} when s.runtime == nil ->
         {:error, reason, s}
+
+      {:error, reason, store} ->
+        {:error, reason, %{put_store(s, store) | held_epoch: s.store_mod.held_epoch(store)}}
     end
   end
 
@@ -484,8 +499,9 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     s
   end
 
+  # The epoch this authority holds: after a recovery failed past its acquisition, the newer one.
   defp emit(s, name, fields) do
-    epoch = s.runtime && s.runtime.epoch
+    epoch = s.held_epoch
     Diagnostics.emit(s.diagnostics, name, Map.merge(%{epoch: epoch, scope: s.scope}, fields))
   end
 

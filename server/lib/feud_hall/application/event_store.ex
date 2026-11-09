@@ -97,6 +97,8 @@ defmodule FeudHall.Application.EventStore do
   """
   @callback acquire_authority(store, scope :: String.t(), owner :: String.t(), expected_epoch :: pos_integer() | nil) ::
               {:ok, store, pos_integer()} | {:error, :fenced | :unavailable}
+  @doc "The authority epoch this handle holds (`nil` before any acquisition); reads no storage."
+  @callback held_epoch(store) :: pos_integer() | nil
   @callback save_snapshot(store, position :: non_neg_integer(), binary()) ::
               {:ok, store, snapshot_id :: term()} | {:error, :unavailable}
   @callback mark_snapshot_verified(store, snapshot_id :: term()) ::

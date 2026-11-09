@@ -138,7 +138,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   test "every append outcome adopts the returned store, so a consumed one-shot fault stays cleared" do
     rt = runtime()
     down = %{rt | store: InMemoryEventStore.fail_next(rt.store, :unavailable)}
-    assert {:error, :unavailable} = Recovery.recover(InMemoryEventStore, down.store, "b", scope: "hall:test")
+    assert {:error, :unavailable, _} = Recovery.recover(InMemoryEventStore, down.store, "b", scope: "hall:test")
 
     assert {:error, :unavailable, after_fault} =
              Workflow.execute(down, env("buy-1", {:principal, "alice"}, purchase(100)))

@@ -432,6 +432,15 @@ defmodule FeudHall.EventStoreContract do
           assert after_next == next + 1
         end
 
+        test "contract: a handle reports the epoch it holds" do
+          store = contract_fresh()
+          {:ok, store, epoch} = @contract_adapter.acquire_authority(store, "hall:test", "node-a")
+          assert @contract_adapter.held_epoch(store) == epoch
+
+          {:ok, store, next} = @contract_adapter.acquire_authority(store, "hall:test", "node-b", epoch)
+          assert @contract_adapter.held_epoch(store) == next
+        end
+
         test "contract: pruning with too few verified snapshots deletes nothing" do
           store = contract_fresh()
           {:ok, store, one} = @contract_adapter.save_snapshot(store, 1, "one")

@@ -42,11 +42,19 @@ defmodule FeudHall.Application.Recovery do
     6. Execute `{:start_availability, %{epoch_id: "<owner>:<epoch>"}}` with
        command ID `"start:<owner>:<epoch>"`.
 
-  Every step before 5 only reads, so a failure there appends nothing. Storage
-  failures are returned as the store reports them (`{:error, :unavailable}`);
-  a fenced append is `{:error, :fenced}`; a lost append reply is
-  `{:error, {:uncertain, command_id}}`, resolved by running recovery again,
-  which looks the same command ID up and replays its receipt if it committed.
+  Every step before 5 only reads, so a failure there appends nothing. A
+  failure is `{:error, reason, store}`, where `store` is the handle as it stands
+  after the last successful step: the input store if acquisition did not
+  happen, otherwise the handle holding the acquired epoch (and, once appends
+  have begun, the store the last append returned). A caller retrying recovery
+  must use that store, and its `held_epoch/1` as the next `expected_epoch`:
+  the acquisition already committed, so retrying from the older epoch would be
+  fenced by its own success. Storage failures are reported as the store
+  reports them (`:unavailable`); a fenced acquisition or append is `:fenced`
+  (not reported as `:recovery_failed`: being superseded is expected); a lost
+  append reply is `{:uncertain, command_id}`, resolved by running recovery
+  again, which looks the same command ID up and replays its receipt if it
+  committed.
 
   Replay performs no side effects: it only folds committed events, and the
   reconciliation and the new epoch are ordinary appended transitions. Recovery
@@ -78,7 +86,8 @@ defmodule FeudHall.Application.Recovery do
   `:diagnostics` (passed to the runtime), and `:side_effects` (never invoked
   during replay).
   """
-  @spec recover(module(), term(), String.t(), keyword()) :: {:ok, CommandWorkflow.t(), report()} | {:error, term()}
+  @spec recover(module(), term(), String.t(), keyword()) ::
+          {:ok, CommandWorkflow.t(), report()} | {:error, term(), store :: term()}
   def recover(store_mod, store, owner, opts \\ []) do
     scope = Keyword.fetch!(opts, :scope)
     diagnostics = Keyword.get(opts, :diagnostics)
@@ -95,16 +104,30 @@ defmodule FeudHall.Application.Recovery do
 
         ok
 
-      {:error, reason} = error ->
+      # Being superseded is not a failure of recovery; the caller reports fencing.
+      {:error, :fenced, _store} = fenced ->
+        fenced
+
+      {:error, reason, _store} = error ->
         Diagnostics.emit(diagnostics, :recovery_failed, %{scope: scope, error_class: Diagnostics.reason(reason)})
         error
     end
   end
 
+  # Failures carry the store as it stands after the last successful step: the input store
+  # before acquisition, the handle holding the acquired epoch after it, and the store the last
+  # append returned once appends have begun.
   defp do_recover(store_mod, store, owner, scope, opts) do
     with :ok <- validate_owner(owner),
-         {:ok, store, epoch} <- acquire(store_mod, store, scope, owner, Keyword.get(opts, :expected_epoch)),
-         head = store_mod.head(store),
+         {:ok, acquired, epoch} <- acquire(store_mod, store, scope, owner, Keyword.get(opts, :expected_epoch)) do
+      restore_and_resume(store_mod, acquired, owner, scope, epoch, opts)
+    else
+      {:error, reason} -> {:error, reason, store}
+    end
+  end
+
+  defp restore_and_resume(store_mod, store, owner, scope, epoch, opts) do
+    with head = store_mod.head(store),
          {:ok, base, skipped} <-
            base(store_mod, store, head, Keyword.get(opts, :decode_snapshot), skip_reporter(opts, scope)),
          {:ok, tail} <- store_mod.read_from(store, base.position),
@@ -122,6 +145,9 @@ defmodule FeudHall.Application.Recovery do
          recovery_id: recovery_id,
          reconciliation: reconciliation
        }}
+    else
+      {:error, reason} -> {:error, reason, store}
+      {:error, reason, %CommandWorkflow{store: appended}} -> {:error, reason, appended}
     end
   end
 
@@ -258,8 +284,8 @@ defmodule FeudHall.Application.Recovery do
           {status, %{outcome: {:rejected, :already_reconciled}}, runtime} when status in [:rejected, :replayed] ->
             {:ok, runtime, id, :already_reconciled}
 
-          {status, %{outcome: {:rejected, reason}}, _runtime} when status in [:rejected, :replayed] ->
-            {:error, {:reconciliation_rejected, reason}}
+          {status, %{outcome: {:rejected, reason}}, runtime} when status in [:rejected, :replayed] ->
+            {:error, {:reconciliation_rejected, reason}, runtime}
 
           other ->
             failure(other)
@@ -278,14 +304,14 @@ defmodule FeudHall.Application.Recovery do
       {status, %{outcome: :accepted}, runtime} when status in [:accepted, :replayed] ->
         {:ok, runtime}
 
-      {status, %{outcome: {:rejected, reason}}, _runtime} when status in [:rejected, :replayed] ->
-        {:error, {:start_rejected, reason}}
+      {status, %{outcome: {:rejected, reason}}, runtime} when status in [:rejected, :replayed] ->
+        {:error, {:start_rejected, reason}, runtime}
 
       other ->
         failure(other)
     end
   end
 
-  defp failure({:uncertain, command_id, _runtime}), do: {:error, {:uncertain, command_id}}
-  defp failure({:error, reason, _runtime}), do: {:error, reason}
+  defp failure({:uncertain, command_id, runtime}), do: {:error, {:uncertain, command_id}, runtime}
+  defp failure({:error, reason, runtime}), do: {:error, reason, runtime}
 end

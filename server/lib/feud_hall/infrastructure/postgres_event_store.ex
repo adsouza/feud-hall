@@ -619,6 +619,9 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     end
   end
 
+  @impl true
+  def held_epoch(store), do: store.epoch
+
   # Its own short transaction: it never touches `append_head`, so saving a snapshot never waits
   # on an in-flight append. The evolution version is read from the (checksummed) binary; an
   # unreadable binary is stored as evolution 0 and rejected later by `Snapshot.load/1`.

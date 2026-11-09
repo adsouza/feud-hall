@@ -14,12 +14,14 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     @moduledoc """
     Wraps either adapter to inject faults the adapters do not offer: `:corrupt_snapshot` (one-shot;
     the next saved snapshot body has a flipped byte), `:raise_on_save` (every snapshot save raises a
-    connection error, as a dropped database would), and `:undecodable` (every log read reports an
-    undecodable batch, as damaged history would). Other faults go to the wrapped adapter.
+    connection error, as a dropped database would), `:undecodable` (every log read reports an
+    undecodable batch, as damaged history would), and `:unavailable_after_acquire` (the next
+    acquisition succeeds, then snapshot and log reads are unavailable until the acquisition after
+    it). Other faults go to the wrapped adapter.
     """
     defstruct [:mod, :inner, fault: nil]
 
-    @own [:corrupt_snapshot, :raise_on_save, :undecodable]
+    @own [:corrupt_snapshot, :raise_on_save, :undecodable, :unavailable_after_acquire]
 
     def wrap({mod, inner}), do: {__MODULE__, %__MODULE__{mod: mod, inner: inner}}
 
@@ -29,8 +31,12 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     def head(s), do: s.mod.head(s.inner)
     def stream_versions(s, stream), do: s.mod.stream_versions(s.inner, stream)
     def receipt(s, id), do: s.mod.receipt(s.inner, id)
+    def held_epoch(s), do: s.mod.held_epoch(s.inner)
+
+    def snapshots(%{fault: :reads_unavailable}), do: {:error, :unavailable}
     def snapshots(s), do: s.mod.snapshots(s.inner)
 
+    def read_from(%{fault: :reads_unavailable}, _after), do: {:error, :unavailable}
     def read_from(%{fault: :undecodable}, _after), do: {:error, {:undecodable, 1, :injected}}
     def read_from(s, after_position), do: s.mod.read_from(s.inner, after_position)
 
@@ -47,8 +53,15 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
           do: s.mod.acquire_authority(s.inner, scope, owner, expected),
           else: s.mod.acquire_authority(s.inner, scope, owner)
 
+      fault =
+        case s.fault do
+          :unavailable_after_acquire -> :reads_unavailable
+          :reads_unavailable -> nil
+          other -> other
+        end
+
       with {:ok, inner, epoch} <- acquired,
-           do: {:ok, %{s | inner: inner}, epoch}
+           do: {:ok, %{s | inner: inner, fault: fault}, epoch}
     end
 
     def save_snapshot(%{fault: :raise_on_save}, _position, _body),
@@ -119,6 +132,26 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     {store_mod, store} = HallAuthority.store(pid)
     {:ok, batches} = store_mod.read_from(store, 0)
     batches
+  end
+
+  # Two gap recoveries ran (the first failed after acquiring): the authority holds the second
+  # acquired epoch, never fenced itself, and resumes from unchanged hall time.
+  defp assert_recovered_twice(ctx, pid, before, ref) do
+    state = HallAuthority.state(pid)
+    assert state.epoch == before.epoch + 2
+    assert state.mode == :ready
+    assert state.hall.now == before.hall.now
+    assert records(ctx, :fenced) == []
+    assert length(records(ctx, :scheduler_gap)) == 1
+
+    if ctx.adapter == :postgres do
+      assert %{rows: [["node-a", epoch]]} = Repo.query!("select owner, epoch from authority where scope = $1", [@scope])
+      assert epoch == state.epoch
+    end
+
+    assert :ok = tick_after(ctx, pid, 1_000)
+    assert HallAuthority.state(pid).hall.now == before.hall.now + 1_000 * Clock.ratio()
+    refute_received {:DOWN, ^ref, :process, ^pid, _}
   end
 
   defp records(ctx, name), do: ctx.sink |> MemorySink.records() |> Enum.filter(&(&1.name == name))
@@ -372,6 +405,34 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         assert HallAuthority.state(pid).hall.now == 6_000 * Clock.ratio()
       end
 
+      test "a lost reply during gap recovery is retried by the next tick from the epoch it acquired", ctx do
+        pid = ctx |> start_authority() |> initialize()
+        assert :ok = tick_after(ctx, pid, 1_000)
+        before = HallAuthority.state(pid)
+        ref = Process.monitor(pid)
+
+        assert :ok = HallAuthority.inject_fault(pid, :lost_reply)
+        assert {:error, :unknown_outcome} = tick_after(ctx, pid, 6_000)
+
+        # Still more than the maximum gap since the last committed boundary: recovery runs again.
+        assert :ok = HallAuthority.tick(pid)
+        assert_recovered_twice(ctx, pid, before, ref)
+      end
+
+      test "storage unavailable after a gap recovery's acquisition is retried from the acquired epoch", ctx do
+        pid = ctx |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
+        assert :ok = tick_after(ctx, pid, 1_000)
+        before = HallAuthority.state(pid)
+        ref = Process.monitor(pid)
+
+        assert :ok = HallAuthority.inject_fault(pid, :unavailable_after_acquire)
+        assert {:error, :unavailable} = tick_after(ctx, pid, 6_000)
+        assert [%{fields: %{error_class: :unavailable}}] = records(ctx, :storage_failure)
+
+        assert :ok = HallAuthority.tick(pid)
+        assert_recovered_twice(ctx, pid, before, ref)
+      end
+
       test "a recovery that fails after a gap shuts the authority down", ctx do
         pid = ctx |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
         ref = Process.monitor(pid)
@@ -436,6 +497,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
       assert_receive {:DOWN, ^ref, :process, ^a, {:shutdown, :fenced}}
       assert [%{fields: %{epoch: ^a_epoch}}] = records(ctx, :fenced)
       assert records(ctx, :scheduler_gap) == []
+      assert records(ctx, :recovery_failed) == []
 
       # B still holds the hall and keeps advancing it under its own epoch.
       assert :ok = tick_after(ctx, b, 1_000)

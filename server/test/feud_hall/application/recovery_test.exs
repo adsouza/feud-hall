@@ -297,8 +297,25 @@ defmodule FeudHall.Application.RecoveryTest do
         head = mod.head(a2.store)
 
         # The held epoch was superseded: recovery is fenced before it reads or appends anything.
-        assert {:error, :fenced} = recover(mod, a2.store, "a", expected_epoch: a.epoch)
+        assert {:error, :fenced, _store} = recover(mod, a2.store, "a", expected_epoch: a.epoch)
         assert mod.head(a2.store) == head
+      end
+
+      test "a failure after acquisition returns the store holding the acquired epoch", %{mod: mod, store: store} do
+        live = live({mod, store})
+        armed = mod.fail_next(live.store, :lost_reply)
+
+        assert {:error, {:uncertain, "recovery:boot:1"}, held} = recover(mod, armed, "c", expected_epoch: live.epoch)
+        assert mod.held_epoch(held) == live.epoch + 1
+
+        # Retrying from the epoch actually held succeeds and replays the committed reconciliation.
+        assert {:ok, c, %{reconciliation: :replayed}} = recover(mod, held, "c", expected_epoch: live.epoch + 1)
+        assert c.epoch == live.epoch + 2
+        assert c.state.now == live.state.now
+      end
+
+      test "a failure before acquisition returns the store it was given", %{mod: mod, store: store} do
+        assert {:error, :invalid_owner, ^store} = recover(mod, store, "")
       end
 
       test "a store with no hall starts an epoch without reconciling", %{mod: mod, store: store} do
@@ -319,7 +336,7 @@ defmodule FeudHall.Application.RecoveryTest do
         broken = update_in(rt.state, [:restaurants, "r1", :ledger, :cash], &(&1 + 1))
         {rt, _} = save_snapshot(rt, Snapshot.take(%{hall: broken, control: rt.control}, rt.position), rt.position)
 
-        assert {:error, {:invariants, [{"r1", :trial_balance}]}} = recover_from_snapshots(mod, rt.store, "b")
+        assert {:error, {:invariants, [{"r1", :trial_balance}]}, _} = recover_from_snapshots(mod, rt.store, "b")
         assert mod.head(rt.store) == rt.position
         assert mod.receipt(rt.store, "recovery:boot:1") == :none
 
@@ -355,7 +372,7 @@ defmodule FeudHall.Application.RecoveryTest do
       rt = live(adapter(:memory))
       damaged = {rt.store, {:undecodable, 3}}
 
-      assert {:error, {:undecodable, 3, {:unknown_atom, "launch_missiles"}}} =
+      assert {:error, {:undecodable, 3, {:unknown_atom, "launch_missiles"}}, _} =
                Recovery.recover(DamagedStore, damaged, "b", scope: @scope, side_effects: no_side_effects())
     end
 
@@ -366,7 +383,7 @@ defmodule FeudHall.Application.RecoveryTest do
         ~s({"v":1,"e":{"type":{"$a":"launch_missiles"}}})
       ])
 
-      assert {:error, {:undecodable, 3, _}} = recover(PostgresEventStore, rt.store, "b")
+      assert {:error, {:undecodable, 3, _}, _} = recover(PostgresEventStore, rt.store, "b")
       assert PostgresEventStore.head(rt.store) == rt.position
       assert PostgresEventStore.receipt(rt.store, "recovery:boot:1") == :none
       assert PostgresEventStore.receipt(rt.store, "start:b:2") == :none
@@ -383,7 +400,7 @@ defmodule FeudHall.Application.RecoveryTest do
       for {missing, opts} <- [{3, []}, {snap_position + 2, [decode_snapshot: &Snapshot.load/1]}, {rt.position, []}] do
         damaged = {rt.store, {:missing, missing}}
 
-        assert {:error, {:missing_batch, ^missing}} =
+        assert {:error, {:missing_batch, ^missing}, _} =
                  Recovery.recover(DamagedStore, damaged, "b", [scope: @scope, side_effects: no_side_effects()] ++ opts)
       end
     end
@@ -395,7 +412,7 @@ defmodule FeudHall.Application.RecoveryTest do
         Repo.query!("delete from events where position = $1", [position])
         Repo.query!("delete from batches where position = $1", [position])
 
-        assert {:error, {:missing_batch, ^position}} = recover(PostgresEventStore, rt.store, "b")
+        assert {:error, {:missing_batch, ^position}, _} = recover(PostgresEventStore, rt.store, "b")
         assert PostgresEventStore.head(rt.store) == rt.position
         assert PostgresEventStore.receipt(rt.store, "start:b:2") == :none
       end
@@ -405,7 +422,7 @@ defmodule FeudHall.Application.RecoveryTest do
       rt = live(adapter(:postgres))
       Repo.query!("delete from events where position = 3 and batch_order = 0")
 
-      assert {:error, {:undecodable, 3, {:event_count_mismatch, expected, found}}} =
+      assert {:error, {:undecodable, 3, {:event_count_mismatch, expected, found}}, _} =
                recover(PostgresEventStore, rt.store, "b")
 
       assert found == expected - 1
@@ -424,8 +441,8 @@ defmodule FeudHall.Application.RecoveryTest do
       rt = live(adapter(:memory))
       down = InMemoryEventStore.fail_next(rt.store, :unavailable)
 
-      assert {:error, :unavailable} = recover(InMemoryEventStore, down, "b")
-      assert {:error, :unavailable} = recover_from_snapshots(InMemoryEventStore, down, "b")
+      assert {:error, :unavailable, _} = recover(InMemoryEventStore, down, "b")
+      assert {:error, :unavailable, _} = recover_from_snapshots(InMemoryEventStore, down, "b")
     end
 
     @tag :capture_log
@@ -433,8 +450,8 @@ defmodule FeudHall.Application.RecoveryTest do
       start_supervised!(FeudHall.UnreachableRepo)
       unreachable = PostgresEventStore.new(FeudHall.UnreachableRepo, @scope)
 
-      assert {:error, :unavailable} = recover(PostgresEventStore, unreachable, "b")
-      assert {:error, :unavailable} = recover_from_snapshots(PostgresEventStore, unreachable, "b")
+      assert {:error, :unavailable, _} = recover(PostgresEventStore, unreachable, "b")
+      assert {:error, :unavailable, _} = recover_from_snapshots(PostgresEventStore, unreachable, "b")
     end
   end
 
@@ -442,7 +459,7 @@ defmodule FeudHall.Application.RecoveryTest do
     store = InMemoryEventStore.fail_next(InMemoryEventStore.new(), :unavailable)
 
     for owner <- ["", String.duplicate("o", 33), "bad\u0000owner", :atom] do
-      assert {:error, :invalid_owner} = recover(InMemoryEventStore, store, owner)
+      assert {:error, :invalid_owner, ^store} = recover(InMemoryEventStore, store, owner)
     end
 
     # The longest accepted owner still yields a valid reconciliation command ID later.
@@ -458,7 +475,7 @@ defmodule FeudHall.Application.RecoveryTest do
       live = live(adapter(:postgres))
       armed = PostgresEventStore.fail_next(live.store, :lost_reply)
 
-      assert {:error, {:uncertain, "recovery:boot:1"}} = recover(PostgresEventStore, armed, "c")
+      assert {:error, {:uncertain, "recovery:boot:1"}, _} = recover(PostgresEventStore, armed, "c")
       assert {:ok, receipt} = PostgresEventStore.receipt(live.store, "recovery:boot:1")
       assert PostgresEventStore.receipt(live.store, "start:c:2") == :none
 

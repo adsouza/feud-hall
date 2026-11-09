@@ -132,7 +132,7 @@ defmodule FeudHall.Application.DiagnosticsTest do
   end
 
   test "recovery failure emits recovery_failed without payloads", %{sink: sink} do
-    assert {:error, :invalid_owner} =
+    assert {:error, :invalid_owner, _} =
              Recovery.recover(InMemoryEventStore, InMemoryEventStore.new(), "",
                scope: "hall:t",
                diagnostics: {MemorySink, sink}
@@ -141,6 +141,22 @@ defmodule FeudHall.Application.DiagnosticsTest do
     failed = Enum.find(MemorySink.records(sink), &(&1.name == :recovery_failed))
     assert failed.severity == :error
     assert failed.fields.error_class == :invalid_owner
+  end
+
+  test "a fenced recovery is not reported as a recovery failure", %{sink: sink} do
+    {:ok, store, 1} = InMemoryEventStore.acquire_authority(InMemoryEventStore.new(), "hall:t", "a")
+    {:ok, store, 2} = InMemoryEventStore.acquire_authority(store, "hall:t", "b")
+
+    assert {:error, :fenced, _} =
+             Recovery.recover(InMemoryEventStore, store, "a",
+               scope: "hall:t",
+               expected_epoch: 1,
+               diagnostics: {MemorySink, sink}
+             )
+
+    names = Enum.map(MemorySink.records(sink), & &1.name)
+    assert :recovery_started in names
+    refute :recovery_failed in names
   end
 
   test "a raising sink never reaches the workflow" do

@@ -179,6 +179,10 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   def acquire_authority(_store, _scope, _owner, expected) when is_integer(expected), do: {:error, :fenced}
 
   @impl true
+  def held_epoch(%{epoch: 0}), do: nil
+  def held_epoch(store), do: store.epoch
+
+  @impl true
   def save_snapshot(store, position, body) when is_binary(body) do
     id = store.next_snapshot_id
     snapshot = %{id: id, position: position, body: body, verified: false}
