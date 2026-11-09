@@ -94,20 +94,27 @@ defmodule FeudHall.Domain.ChoiceTest do
       assert share_permille in 550..650
     end
 
-    test "re-pricing the same main row, or adding a drink or dessert row, does not change the stall weight", %{
-      state: state
-    } do
-      # One stall, leave weight fixed by the segment: identical rng gives identical picks
-      # only if the stall's weight is unchanged.
-      base = only_mains(state, ["bean_tacos", "horchata", "arroz_con_leche"])
-      diner = diner(base)
-      with_mains = only_mains(state, ["bean_tacos"])
-      repriced = update_in(with_mains, [:restaurants, "r1", :menu, "bean_tacos"], & &1)
+    test "a second main that is not the best dish adds exactly the variety bonus", %{state: state} do
+      standard = put_in(state, [:stalls, "s001", :tier], :standard)
+      one = only_mains(standard, ["bean_tacos"])
+      two = only_mains(standard, ["bean_tacos", "chicken_tacos"])
+      diner = diner(standard)
 
-      assert elem(draws(with_mains, diner, Random.new(5), 200), 0) ==
-               elem(draws(repriced, diner, Random.new(5), 200), 0)
+      [{pick_one, weight_one}] = Choice.stall_weights(one, diner)
+      [{pick_two, weight_two}] = Choice.stall_weights(two, diner)
 
-      assert elem(draws(with_mains, diner, Random.new(5), 200), 0) == elem(draws(base, diner, Random.new(5), 200), 0)
+      assert pick_one == {:stall, "s001", "bean_tacos", nil}
+      assert pick_two == pick_one
+      assert weight_two == weight_one + state.catalog.rules.demand.variety_weight
+    end
+
+    test "drink and dessert rows add no weight", %{state: state} do
+      standard = put_in(state, [:stalls, "s001", :tier], :standard)
+      mains = only_mains(standard, ["bean_tacos"])
+      extras = only_mains(standard, ["bean_tacos", "horchata", "arroz_con_leche"])
+      diner = diner(standard)
+
+      assert Choice.stall_weights(extras, diner) == Choice.stall_weights(mains, diner)
     end
 
     test "more distinct mains earn a stall the variety bonus", %{state: state} do
@@ -164,8 +171,34 @@ defmodule FeudHall.Domain.ChoiceTest do
     test "a stall with a full queue is not a candidate", %{state: state} do
       full = put_in(state, [:catalog, :rules, :kitchen, :queue_limit], 0)
 
-      assert {{:leave, reason}, _} = Choice.choose(full, diner(state), Random.new(3))
-      assert reason in [:no_compatible_main, :nothing_affordable]
+      assert Choice.stall_weights(full, diner(state)) == []
+      assert [_] = Choice.stall_weights(state, diner(state))
+      assert {{:leave, :no_compatible_main}, _} = Choice.choose(full, diner(state), Random.new(3))
+    end
+  end
+
+  describe "drink fit" do
+    test "a budget that covers the main but not main plus drink picks the main alone", %{state: state} do
+      main_only = tray_quote(state, nil)
+      with_drink = tray_quote(state, "horchata")
+      assert main_only.total < with_drink.total
+      diner = diner(state, %{drink?: true, budget: main_only.total})
+
+      assert [{{:stall, "s001", _main, nil}, _}] =
+               Choice.stall_weights(only_mains(state, ["bean_tacos", "horchata"]), diner)
+
+      assert {{:stall, "s001", "bean_tacos", nil}, _} =
+               pick_stall(only_mains(state, ["bean_tacos", "horchata"]), diner, Random.new(4))
+    end
+
+    test "patience that the drink breaks but the main meets picks the main alone", %{state: state} do
+      main_only = tray_quote(state, nil)
+      with_drink = tray_quote(state, "horchata")
+      assert main_only.earliest_completion < with_drink.earliest_completion
+      diner = diner(state, %{drink?: true, patience_hall_ms: main_only.earliest_completion - state.now})
+
+      assert [{{:stall, "s001", "bean_tacos", nil}, _}] =
+               Choice.stall_weights(only_mains(state, ["bean_tacos", "horchata"]), diner)
     end
   end
 
@@ -211,6 +244,17 @@ defmodule FeudHall.Domain.ChoiceTest do
                  "sim1"
                )
     end
+  end
+
+  defp tray_quote(state, drink) do
+    {:ok, quote} =
+      FeudHall.Domain.Offers.quote_tray(state, "s001", "bean_tacos", drink, %{
+        requirement: requirement(state, "unrestricted"),
+        carbs_reserved: 0,
+        carbs_served: 0
+      })
+
+    quote
   end
 
   defp pick_stall(state, diner, rng) do

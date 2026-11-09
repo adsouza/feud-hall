@@ -37,26 +37,30 @@ defmodule FeudHall.Domain.Choice do
 
   @spec choose(map(), diner(), Random.state()) :: {choice(), Random.state()}
   def choose(state, diner, rng) do
-    segment = diner.segment
+    case evaluate_all(state, diner) do
+      {[], reason} -> {{:leave, reason}, rng}
+      {stalls, _reason} -> draw(rng, stalls, diner.segment.leave_weight)
+    end
+  end
+
+  @doc """
+  The weighted stall picks `choose/3` draws from (excluding leaving), in stall
+  ID order: `[{{:stall, stall_id, main_id, drink_id | nil}, weight}]`.
+  """
+  @spec stall_weights(map(), diner()) :: [{choice(), pos_integer()}]
+  def stall_weights(state, diner), do: state |> evaluate_all(diner) |> elem(0)
+
+  defp evaluate_all(state, diner) do
     evaluated = state |> open_stalls() |> Enum.flat_map(&evaluate_stall(state, &1, diner))
 
-    scored =
-      for %{outcome: :candidate} = c <- evaluated, do: c
-
     stalls =
-      scored
+      for(%{outcome: :candidate} = c <- evaluated, do: c)
       |> Enum.group_by(& &1.stall_id)
       |> Enum.sort()
       |> Enum.map(fn {_stall_id, candidates} -> stall_entry(state, diner, candidates) end)
       |> Enum.filter(fn {_choice, weight} -> weight > 0 end)
 
-    case stalls do
-      [] ->
-        {{:leave, leave_reason(evaluated)}, rng}
-
-      _ ->
-        draw(rng, stalls, segment.leave_weight)
-    end
+    {stalls, leave_reason(evaluated)}
   end
 
   defp draw(rng, stalls, leave_weight) do
@@ -89,16 +93,20 @@ defmodule FeudHall.Domain.Choice do
   defp evaluate(state, stall_id, main_id, drink, diner) do
     visit = %{requirement: diner.requirement, carbs_reserved: 0, carbs_served: 0}
 
+    limit = state.now + diner.patience_hall_ms
+    fits? = fn {:ok, q} -> q.total <= diner.budget and q.earliest_completion <= limit end
+
     result =
-      case drink && Offers.quote_tray(state, stall_id, main_id, drink, visit) do
-        {:ok, _} = quoted -> {quoted, drink}
+      with drink when drink != nil <- drink,
+           {:ok, _} = with_drink <- Offers.quote_tray(state, stall_id, main_id, drink, visit),
+           true <- fits?.(with_drink) do
+        {with_drink, drink}
+      else
         _ -> {Offers.quote_tray(state, stall_id, main_id, nil, visit), nil}
       end
 
     case result do
       {{:ok, quote}, drink_id} ->
-        limit = state.now + diner.patience_hall_ms
-
         %{
           outcome: :candidate,
           stall_id: stall_id,
