@@ -35,34 +35,57 @@ defmodule FeudHall.Fixtures do
 
   @doc "A hall with alice's open restaurant fully unlocked and stocked."
   def stocked_world(opts \\ []) do
-    catalog = Keyword.get(opts, :catalog, SliceCatalog.catalog())
+    opts
+    |> stocked_world_steps()
+    |> Enum.reduce({nil, []}, fn step, {state, _log} = world ->
+      {command, actor, id} = step.(state)
+      run!(world, command, actor, id)
+    end)
+  end
 
-    {nil, []}
-    |> run!({:initialize_hall, %{hall_id: "hall-1", catalog: catalog}}, {:system, :admin}, "init")
-    |> run!(
-      {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa Alice", cuisine: "mexican"}},
-      owner(),
-      "create"
-    )
-    |> then(fn w ->
+  @doc """
+  The commands `stocked_world/1` runs, in order. Each step is a function of the
+  state reached so far returning `{command, actor, command_id}`, so callers that
+  record or replay the setup (the trace properties) issue exactly the same
+  commands and IDs.
+  """
+  def stocked_world_steps(opts \\ []) do
+    catalog = Keyword.get(opts, :catalog, SliceCatalog.catalog())
+    fixed = fn command, actor, id -> fn _state -> {command, actor, id} end end
+
+    unlocks =
       if Keyword.get(opts, :unlock, true) do
-        ~w(chicken_tacos vegetable_quesadilla arroz_con_leche horchata)
-        |> Enum.reduce(w, fn recipe, w ->
-          w
-          |> run!({:unlock_recipe, %{restaurant_id: "r1", recipe_id: recipe}}, owner(), "unlock-" <> recipe)
-          |> run!(
-            {:set_menu_price,
-             %{restaurant_id: "r1", recipe_id: recipe, price: catalog.recipes[recipe].suggested_price}},
-            owner(),
-            "price-" <> recipe
-          )
+        Enum.flat_map(~w(chicken_tacos vegetable_quesadilla arroz_con_leche horchata), fn recipe ->
+          [
+            fixed.({:unlock_recipe, %{restaurant_id: "r1", recipe_id: recipe}}, owner(), "unlock-" <> recipe),
+            fixed.(
+              {:set_menu_price,
+               %{restaurant_id: "r1", recipe_id: recipe, price: catalog.recipes[recipe].suggested_price}},
+              owner(),
+              "price-" <> recipe
+            )
+          ]
         end)
       else
-        w
+        []
       end
-    end)
-    |> stock(Keyword.get(opts, :stock, default_stock()))
-    |> run!({:open_stall, %{stall_id: "s1"}}, owner(), "open")
+
+    purchases =
+      opts
+      |> Keyword.get(:stock, default_stock())
+      |> Enum.sort()
+      |> Enum.map(fn {product, qty} ->
+        fn state -> {purchase(product, qty), owner(), "buy-#{product}-#{state.now}"} end
+      end)
+
+    [
+      fixed.({:initialize_hall, %{hall_id: "hall-1", catalog: catalog}}, {:system, :admin}, "init"),
+      fixed.(
+        {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa Alice", cuisine: "mexican"}},
+        owner(),
+        "create"
+      )
+    ] ++ unlocks ++ purchases ++ [fixed.({:open_stall, %{stall_id: "s1"}}, owner(), "open")]
   end
 
   def default_stock do
@@ -93,14 +116,10 @@ defmodule FeudHall.Fixtures do
     end)
   end
 
-  def buy(world, product, qty, id) do
-    run!(
-      world,
-      {:purchase_stock, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}},
-      owner(),
-      id
-    )
-  end
+  def buy(world, product, qty, id), do: run!(world, purchase(product, qty), owner(), id)
+
+  defp purchase(product, qty),
+    do: {:purchase_stock, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
 
   def simulated_visit(world, id, main, drink \\ nil, profile \\ "unrestricted", budget \\ 10_000) do
     run!(
