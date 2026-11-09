@@ -65,6 +65,15 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   `{:shutdown, {:recovery_failed, reason}}`: restarting cannot repair history.
   At start-up, recovery acquires authority unconditionally.
 
+  When a gap recovery fails after its acquisition committed, the authority
+  adopts the store recovery hands back and retries from the epoch it now
+  holds. If the acquisition's own reply was lost (the database committed it,
+  but no store came back), the retry still succeeds: the store accepts this
+  same owner at exactly one epoch past the expected one as its own lost
+  acquisition. **The `owner` name therefore identifies one authority
+  incarnation**: two processes must never share an owner name, or a paused
+  one could mistake its successor's acquisition for its own.
+
   ## Snapshots
 
   After a committed batch, when at least `snapshot_every_events` events or
@@ -469,7 +478,10 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   # The asynchronous daily-activity projection only exists on PostgreSQL.
   defp emit_backlog(%{runtime: %{store: %PostgresEventStore{repo: repo} = store}} = s) do
-    read = fn -> {:ok, PostgresEventStore.head(store) - DailyActivityProjector.checkpoint(repo)} end
+    read = fn ->
+      with head when is_integer(head) <- PostgresEventStore.head(store),
+           do: {:ok, head - DailyActivityProjector.checkpoint(repo)}
+    end
 
     case shielded(read, {:error, :unavailable}) do
       {:ok, backlog} -> emit(s, :projection_backlog, %{backlog: backlog, position: s.runtime.position})

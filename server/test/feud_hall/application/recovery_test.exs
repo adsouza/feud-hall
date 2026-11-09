@@ -292,13 +292,13 @@ defmodule FeudHall.Application.RecoveryTest do
       test "with an expected epoch, recovery re-acquires only if that epoch is still current",
            %{mod: mod, store: store} do
         assert {:ok, a, _} = recover(mod, store, "a")
-        assert {:ok, a2, _} = recover(mod, a.store, "a", expected_epoch: a.epoch)
-        assert a2.epoch == a.epoch + 1
-        head = mod.head(a2.store)
+        assert {:ok, b, _} = recover(mod, a.store, "b", expected_epoch: a.epoch)
+        assert b.epoch == a.epoch + 1
+        head = mod.head(b.store)
 
-        # The held epoch was superseded: recovery is fenced before it reads or appends anything.
-        assert {:error, :fenced, _store} = recover(mod, a2.store, "a", expected_epoch: a.epoch)
-        assert mod.head(a2.store) == head
+        # "b" superseded the epoch "a" held: recovery is fenced before it reads or appends anything.
+        assert {:error, :fenced, _store} = recover(mod, b.store, "a", expected_epoch: a.epoch)
+        assert mod.head(b.store) == head
       end
 
       test "a failure after acquisition returns the store holding the acquired epoch", %{mod: mod, store: store} do

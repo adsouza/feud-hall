@@ -33,6 +33,7 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
             stock: %{},
             outbox: [],
             epoch: 0,
+            owner: nil,
             snapshots: [],
             next_snapshot_id: 1,
             fail_next: nil
@@ -167,13 +168,18 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   @impl true
   def outbox(store), do: store.outbox
 
-  @doc "Counts epochs; with an `expected_epoch` the count must still equal it, else `{:error, :fenced}`."
+  @doc """
+  Counts epochs and remembers the last owner. With an `expected_epoch` the count must still equal
+  it, or show this same owner at exactly `expected_epoch + 1` (its own acquisition whose reply was
+  lost); otherwise `{:error, :fenced}`.
+  """
   @impl true
   def acquire_authority(store, scope, owner, expected_epoch \\ nil)
 
-  def acquire_authority(store, _scope, _owner, expected) when is_nil(expected) or expected == store.epoch do
+  def acquire_authority(store, _scope, owner, expected)
+      when is_nil(expected) or expected == store.epoch or (owner == store.owner and store.epoch == expected + 1) do
     epoch = store.epoch + 1
-    {:ok, %{store | epoch: epoch}, epoch}
+    {:ok, %{store | epoch: epoch, owner: owner}, epoch}
   end
 
   def acquire_authority(_store, _scope, _owner, expected) when is_integer(expected), do: {:error, :fenced}

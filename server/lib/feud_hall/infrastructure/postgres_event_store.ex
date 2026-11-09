@@ -105,21 +105,23 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   defp put_hook(store, key, value), do: %{store | hooks: Map.put(store.hooks, key, value)}
   defp clear_hooks(store), do: %{store | hooks: @default_hooks}
 
+  @doc "The committed head position; `{:error, :unavailable}` when storage cannot be reached."
   @impl true
   def head(store) do
-    %{rows: [[position]]} = store.repo.query!("select position from append_head where id = 1")
-    position
+    sql = "select position from append_head where id = 1"
+    with {:ok, %{rows: [[position]]}} <- attempt(fn -> store.repo.query!(sql) end), do: position
   end
 
+  @doc "Stream versions; `{:error, :unavailable}` when storage cannot be reached."
   @impl true
   def stream_versions(store, hall_stream) do
-    %{rows: rows} =
-      store.repo.query!("select stream, version from stream_heads where stream = any($1)", [
-        Enum.reject([hall_stream, @control], &is_nil/1)
-      ])
+    sql = "select stream, version from stream_heads where stream = any($1)"
 
-    versions = Map.new(rows, fn [stream, version] -> {stream, version} end)
-    %{hall: if(hall_stream, do: Map.get(versions, hall_stream, 0), else: 0), control: Map.get(versions, @control, 0)}
+    with {:ok, %{rows: rows}} <-
+           attempt(fn -> store.repo.query!(sql, [Enum.reject([hall_stream, @control], &is_nil/1)]) end) do
+      versions = Map.new(rows, fn [stream, version] -> {stream, version} end)
+      %{hall: if(hall_stream, do: Map.get(versions, hall_stream, 0), else: 0), control: Map.get(versions, @control, 0)}
+    end
   end
 
   # --- append ---------------------------------------------------------------
@@ -502,9 +504,12 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   @impl true
   def receipt(store, command_id) do
-    case store.repo.query!("select body, position from receipts where command_id = $1", [command_id]) do
-      %{rows: [[body, position]]} -> {:ok, body |> decode_term() |> Map.put(:position, position)}
-      %{rows: []} -> :none
+    sql = "select body, position from receipts where command_id = $1"
+
+    case attempt(fn -> store.repo.query!(sql, [command_id]) end) do
+      {:ok, %{rows: [[body, position]]}} -> {:ok, body |> decode_term() |> Map.put(:position, position)}
+      {:ok, %{rows: []}} -> :none
+      {:error, _} = error -> error
     end
   end
 
@@ -608,9 +613,15 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   end
 
   # One conditional update: the row lock makes the compare and the bump atomic against any
-  # concurrent acquisition. No row means the epoch moved on (or the scope was never held).
+  # concurrent acquisition. The row may also show this same owner at exactly `expected + 1`: that
+  # is this owner's own acquisition whose reply was lost, so it bumps again from there. No row means
+  # the epoch moved on to someone else (or further), or the scope was never held.
   def acquire_authority(store, scope, owner, expected_epoch) when is_integer(expected_epoch) do
-    sql = "update authority set owner = $2, epoch = epoch + 1 where scope = $1 and epoch = $3 returning epoch"
+    sql = """
+    update authority set owner = $2, epoch = epoch + 1
+    where scope = $1 and (epoch = $3 or (owner = $2 and epoch = $3 + 1))
+    returning epoch
+    """
 
     case attempt(fn -> store.repo.query!(sql, [scope, owner, expected_epoch]) end) do
       {:ok, %{rows: [[epoch]]}} -> {:ok, %{store | scope: scope, owner: owner, epoch: epoch}, epoch}

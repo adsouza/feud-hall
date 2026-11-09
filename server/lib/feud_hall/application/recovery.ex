@@ -127,7 +127,7 @@ defmodule FeudHall.Application.Recovery do
   end
 
   defp restore_and_resume(store_mod, store, owner, scope, epoch, opts) do
-    with head = store_mod.head(store),
+    with head when is_integer(head) <- store_mod.head(store),
          {:ok, base, skipped} <-
            base(store_mod, store, head, Keyword.get(opts, :decode_snapshot), skip_reporter(opts, scope)),
          {:ok, tail} <- store_mod.read_from(store, base.position),
@@ -253,12 +253,12 @@ defmodule FeudHall.Application.Recovery do
   end
 
   defp runtime(store_mod, store, restored, epoch, opts) do
-    versions = store_mod.stream_versions(store, CommandWorkflow.hall_stream(restored.hall))
-
-    CommandWorkflow.from_state(store_mod, store, Map.put(restored, :versions, versions),
-      epoch: epoch,
-      diagnostics: Keyword.get(opts, :diagnostics)
-    )
+    with %{} = versions <- store_mod.stream_versions(store, CommandWorkflow.hall_stream(restored.hall)) do
+      CommandWorkflow.from_state(store_mod, store, Map.put(restored, :versions, versions),
+        epoch: epoch,
+        diagnostics: Keyword.get(opts, :diagnostics)
+      )
+    end
   end
 
   # --- new transitions ---------------------------------------------------------

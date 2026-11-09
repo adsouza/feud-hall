@@ -77,11 +77,13 @@ defmodule FeudHall.Application.EventStore do
     end
   end
 
-  @callback head(store) :: non_neg_integer()
-  @callback stream_versions(store, hall_stream :: String.t() | nil) :: versions()
+  @doc "The committed head position. A durable adapter returns `{:error, :unavailable}` when storage cannot be reached."
+  @callback head(store) :: non_neg_integer() | {:error, :unavailable}
+  @doc "Stream versions at the head; `{:error, :unavailable}` as for `head/1`."
+  @callback stream_versions(store, hall_stream :: String.t() | nil) :: versions() | {:error, :unavailable}
   @callback read_from(store, after_position :: non_neg_integer()) ::
               {:ok, [batch]} | {:error, {:undecodable, pos_integer(), term()} | :unavailable}
-  @callback receipt(store, command_id :: String.t()) :: {:ok, receipt} | :none
+  @callback receipt(store, command_id :: String.t()) :: {:ok, receipt} | :none | {:error, :unavailable}
   @callback append(store, append_request) ::
               {:ok, store, non_neg_integer()}
               | {:error, :conflict | :fenced | :unavailable | :invalid_request, store}
@@ -93,7 +95,10 @@ defmodule FeudHall.Application.EventStore do
   With an integer `expected_epoch`, takes the scope's authority only if its
   current epoch is still `expected_epoch` (atomically), otherwise
   `{:error, :fenced}`: a holder that was superseded cannot take the scope back.
-  `nil` behaves as `acquire_authority/3`.
+  It also succeeds when the scope shows this same `owner` at exactly
+  `expected_epoch + 1`: that is the owner's own acquisition whose reply was
+  lost, so it bumps again from there. Owner names therefore identify one
+  authority incarnation. `nil` behaves as `acquire_authority/3`.
   """
   @callback acquire_authority(store, scope :: String.t(), owner :: String.t(), expected_epoch :: pos_integer() | nil) ::
               {:ok, store, pos_integer()} | {:error, :fenced | :unavailable}

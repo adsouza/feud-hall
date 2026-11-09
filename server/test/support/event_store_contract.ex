@@ -432,6 +432,21 @@ defmodule FeudHall.EventStoreContract do
           assert after_next == next + 1
         end
 
+        test "contract: the same owner one epoch past the expected one is its own lost acquisition" do
+          store = contract_fresh()
+          {:ok, store, epoch} = @contract_adapter.acquire_authority(store, "hall:test", "node-a")
+
+          # Another owner at expected + 1 superseded the holder of `epoch - 1`.
+          assert {:error, :fenced} = @contract_adapter.acquire_authority(store, "hall:test", "node-b", epoch - 1)
+          # The same owner, but two epochs on: something else held the scope in between.
+          assert {:error, :fenced} = @contract_adapter.acquire_authority(store, "hall:test", "node-a", epoch - 2)
+
+          # The same owner at exactly expected + 1: its own acquisition whose reply was lost.
+          assert {:ok, store, next} = @contract_adapter.acquire_authority(store, "hall:test", "node-a", epoch - 1)
+          assert next == epoch + 1
+          assert @contract_adapter.held_epoch(store) == next
+        end
+
         test "contract: a handle reports the epoch it holds" do
           store = contract_fresh()
           {:ok, store, epoch} = @contract_adapter.acquire_authority(store, "hall:test", "node-a")

@@ -55,21 +55,17 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   @doc """
   Opens a runtime by replaying every committed batch from the store. A batch
-  that cannot be decoded stops the open with the store's error. Options:
+  that cannot be decoded stops the open with the store's error, and a store
+  that cannot be reached with `{:error, :unavailable}`. Options:
   `:epoch` (the authority epoch the store handle holds) and `:diagnostics`.
   """
   def open(store_mod, store, opts \\ []) do
-    with {:ok, batches} <- store_mod.read_from(store, 0) do
-      state = batches |> Enum.flat_map(& &1.events) |> Hall.replay(nil)
-      control = batches |> Enum.flat_map(& &1.control_events) |> Control.replay(nil)
-      versions = store_mod.stream_versions(store, hall_stream(state))
-
-      from_state(
-        store_mod,
-        store,
-        %{hall: state, control: control, position: store_mod.head(store), versions: versions},
-        opts
-      )
+    with {:ok, batches} <- store_mod.read_from(store, 0),
+         state = batches |> Enum.flat_map(& &1.events) |> Hall.replay(nil),
+         control = batches |> Enum.flat_map(& &1.control_events) |> Control.replay(nil),
+         %{} = versions <- store_mod.stream_versions(store, hall_stream(state)),
+         position when is_integer(position) <- store_mod.head(store) do
+      from_state(store_mod, store, %{hall: state, control: control, position: position, versions: versions}, opts)
     end
   end
 
@@ -193,6 +189,7 @@ defmodule FeudHall.Application.CommandWorkflow do
         case runtime.store_mod.receipt(runtime.store, command_id) do
           {:ok, receipt} -> {:committed, receipt, reopened}
           :none -> {:not_committed, reopened}
+          {:error, reason} -> {:error, reason, runtime}
         end
 
       # The store could not be read: the runtime stays as it was, still awaiting resolution.
@@ -228,6 +225,7 @@ defmodule FeudHall.Application.CommandWorkflow do
       :none -> :new
       {:ok, %{fingerprint: ^fingerprint} = receipt} -> {:replayed, receipt}
       {:ok, _other} -> {:error, :command_id_conflict}
+      {:error, :unavailable} = unavailable -> unavailable
     end
   end
 

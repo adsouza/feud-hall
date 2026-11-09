@@ -17,17 +17,22 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     connection error, as a dropped database would), `:undecodable` (every log read reports an
     undecodable batch, as damaged history would), and `:unavailable_after_acquire` (the next
     acquisition succeeds, then snapshot and log reads are unavailable until the acquisition after
-    it). Other faults go to the wrapped adapter.
+    it), `:head_unavailable_after_acquire` (likewise for `head/1`, the first read after acquiring),
+    and `{:lost_acquire_reply, once}` (the next acquisition commits but reports `:unavailable`, as a
+    reply lost after the database committed would; `once` is an `:atomics` flag, since a lost reply
+    hands back no store to disarm). Other faults go to the wrapped adapter.
     """
     defstruct [:mod, :inner, fault: nil]
 
-    @own [:corrupt_snapshot, :raise_on_save, :undecodable, :unavailable_after_acquire]
+    @own [:corrupt_snapshot, :raise_on_save, :undecodable, :unavailable_after_acquire, :head_unavailable_after_acquire]
 
     def wrap({mod, inner}), do: {__MODULE__, %__MODULE__{mod: mod, inner: inner}}
 
     def fail_next(s, fault) when fault in @own, do: %{s | fault: fault}
+    def fail_next(s, {:lost_acquire_reply, _once} = fault), do: %{s | fault: fault}
     def fail_next(s, fault), do: %{s | inner: s.mod.fail_next(s.inner, fault)}
 
+    def head(%{fault: :head_unavailable}), do: {:error, :unavailable}
     def head(s), do: s.mod.head(s.inner)
     def stream_versions(s, stream), do: s.mod.stream_versions(s.inner, stream)
     def receipt(s, id), do: s.mod.receipt(s.inner, id)
@@ -56,12 +61,23 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
       fault =
         case s.fault do
           :unavailable_after_acquire -> :reads_unavailable
-          :reads_unavailable -> nil
+          :head_unavailable_after_acquire -> :head_unavailable
+          stale when stale in [:reads_unavailable, :head_unavailable] -> nil
           other -> other
         end
 
-      with {:ok, inner, epoch} <- acquired,
-           do: {:ok, %{s | inner: inner, fault: fault}, epoch}
+      case {acquired, s.fault} do
+        {{:ok, _inner, _epoch}, {:lost_acquire_reply, once}} when is_reference(once) ->
+          if :atomics.compare_exchange(once, 1, 0, 1) == :ok,
+            do: {:error, :unavailable},
+            else: {:ok, %{s | inner: elem(acquired, 1), fault: nil}, elem(acquired, 2)}
+
+        {{:ok, inner, epoch}, _} ->
+          {:ok, %{s | inner: inner, fault: fault}, epoch}
+
+        {error, _} ->
+          error
+      end
     end
 
     def save_snapshot(%{fault: :raise_on_save}, _position, _body),
@@ -136,9 +152,9 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
 
   # Two gap recoveries ran (the first failed after acquiring): the authority holds the second
   # acquired epoch, never fenced itself, and resumes from unchanged hall time.
-  defp assert_recovered_twice(ctx, pid, before, ref) do
+  defp assert_recovered_twice(ctx, pid, before, ref, epochs \\ 2) do
     state = HallAuthority.state(pid)
-    assert state.epoch == before.epoch + 2
+    assert state.epoch == before.epoch + epochs
     assert state.mode == :ready
     assert state.hall.now == before.hall.now
     assert records(ctx, :fenced) == []
@@ -431,6 +447,36 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
 
         assert :ok = HallAuthority.tick(pid)
         assert_recovered_twice(ctx, pid, before, ref)
+      end
+
+      test "head unavailable right after a gap recovery's acquisition is retried from the acquired epoch", ctx do
+        pid = ctx |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
+        assert :ok = tick_after(ctx, pid, 1_000)
+        before = HallAuthority.state(pid)
+        ref = Process.monitor(pid)
+
+        assert :ok = HallAuthority.inject_fault(pid, :head_unavailable_after_acquire)
+        assert {:error, :unavailable} = tick_after(ctx, pid, 6_000)
+        assert [%{fields: %{error_class: :unavailable}}] = records(ctx, :storage_failure)
+
+        assert :ok = HallAuthority.tick(pid)
+        assert_recovered_twice(ctx, pid, before, ref)
+      end
+
+      test "a lost reply to the gap recovery's own acquisition is recognised on retry", ctx do
+        pid = ctx |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
+        assert :ok = tick_after(ctx, pid, 1_000)
+        before = HallAuthority.state(pid)
+        ref = Process.monitor(pid)
+
+        once = :atomics.new(1, [])
+        assert :ok = HallAuthority.inject_fault(pid, {:lost_acquire_reply, once})
+        assert {:error, :unavailable} = tick_after(ctx, pid, 6_000)
+
+        # PostgreSQL committed the lost acquisition, so the retry bumps past it; the in-memory store is
+        # a value, so a lost reply there loses the acquisition itself.
+        assert :ok = HallAuthority.tick(pid)
+        assert_recovered_twice(ctx, pid, before, ref, if(ctx.adapter == :postgres, do: 2, else: 1))
       end
 
       test "a recovery that fails after a gap shuts the authority down", ctx do

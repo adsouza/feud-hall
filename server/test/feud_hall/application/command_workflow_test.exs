@@ -135,6 +135,19 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     assert map_size(rt.state.restaurants["r1"].batches) == 1
   end
 
+  @tag :capture_log
+  test "an unreachable PostgreSQL store makes lookup, open, and resolve unavailable instead of raising" do
+    start_supervised!(FeudHall.UnreachableRepo)
+    store = PostgresEventStore.new(FeudHall.UnreachableRepo, "hall:test", epoch: 1)
+    head = %{hall: nil, control: nil, position: 0, versions: %{hall: 0, control: 0}}
+    {:ok, rt} = Workflow.from_state(PostgresEventStore, store, head)
+    init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+
+    assert {:error, :unavailable, ^rt} = Workflow.execute(rt, init)
+    assert {:error, :unavailable} = Workflow.open(PostgresEventStore, store)
+    assert {:error, :unavailable, ^rt} = Workflow.resolve(rt, "init")
+  end
+
   test "every append outcome adopts the returned store, so a consumed one-shot fault stays cleared" do
     rt = runtime()
     down = %{rt | store: InMemoryEventStore.fail_next(rt.store, :unavailable)}
