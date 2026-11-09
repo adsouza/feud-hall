@@ -381,6 +381,53 @@ defmodule FeudHall.EventStoreContract do
           assert {:error, :unknown_snapshot} = @contract_adapter.mark_snapshot_verified(store, unknown)
           assert [%{id: ^id, verified: false}] = @contract_adapter.snapshots(store)
         end
+
+        test "contract: snapshots are ordered by position, then id, whatever the save order" do
+          store = contract_fresh()
+          {:ok, store, a} = @contract_adapter.save_snapshot(store, 9, "a")
+          {:ok, store, b} = @contract_adapter.save_snapshot(store, 4, "b")
+          {:ok, store, c} = @contract_adapter.save_snapshot(store, 9, "c")
+
+          assert [%{id: ^c}, %{id: ^a}, %{id: ^b}] = @contract_adapter.snapshots(store)
+        end
+
+        test "contract: pruning keeps the newest verified snapshots and every newer unverified one" do
+          store = contract_fresh()
+
+          {store, ids} =
+            Enum.reduce([1, 2, 3, 4, 5], {store, %{}}, fn position, {store, ids} ->
+              {:ok, store, id} = @contract_adapter.save_snapshot(store, position, "s#{position}")
+              {store, Map.put(ids, position, id)}
+            end)
+
+          # Positions 1, 2 and 4 are verified; 3 (between the kept ones) and 5 (newer) are not.
+          store =
+            Enum.reduce([1, 2, 4], store, fn position, store ->
+              {:ok, store} = @contract_adapter.mark_snapshot_verified(store, ids[position])
+              store
+            end)
+
+          assert {:ok, store} = @contract_adapter.prune_snapshots(store, 2)
+          kept = Enum.map(@contract_adapter.snapshots(store), & &1.position)
+          assert kept == [5, 4, 3, 2]
+
+          # Idempotent, and a default of two.
+          assert {:ok, store} = @contract_adapter.prune_snapshots(store)
+          assert Enum.map(@contract_adapter.snapshots(store), & &1.position) == [5, 4, 3, 2]
+
+          assert {:ok, store} = @contract_adapter.prune_snapshots(store, 1)
+          assert Enum.map(@contract_adapter.snapshots(store), & &1.position) == [5, 4]
+        end
+
+        test "contract: pruning with too few verified snapshots deletes nothing" do
+          store = contract_fresh()
+          {:ok, store, one} = @contract_adapter.save_snapshot(store, 1, "one")
+          {:ok, store, _two} = @contract_adapter.save_snapshot(store, 2, "two")
+          {:ok, store} = @contract_adapter.mark_snapshot_verified(store, one)
+
+          assert {:ok, store} = @contract_adapter.prune_snapshots(store, 2)
+          assert length(@contract_adapter.snapshots(store)) == 2
+        end
       end
     end
   end

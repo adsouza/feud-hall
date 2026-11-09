@@ -366,9 +366,9 @@ defmodule FeudHall.Application.CommandWorkflowTest do
 
     test "corrupt or incompatible snapshots are rejected for fallback" do
       rt = runtime()
-      snap = Snapshot.take(rt.state, rt.position)
+      snap = Snapshot.take(%{hall: rt.state, control: nil}, rt.position)
       assert {:ok, %{position: _, state: state}} = Snapshot.load(snap)
-      assert state == rt.state
+      assert state == %{hall: rt.state, control: nil}
       <<first, rest::binary>> = snap
       assert {:error, :corrupt_snapshot} = Snapshot.load(<<Bitwise.bxor(first, 1), rest::binary>>)
       assert {:error, :corrupt_snapshot} = Snapshot.load("short")

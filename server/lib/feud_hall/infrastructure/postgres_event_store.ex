@@ -587,14 +587,26 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     end
   end
 
+  # Its own short transaction: it never touches `append_head`, so saving a snapshot never waits
+  # on an in-flight append. The evolution version is read from the (checksummed) binary; an
+  # unreadable binary is stored as evolution 0 and rejected later by `Snapshot.load/1`.
   @impl true
   def save_snapshot(store, position, body) when is_binary(body) do
     sql = "insert into snapshots (position, evolution, body) values ($1, $2, $3) returning id"
+    evolution = Snapshot.evolution_of(body) || 0
 
-    with {:ok, %{rows: [[id]]}} <-
-           attempt(fn -> store.repo.query!(sql, [position, Snapshot.evolution_version(), body]) end) do
-      {:ok, store, id}
-    end
+    result =
+      attempt(fn ->
+        {:ok, id} =
+          store.repo.transaction(fn ->
+            %{rows: [[id]]} = store.repo.query!(sql, [position, evolution, body])
+            id
+          end)
+
+        id
+      end)
+
+    with {:ok, id} <- result, do: {:ok, store, id}
   end
 
   @impl true
@@ -607,13 +619,35 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   def mark_snapshot_verified(_store, _id), do: {:error, :unknown_snapshot}
 
+  @doc "Stored snapshots, newest first (by position, then id); `{:error, :unavailable}` when storage cannot be reached."
   @impl true
   def snapshots(store) do
-    %{rows: rows} = store.repo.query!("select id, position, body, verified from snapshots order by id desc")
+    sql = "select id, position, body, verified from snapshots order by position desc, id desc"
 
-    Enum.map(rows, fn [id, position, body, verified] ->
-      %{id: id, position: position, body: body, verified: verified}
-    end)
+    with {:ok, %{rows: rows}} <- attempt(fn -> store.repo.query!(sql) end) do
+      Enum.map(rows, fn [id, position, body, verified] ->
+        %{id: id, position: position, body: body, verified: verified}
+      end)
+    end
+  end
+
+  @doc """
+  Deletes snapshots older than the `keep_verified` newest verified ones (newest by position, then
+  id), unverified ones included. Every snapshot at or after the oldest kept verified one stays,
+  so an unverified snapshot newer than it survives. With fewer than `keep_verified` verified
+  snapshots nothing is deleted.
+  """
+  @spec prune_snapshots(t(), pos_integer()) :: {:ok, t()} | {:error, :unavailable}
+  def prune_snapshots(store, keep_verified \\ 2) when is_integer(keep_verified) and keep_verified > 0 do
+    sql = """
+    delete from snapshots
+    where (position, id) < (
+      select position, id from snapshots where verified
+      order by position desc, id desc offset $1 limit 1
+    )
+    """
+
+    with {:ok, _} <- attempt(fn -> store.repo.query!(sql, [keep_verified - 1]) end), do: {:ok, store}
   end
 
   defp attempt(fun) do

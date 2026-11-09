@@ -94,9 +94,9 @@ defmodule FeudHall.Properties.HallTraceTest do
       # Snapshot at a complete batch boundary plus the remaining tail.
       k = rem(cut, length(batches) + 1)
       {prefix, tail} = Enum.split(batches, k)
-      snapshot = Snapshot.take(Hall.replay(Enum.concat(prefix)), k)
+      snapshot = Snapshot.take(%{hall: Hall.replay(Enum.concat(prefix)), control: nil}, k)
       positioned = tail |> Enum.with_index(k + 1) |> Enum.map(fn {evs, pos} -> %{position: pos, events: evs} end)
-      assert {:ok, ^state} = Snapshot.restore(snapshot, positioned)
+      assert {:ok, %{hall: ^state, control: nil}} = Snapshot.restore(snapshot, positioned)
 
       # Serialized history decodes and replays to the same state.
       decoded =

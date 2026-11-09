@@ -92,8 +92,8 @@ defmodule FeudHall.Application.EventStore do
               {:ok, store, snapshot_id :: term()} | {:error, :unavailable}
   @callback mark_snapshot_verified(store, snapshot_id :: term()) ::
               {:ok, store} | {:error, :unknown_snapshot}
-  @doc "Stored snapshots, newest first."
-  @callback snapshots(store) :: [snapshot()]
+  @doc "Stored snapshots, newest first (by position, then id)."
+  @callback snapshots(store) :: [snapshot()] | {:error, :unavailable}
   @callback projection(store, :balances | :stock) :: [map()]
   @doc "Committed outbox intents in insertion order."
   @callback outbox(store) :: [

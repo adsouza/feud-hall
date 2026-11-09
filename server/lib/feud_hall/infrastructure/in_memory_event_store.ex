@@ -173,7 +173,7 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   def save_snapshot(store, position, body) when is_binary(body) do
     id = store.next_snapshot_id
     snapshot = %{id: id, position: position, body: body, verified: false}
-    {:ok, %{store | snapshots: [snapshot | store.snapshots], next_snapshot_id: id + 1}, id}
+    {:ok, %{store | snapshots: sort_snapshots([snapshot | store.snapshots]), next_snapshot_id: id + 1}, id}
   end
 
   @impl true
@@ -188,4 +188,15 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
 
   @impl true
   def snapshots(store), do: store.snapshots
+
+  @doc "Same semantics as `PostgresEventStore.prune_snapshots/2`."
+  def prune_snapshots(store, keep_verified \\ 2) when is_integer(keep_verified) and keep_verified > 0 do
+    case store.snapshots |> Enum.filter(& &1.verified) |> Enum.at(keep_verified - 1) do
+      nil -> {:ok, store}
+      cutoff -> {:ok, %{store | snapshots: Enum.filter(store.snapshots, &(snapshot_key(&1) >= snapshot_key(cutoff)))}}
+    end
+  end
+
+  defp sort_snapshots(snapshots), do: Enum.sort_by(snapshots, &snapshot_key/1, :desc)
+  defp snapshot_key(%{position: position, id: id}), do: {position, id}
 end
