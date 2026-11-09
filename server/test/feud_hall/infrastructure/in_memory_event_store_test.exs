@@ -32,6 +32,19 @@ defmodule FeudHall.Infrastructure.InMemoryEventStoreTest do
       end
     end
 
+    test "an armed unavailable failure also refuses log and snapshot reads until an append clears it" do
+      store = InMemoryEventStore.new()
+      {:ok, store, _} = InMemoryEventStore.save_snapshot(store, 0, "body")
+      down = InMemoryEventStore.fail_next(store, :unavailable)
+
+      assert InMemoryEventStore.read_from(down, 0) == {:error, :unavailable}
+      assert InMemoryEventStore.snapshots(down) == {:error, :unavailable}
+
+      assert {:error, :unavailable, up} = InMemoryEventStore.append(down, request(down, "a"))
+      assert InMemoryEventStore.read_from(up, 0) == {:ok, []}
+      assert [%{body: "body"}] = InMemoryEventStore.snapshots(up)
+    end
+
     test "a lost reply commits the batch but reports an unknown outcome" do
       store = InMemoryEventStore.fail_next(InMemoryEventStore.new(), :lost_reply)
       assert {:error, :unknown_outcome, store} = InMemoryEventStore.append(store, request(store, "a"))

@@ -13,7 +13,9 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   adapter must survive: `:before_commit` and `:unavailable` fail with nothing
   written (`{:error, :unavailable, store}`); `:fenced` fails with nothing
   written as a lost authority would; `:lost_reply` commits everything but
-  reports an unknown outcome.
+  reports an unknown outcome. An armed `:unavailable` also makes
+  `read_from/2` and `snapshots/1` return `{:error, :unavailable}`; reads return
+  no store value, so it stays armed until an append consumes it.
   """
 
   @behaviour FeudHall.Application.EventStore
@@ -49,6 +51,8 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   end
 
   @impl true
+  def read_from(%{fail_next: :unavailable}, _after_position), do: {:error, :unavailable}
+
   def read_from(store, after_position) do
     {:ok, store.batches |> Enum.reverse() |> Enum.filter(&(&1.position > after_position))}
   end
@@ -187,6 +191,7 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   end
 
   @impl true
+  def snapshots(%{fail_next: :unavailable}), do: {:error, :unavailable}
   def snapshots(store), do: store.snapshots
 
   @doc "Same semantics as `PostgresEventStore.prune_snapshots/2`."

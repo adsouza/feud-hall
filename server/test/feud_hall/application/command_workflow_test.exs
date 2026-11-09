@@ -250,6 +250,26 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     assert rt.state.now == 60_000 * 24
   end
 
+  test "a runtime built from a recovered state continues from that head with its epoch" do
+    rt = runtime()
+    versions = InMemoryEventStore.stream_versions(rt.store, "hall:h1")
+    base = %{hall: rt.state, control: rt.control, position: rt.position, versions: versions}
+
+    assert {:ok, built} = Workflow.from_state(InMemoryEventStore, rt.store, base, epoch: 7)
+    assert {built.state, built.control, built.position, built.versions} == {rt.state, rt.control, rt.position, versions}
+    assert built.epoch == 7
+    assert built.mode == :ready
+
+    assert {:accepted, _, built} = Workflow.execute(built, env("buy-1", {:principal, "alice"}, purchase(10)))
+    assert built.position == rt.position + 1
+
+    # Resolving an uncertain command reopens the runtime without losing its epoch.
+    armed = %{built | store: InMemoryEventStore.fail_next(built.store, :lost_reply)}
+    {:uncertain, "buy-2", stuck} = Workflow.execute(armed, env("buy-2", {:principal, "alice"}, purchase(5)))
+    assert {:committed, _, resolved} = Workflow.resolve(stuck, "buy-2")
+    assert resolved.epoch == 7
+  end
+
   test "the store replays to the same head the workflow holds" do
     rt = runtime()
     {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(10)), 1_000)

@@ -269,5 +269,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
 
     assert {:error, :unavailable, ^unreachable} = PostgresEventStore.append(unreachable, request())
     assert {:error, :unavailable} = PostgresEventStore.acquire_authority(unreachable, "hall:test", "node-a")
+    assert {:error, :unavailable} = PostgresEventStore.read_from(unreachable, 0)
+    assert {:error, :unavailable} = PostgresEventStore.snapshots(unreachable)
   end
 end

@@ -80,7 +80,7 @@ defmodule FeudHall.Application.EventStore do
   @callback head(store) :: non_neg_integer()
   @callback stream_versions(store, hall_stream :: String.t() | nil) :: versions()
   @callback read_from(store, after_position :: non_neg_integer()) ::
-              {:ok, [batch]} | {:error, {:undecodable, pos_integer(), term()}}
+              {:ok, [batch]} | {:error, {:undecodable, pos_integer(), term()} | :unavailable}
   @callback receipt(store, command_id :: String.t()) :: {:ok, receipt} | :none
   @callback append(store, append_request) ::
               {:ok, store, non_neg_integer()}

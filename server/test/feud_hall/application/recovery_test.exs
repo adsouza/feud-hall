@@ -1,0 +1,385 @@
+defmodule FeudHall.Application.RecoveryTest do
+  # Not async: the PostgreSQL cases share the test database.
+  use ExUnit.Case, async: false
+
+  alias FeudHall.Application.{CommandWorkflow, Recovery}
+  alias FeudHall.Domain.{Control, Hall}
+  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.Infrastructure.{InMemoryEventStore, PostgresEventStore, Repo, Snapshot}
+
+  @scope "hall:test"
+  @authority {:system, :authority}
+  @alice {:principal, "alice"}
+
+  defmodule UndecodableStore do
+    @moduledoc """
+    The in-memory store with one damaged batch: reads that reach `position` stop with the
+    `{:undecodable, ...}` error a durable adapter reports for a payload it cannot decode.
+    """
+    alias FeudHall.Infrastructure.InMemoryEventStore, as: Inner
+
+    def acquire_authority({store, position}, scope, owner) do
+      {:ok, store, epoch} = Inner.acquire_authority(store, scope, owner)
+      {:ok, {store, position}, epoch}
+    end
+
+    def read_from({store, position}, after_position) do
+      {:ok, batches} = Inner.read_from(store, after_position)
+
+      if Enum.any?(batches, &(&1.position == position)),
+        do: {:error, {:undecodable, position, {:unknown_atom, "launch_missiles"}}},
+        else: {:ok, batches}
+    end
+
+    def snapshots({store, _}), do: Inner.snapshots(store)
+    def head({store, _}), do: Inner.head(store)
+    def stream_versions({store, _}, stream), do: Inner.stream_versions(store, stream)
+    def receipt({store, _}, id), do: Inner.receipt(store, id)
+
+    def append({store, position}, request) do
+      case Inner.append(store, request) do
+        {:ok, store, head} -> {:ok, {store, position}, head}
+        {:error, reason, store} -> {:error, reason, {store, position}}
+      end
+    end
+  end
+
+  # --- helpers ---------------------------------------------------------------
+
+  defp env(id, actor, command), do: %{command_id: id, actor: actor, command: command}
+
+  defp no_side_effects, do: fn effect -> flunk("recovery performed a side effect: #{inspect(effect)}") end
+
+  defp recover(mod, store, owner, opts \\ []),
+    do: Recovery.recover(mod, store, owner, [scope: @scope, side_effects: no_side_effects()] ++ opts)
+
+  defp recover_from_snapshots(mod, store, owner), do: recover(mod, store, owner, decode_snapshot: &Snapshot.load/1)
+
+  defp adapter(:memory), do: {InMemoryEventStore, InMemoryEventStore.new()}
+
+  defp adapter(:postgres) do
+    FeudHall.PostgresCase.reset!()
+    {PostgresEventStore, PostgresEventStore.new(Repo, @scope)}
+  end
+
+  defp purchase(product, qty),
+    do: {:purchase_stock, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
+
+  defp first_commands do
+    [
+      {env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}}), nil},
+      {env(
+         "create",
+         @alice,
+         {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa", cuisine: "mexican"}}
+       ), nil},
+      {env("buy-rice", @alice, purchase("rice_long", 100)), 1_000}
+    ]
+  end
+
+  defp later_commands do
+    [
+      {env("buy-milk", @alice, purchase("milk_whole", 200)), 2_000},
+      {env("buy-sugar", @alice, purchase("sugar", 50)), nil},
+      {env("buy-rice-2", @alice, purchase("rice_long", 30)), 3_000}
+    ]
+  end
+
+  defp run(rt, commands) do
+    Enum.reduce(commands, rt, fn {envelope, observed}, rt ->
+      assert {:accepted, _, rt} = CommandWorkflow.execute(rt, envelope, observed)
+      rt
+    end)
+  end
+
+  # A hall whose availability epoch "boot:1" was started by recovery and which then ran
+  # commands; the authority that held it is gone (its epoch is interrupted).
+  defp live({mod, store}) do
+    assert {:ok, rt, %{recovery_id: nil}} = recover(mod, store, "boot")
+    assert rt.control.current_epoch == "boot:1"
+    run(rt, first_commands())
+  end
+
+  defp save_snapshot(rt, body, position, verified? \\ true) do
+    mod = rt.store_mod
+    {:ok, store, id} = mod.save_snapshot(rt.store, position, body)
+    {:ok, store} = if verified?, do: mod.mark_snapshot_verified(store, id), else: {:ok, store}
+    {%{rt | store: store}, id}
+  end
+
+  defp snapshot(rt), do: Snapshot.take(%{hall: rt.state, control: rt.control}, rt.position)
+
+  defp corrupt(<<first, rest::binary>>), do: <<Bitwise.bxor(first, 1), rest::binary>>
+
+  defp incompatible(position) do
+    body = :erlang.term_to_binary(%{position: position, evolution: 1, state: nil}, [:deterministic])
+    :crypto.hash(:sha256, body) <> body
+  end
+
+  defp resumed(state, id), do: Hall.replay([%{type: :hall_resumed, recovery_id: id}], state)
+
+  defp batches_after(mod, store, position) do
+    {:ok, batches} = mod.read_from(store, position)
+    batches
+  end
+
+  defp resumed_batches(mod, store) do
+    store |> batches_after_all(mod) |> Enum.filter(&Enum.any?(&1.events, fn e -> e.type == :hall_resumed end))
+  end
+
+  defp batches_after_all(store, mod), do: batches_after(mod, store, 0)
+
+  # --- shared scenarios ---------------------------------------------------------
+
+  for adapter <- [:memory, :postgres] do
+    describe "#{adapter}" do
+      setup do
+        {mod, store} = adapter(unquote(adapter))
+        %{adapter: unquote(adapter), mod: mod, store: store}
+      end
+
+      test "genesis and snapshot recovery reach the live state at the same position", %{adapter: a, mod: mod} do
+        build = fn ->
+          rt = live(adapter(a))
+          {rt, _id} = save_snapshot(rt, snapshot(rt), rt.position)
+          {run(rt, later_commands()), rt.position}
+        end
+
+        {live, snap_position} = build.()
+        assert {:ok, genesis, report} = recover(mod, live.store, "b")
+
+        assert report == %{
+                 snapshot: :genesis,
+                 skipped: [],
+                 tail_batches: live.position,
+                 recovery_id: "recovery:boot:1",
+                 reconciliation: :accepted
+               }
+
+        {live_again, ^snap_position} = build.()
+        assert live_again.state == live.state
+        assert {:ok, from_snapshot, report} = recover_from_snapshots(mod, live_again.store, "b")
+        assert report.snapshot == snap_position
+        assert report.tail_batches == live.position - snap_position
+        assert report.skipped == []
+
+        for rt <- [genesis, from_snapshot] do
+          assert rt.state == resumed(live.state, "recovery:boot:1")
+          assert rt.position == live.position + 2
+          assert rt.epoch == 2
+          assert rt.mode == :ready
+          assert rt.control.current_epoch == "b:2"
+          assert MapSet.member?(rt.control.reconciled, "recovery:boot:1")
+        end
+
+        assert from_snapshot.control == genesis.control
+        assert from_snapshot.versions == genesis.versions
+
+        # The recovered runtime is the genesis replay of what the store now holds, and it accepts work.
+        assert {:ok, reopened} = CommandWorkflow.open(mod, from_snapshot.store)
+
+        assert {reopened.state, reopened.control, reopened.versions, reopened.position} ==
+                 {from_snapshot.state, from_snapshot.control, from_snapshot.versions, from_snapshot.position}
+
+        assert {:accepted, _, _} =
+                 CommandWorkflow.execute(from_snapshot, env("buy-after", @alice, purchase("sugar", 5)))
+      end
+
+      test "unusable snapshots fall back to the previous verified one, recording each skip", %{mod: mod, store: store} do
+        rt = live({mod, store})
+        {rt, _} = save_snapshot(rt, snapshot(rt), rt.position)
+        good = rt.position
+        rt = run(rt, later_commands())
+        {rt, corrupt_id} = save_snapshot(rt, corrupt(snapshot(rt)), rt.position)
+        # Unverified snapshots are never candidates, even when newer and intact.
+        {rt, _} = save_snapshot(rt, snapshot(rt), rt.position, false)
+        # A snapshot claiming a position beyond the durable head cannot describe committed state.
+        beyond = rt.position + 5
+        {rt, beyond_id} = save_snapshot(rt, Snapshot.take(%{hall: rt.state, control: rt.control}, beyond), beyond)
+
+        assert {:ok, recovered, report} = recover_from_snapshots(mod, rt.store, "b")
+        assert report.snapshot == good
+        assert report.skipped == [{beyond_id, :beyond_head}, {corrupt_id, :corrupt_snapshot}]
+        assert report.tail_batches == rt.position - good
+        assert recovered.state == resumed(rt.state, "recovery:boot:1")
+      end
+
+      test "with no usable snapshot recovery replays from genesis, recording both skips", %{mod: mod, store: store} do
+        rt = live({mod, store})
+        {rt, older} = save_snapshot(rt, incompatible(rt.position), rt.position)
+        rt = run(rt, later_commands())
+        {rt, newer} = save_snapshot(rt, corrupt(snapshot(rt)), rt.position)
+
+        assert {:ok, recovered, report} = recover_from_snapshots(mod, rt.store, "b")
+        assert report.snapshot == :genesis
+        assert report.skipped == [{newer, :corrupt_snapshot}, {older, :incompatible_snapshot}]
+        assert report.tail_batches == rt.position
+        assert recovered.state == resumed(rt.state, "recovery:boot:1")
+      end
+
+      test "recovery of an interrupted epoch appends exactly one reconciliation batch", %{mod: mod, store: store} do
+        live = live({mod, store})
+        assert {:ok, a, report} = recover(mod, live.store, "a")
+        assert %{recovery_id: "recovery:boot:1", reconciliation: :accepted} = report
+
+        assert [reconciliation, start] = batches_after(mod, a.store, live.position)
+        assert reconciliation.command_id == "recovery:boot:1"
+        assert reconciliation.events == [%{type: :hall_resumed, recovery_id: "recovery:boot:1"}]
+
+        assert reconciliation.control_events == [
+                 %{type: :availability_resumed, recovery_id: "recovery:boot:1", hall_ms: live.state.now}
+               ]
+
+        assert start.command_id == "start:a:2"
+        assert start.control_events == [%{type: :availability_started, epoch_id: "a:2"}]
+        assert length(resumed_batches(mod, a.store)) == 1
+
+        # The next owner reconciles the epoch "a" left behind, not "boot" again.
+        assert {:ok, b, %{recovery_id: "recovery:a:2", reconciliation: :accepted}} = recover(mod, a.store, "b")
+        assert b.control.current_epoch == "b:3"
+        assert length(resumed_batches(mod, b.store)) == 2
+      end
+
+      test "an owner retrying a reconciliation that already committed gets the original receipt",
+           %{mod: mod, store: store} do
+        live = live({mod, store})
+
+        # Owner "c" reconciles the interrupted epoch exactly as recovery does, then stops
+        # before starting its own epoch.
+        {:ok, store, 2} = mod.acquire_authority(live.store, @scope, "c")
+        {:ok, c} = CommandWorkflow.open(mod, store, epoch: 2)
+        reconcile = env("recovery:boot:1", @authority, {:reconcile_recovery, %{recovery_id: "recovery:boot:1"}})
+        assert {:accepted, receipt, c} = CommandWorkflow.execute(c, reconcile)
+        head = c.position
+
+        assert {:ok, d, report} = recover(mod, c.store, "d")
+        assert %{recovery_id: "recovery:boot:1", reconciliation: :replayed} = report
+        assert mod.receipt(d.store, "recovery:boot:1") == {:ok, receipt}
+        assert [%{command_id: "start:d:3"}] = batches_after(mod, d.store, head)
+        assert d.position == head + 1
+        assert d.control.current_epoch == "d:3"
+        assert length(resumed_batches(mod, d.store)) == 1
+      end
+
+      test "a store with no hall starts an epoch without reconciling", %{mod: mod, store: store} do
+        assert {:ok, a, %{snapshot: :genesis, tail_batches: 0, recovery_id: nil, reconciliation: nil}} =
+                 recover(mod, store, "a")
+
+        assert a.state == nil
+        assert a.control.current_epoch == "a:1"
+
+        # The epoch "a" began before any hall existed, so there is no hall to resume.
+        assert {:ok, b, %{recovery_id: nil, reconciliation: nil}} = recover(mod, a.store, "b")
+        assert b.control.current_epoch == "b:2"
+        assert b.position == 2
+      end
+
+      test "a broken invariant in the recovered state aborts recovery and appends nothing", %{mod: mod, store: store} do
+        rt = live({mod, store})
+        broken = update_in(rt.state, [:restaurants, "r1", :ledger, :cash], &(&1 + 1))
+        {rt, _} = save_snapshot(rt, Snapshot.take(%{hall: broken, control: rt.control}, rt.position), rt.position)
+
+        assert {:error, {:invariants, [{"r1", :trial_balance}]}} = recover_from_snapshots(mod, rt.store, "b")
+        assert mod.head(rt.store) == rt.position
+        assert mod.receipt(rt.store, "recovery:boot:1") == :none
+
+        # The same log replayed from genesis is consistent: the snapshot was the damaged copy.
+        assert {:ok, _, %{snapshot: :genesis}} = recover(mod, rt.store, "b")
+      end
+
+      test "replay never invokes the side-effect function", %{mod: mod, store: store} do
+        rt = live({mod, store})
+        {rt, _} = save_snapshot(rt, snapshot(rt), rt.position)
+        snap_position = rt.position
+        rt = run(rt, later_commands())
+        test = self()
+        effects = fn effect -> send(test, {:side_effect, effect}) end
+
+        assert {:ok, _, %{snapshot: ^snap_position, tail_batches: tail}} =
+                 Recovery.recover(mod, rt.store, "b",
+                   scope: @scope,
+                   decode_snapshot: &Snapshot.load/1,
+                   side_effects: effects
+                 )
+
+        assert tail == rt.position - snap_position
+        refute_received {:side_effect, _}
+      end
+    end
+  end
+
+  # --- adapter-specific ---------------------------------------------------------
+
+  describe "an undecodable event" do
+    test "aborts in-memory recovery with the store's error and appends nothing" do
+      rt = live(adapter(:memory))
+      damaged = {rt.store, 3}
+
+      assert {:error, {:undecodable, 3, {:unknown_atom, "launch_missiles"}}} =
+               Recovery.recover(UndecodableStore, damaged, "b", scope: @scope, side_effects: no_side_effects())
+    end
+
+    test "aborts PostgreSQL recovery with the store's error and appends nothing" do
+      rt = live(adapter(:postgres))
+
+      Repo.query!("update events set payload = $1 where position = 3", [
+        ~s({"v":1,"e":{"type":{"$a":"launch_missiles"}}})
+      ])
+
+      assert {:error, {:undecodable, 3, _}} = recover(PostgresEventStore, rt.store, "b")
+      assert PostgresEventStore.head(rt.store) == rt.position
+      assert PostgresEventStore.receipt(rt.store, "recovery:boot:1") == :none
+      assert PostgresEventStore.receipt(rt.store, "start:b:2") == :none
+    end
+  end
+
+  describe "unavailable storage" do
+    test "in memory, a failing snapshot listing or log read is unavailable" do
+      rt = live(adapter(:memory))
+      down = InMemoryEventStore.fail_next(rt.store, :unavailable)
+
+      assert {:error, :unavailable} = recover(InMemoryEventStore, down, "b")
+      assert {:error, :unavailable} = recover_from_snapshots(InMemoryEventStore, down, "b")
+    end
+
+    @tag :capture_log
+    test "on PostgreSQL, a refused connection is unavailable" do
+      start_supervised!(FeudHall.UnreachableRepo)
+      unreachable = PostgresEventStore.new(FeudHall.UnreachableRepo, @scope)
+
+      assert {:error, :unavailable} = recover(PostgresEventStore, unreachable, "b")
+      assert {:error, :unavailable} = recover_from_snapshots(PostgresEventStore, unreachable, "b")
+    end
+  end
+
+  test "an owner that would make the next recovery's command ID malformed is refused before storage" do
+    store = InMemoryEventStore.fail_next(InMemoryEventStore.new(), :unavailable)
+
+    for owner <- ["", String.duplicate("o", 33), "bad\u0000owner", :atom] do
+      assert {:error, :invalid_owner} = recover(InMemoryEventStore, store, owner)
+    end
+
+    # The longest accepted owner still yields a valid reconciliation command ID later.
+    longest = String.duplicate("o", 32)
+    assert {:ok, a, _} = recover(InMemoryEventStore, InMemoryEventStore.new(), longest)
+    a = run(a, Enum.take(first_commands(), 1))
+    assert {:ok, _, %{recovery_id: id, reconciliation: :accepted}} = recover(InMemoryEventStore, a.store, "b")
+    assert id == "recovery:#{longest}:1"
+  end
+
+  describe "a lost reply on PostgreSQL" do
+    test "leaves the reconciliation to the next recovery, which replays its receipt" do
+      live = live(adapter(:postgres))
+      armed = PostgresEventStore.fail_next(live.store, :lost_reply)
+
+      assert {:error, {:uncertain, "recovery:boot:1"}} = recover(PostgresEventStore, armed, "c")
+      assert {:ok, receipt} = PostgresEventStore.receipt(live.store, "recovery:boot:1")
+      assert PostgresEventStore.receipt(live.store, "start:c:2") == :none
+
+      assert {:ok, d, %{reconciliation: :replayed}} = recover(PostgresEventStore, live.store, "d")
+      assert PostgresEventStore.receipt(d.store, "recovery:boot:1") == {:ok, receipt}
+      assert d.control.current_epoch == "d:3"
+      assert Control.pending_recovery_id(d.control) == "recovery:d:3"
+    end
+  end
+end

@@ -45,6 +45,20 @@ defmodule FeudHall.Domain.ControlTest do
     assert {:error, :already_reconciled} = Control.decide(state, hall(), cmd, ctx())
   end
 
+  test "only the pending recovery identity may be reconciled" do
+    for {state, id} <- [{started(), "recovery:e0"}, {started(), "anything"}, {nil, "recovery:e1"}] do
+      assert {:error, :not_pending} = Control.decide(state, hall(), {:reconcile_recovery, %{recovery_id: id}}, ctx())
+    end
+
+    # Once a newer epoch starts, the older identity is no longer pending.
+    state = Control.replay([%{type: :availability_started, epoch_id: "e2"}], started())
+
+    assert {:error, :not_pending} =
+             Control.decide(state, hall(), {:reconcile_recovery, %{recovery_id: "recovery:e1"}}, ctx())
+
+    assert {:ok, _} = Control.decide(state, hall(), {:reconcile_recovery, %{recovery_id: "recovery:e2"}}, ctx())
+  end
+
   test "only the authority may issue control commands" do
     for actor <- [{:system, :admin}, {:principal, "alice"}] do
       assert {:error, :forbidden} = Control.decide(nil, nil, {:start_availability, %{epoch_id: "e1"}}, ctx(actor))

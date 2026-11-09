@@ -11,7 +11,9 @@ defmodule FeudHall.Domain.Control do
 
   `decide/4` is pure. `hall_state` is read-only context (nil until the hall
   is initialised); a reconciliation also yields the hall-stream event that
-  marks the hall resumed, so both commit in one batch.
+  marks the hall resumed, so both commit in one batch. Only the identity
+  `pending_recovery_id/1` names may be reconciled (`:not_pending` otherwise),
+  so no command can mark an unrelated or superseded epoch resumed.
 
   State: `%{current_epoch: id | nil, epochs: [id], reconciled: MapSet}`, or
   nil before any event.
@@ -35,14 +37,19 @@ defmodule FeudHall.Domain.Control do
     do: {:error, :hall_not_initialized}
 
   def decide(control, hall, {:reconcile_recovery, %{recovery_id: id}}, _ctx) when is_binary(id) and id != "" do
-    if MapSet.member?(reconciled(control), id) do
-      {:error, :already_reconciled}
-    else
-      {:ok,
-       %{
-         control: [%{type: :availability_resumed, recovery_id: id, hall_ms: hall.now}],
-         hall: [%{type: :hall_resumed, recovery_id: id}]
-       }}
+    cond do
+      id != pending_recovery_id(control) ->
+        {:error, :not_pending}
+
+      MapSet.member?(reconciled(control), id) ->
+        {:error, :already_reconciled}
+
+      true ->
+        {:ok,
+         %{
+           control: [%{type: :availability_resumed, recovery_id: id, hall_ms: hall.now}],
+           hall: [%{type: :hall_resumed, recovery_id: id}]
+         }}
     end
   end
 

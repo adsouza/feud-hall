@@ -389,8 +389,11 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   # --- reads ----------------------------------------------------------------
 
+  @doc "Every batch after `after_position`; `{:error, :unavailable}` when storage cannot be reached."
   @impl true
-  def read_from(store, after_position), do: read_after(store.repo, after_position, nil)
+  def read_from(store, after_position) do
+    with {:ok, result} <- attempt(fn -> read_after(store.repo, after_position, nil) end), do: result
+  end
 
   @doc """
   Reads at most `limit` batches (all when `nil`) after `after_position`, in position order, decoded

@@ -44,26 +44,47 @@ defmodule FeudHall.Application.CommandWorkflow do
             pending: nil,
             diagnostics: nil
 
+  @type t :: %__MODULE__{}
+
   @doc """
   Opens a runtime by replaying every committed batch from the store. A batch
-  that cannot be decoded stops the open with the store's error.
+  that cannot be decoded stops the open with the store's error. Options:
+  `:epoch` (the authority epoch the store handle holds) and `:diagnostics`.
   """
   def open(store_mod, store, opts \\ []) do
     with {:ok, batches} <- store_mod.read_from(store, 0) do
       state = batches |> Enum.flat_map(& &1.events) |> Hall.replay(nil)
       control = batches |> Enum.flat_map(& &1.control_events) |> Control.replay(nil)
+      versions = store_mod.stream_versions(store, hall_stream(state))
 
-      {:ok,
-       %__MODULE__{
-         store_mod: store_mod,
-         store: store,
-         state: state,
-         control: control,
-         position: store_mod.head(store),
-         versions: store_mod.stream_versions(store, hall_stream(state)),
-         diagnostics: Keyword.get(opts, :diagnostics)
-       }}
+      from_state(
+        store_mod,
+        store,
+        %{hall: state, control: control, position: store_mod.head(store), versions: versions},
+        opts
+      )
     end
+  end
+
+  @doc """
+  Builds a ready runtime from an already-restored head: the hall and control
+  states at committed `position`, with the stream `versions` the store holds
+  there. Recovery uses it after replaying a snapshot's tail; the caller is
+  responsible for the state matching the store at that position (a mismatch
+  surfaces as `:conflict` on the next append). Options as for `open/3`.
+  """
+  def from_state(store_mod, store, %{hall: hall, control: control, position: position, versions: versions}, opts \\ []) do
+    {:ok,
+     %__MODULE__{
+       store_mod: store_mod,
+       store: store,
+       state: hall,
+       control: control,
+       position: position,
+       versions: versions,
+       epoch: Keyword.get(opts, :epoch),
+       diagnostics: Keyword.get(opts, :diagnostics)
+     }}
   end
 
   @doc """
@@ -97,7 +118,8 @@ defmodule FeudHall.Application.CommandWorkflow do
   def resolve(%{mode: :fenced} = runtime, _command_id), do: {:error, :fenced, runtime}
 
   def resolve(runtime, command_id) do
-    with {:ok, reopened} <- open(runtime.store_mod, runtime.store, diagnostics: runtime.diagnostics) do
+    with {:ok, reopened} <-
+           open(runtime.store_mod, runtime.store, epoch: runtime.epoch, diagnostics: runtime.diagnostics) do
       case runtime.store_mod.receipt(runtime.store, command_id) do
         {:ok, receipt} -> {:committed, receipt, reopened}
         :none -> {:not_committed, reopened}
@@ -244,6 +266,7 @@ defmodule FeudHall.Application.CommandWorkflow do
     }
   end
 
-  defp hall_stream(nil), do: nil
-  defp hall_stream(state), do: "hall:" <> state.hall_id
+  @doc "The hall stream name for a hall state (nil before initialisation)."
+  def hall_stream(nil), do: nil
+  def hall_stream(state), do: "hall:" <> state.hall_id
 end

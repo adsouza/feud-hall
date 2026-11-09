@@ -1,0 +1,218 @@
+defmodule FeudHall.Application.Recovery do
+  @moduledoc """
+  Fenced recovery of a hall authority: restore the committed head, check it,
+  reconcile the interrupted availability epoch, and start a new one.
+
+  Steps, in order:
+
+    1. `acquire_authority/3` for `opts[:scope]` (default `"hall"`). The store
+       handle returned carries the new epoch, so any later append by a
+       previous owner is fenced.
+    2. With a snapshot decoder (`opts[:decode_snapshot]`, a function
+       `binary -> {:ok, %{position:, state: %{hall:, control:}}} | {:error, reason}`,
+       e.g. the infrastructure snapshot loader), try the store's verified
+       snapshots newest first. A snapshot is skipped, and recorded in the
+       report as `{id, reason}`, when its position is beyond the store's head
+       (`:beyond_head`), when it fails to decode (the decoder's reason, such
+       as `:corrupt_snapshot` or `:incompatible_snapshot`), when it decodes to
+       another position (`:position_mismatch`), or when its body has the wrong
+       shape (`:malformed_snapshot`). Unverified snapshots are never
+       candidates. Without a usable snapshot, or without a decoder, replay
+       starts at genesis. A snapshot is only a cache: it never justifies
+       skipping committed history after it.
+    3. `read_from/2` after the chosen position and fold the tail with the pure
+       evolvers. A batch the store cannot decode aborts recovery with the
+       store's `{:undecodable, position, reason}` error.
+    4. `Invariants.check/1` on the restored hall; a violation aborts with
+       `{:error, {:invariants, problems}}`.
+    5. If `Control.pending_recovery_id/1` names an interrupted epoch and a hall
+       exists, execute `{:reconcile_recovery, %{recovery_id: id}}` with command
+       ID `id` as `{:system, :authority}`. The fingerprint is the same for every
+       owner, so a retry after a crash receives the original receipt
+       (`:replayed`) instead of a second reconciliation. An epoch that began
+       before any hall existed has no hall to resume and is not reconciled.
+    6. Execute `{:start_availability, %{epoch_id: "<owner>:<epoch>"}}` with
+       command ID `"start:<owner>:<epoch>"`.
+
+  Every step before 5 only reads, so a failure there appends nothing. Storage
+  failures are returned as the store reports them (`{:error, :unavailable}`);
+  a fenced append is `{:error, :fenced}`; a lost append reply is
+  `{:error, {:uncertain, command_id}}`, resolved by running recovery again,
+  which looks the same command ID up and replays its receipt if it committed.
+
+  Replay performs no side effects: it only folds committed events, and the
+  reconciliation and the new epoch are ordinary appended transitions. Recovery
+  has no live side effects of its own in this milestone, so
+  `opts[:side_effects]` is accepted for genuinely new live work after recovery
+  (there is none yet) and is never invoked while replaying.
+  """
+
+  alias FeudHall.Application.CommandWorkflow
+  alias FeudHall.Domain.{Control, Hall}
+  alias FeudHall.Domain.Hall.Invariants
+
+  @authority {:system, :authority}
+  # Keeps "recovery:<owner>:<epoch>" within the workflow's 64-byte command IDs for any bigint epoch.
+  @max_owner_bytes 32
+  @genesis %{snapshot: :genesis, position: 0, hall: nil, control: nil}
+
+  @type report :: %{
+          snapshot: non_neg_integer() | :genesis,
+          skipped: [{term(), term()}],
+          tail_batches: non_neg_integer(),
+          recovery_id: String.t() | nil,
+          reconciliation: :accepted | :replayed | :already_reconciled | nil
+        }
+
+  @doc """
+  Recovers the hall held by `store` for `owner`. Options: `:scope`,
+  `:decode_snapshot`, `:diagnostics` (passed to the runtime), and
+  `:side_effects` (never invoked during replay).
+  """
+  @spec recover(module(), term(), String.t(), keyword()) :: {:ok, CommandWorkflow.t(), report()} | {:error, term()}
+  def recover(store_mod, store, owner, opts \\ []) do
+    with :ok <- validate_owner(owner),
+         {:ok, store, epoch} <- store_mod.acquire_authority(store, Keyword.get(opts, :scope, "hall"), owner),
+         {:ok, base, skipped} <- base(store_mod, store, Keyword.get(opts, :decode_snapshot)),
+         {:ok, tail} <- store_mod.read_from(store, base.position),
+         restored = restore(base, tail),
+         :ok <- check(restored.hall),
+         {:ok, runtime} <- runtime(store_mod, store, restored, epoch, opts),
+         {:ok, runtime, recovery_id, reconciliation} <- reconcile(runtime),
+         {:ok, runtime} <- start(runtime, "#{owner}:#{epoch}") do
+      {:ok, runtime,
+       %{
+         snapshot: base.snapshot,
+         skipped: skipped,
+         tail_batches: length(tail),
+         recovery_id: recovery_id,
+         reconciliation: reconciliation
+       }}
+    end
+  end
+
+  defp validate_owner(owner) do
+    if is_binary(owner) and byte_size(owner) in 1..@max_owner_bytes and String.printable?(owner),
+      do: :ok,
+      else: {:error, :invalid_owner}
+  end
+
+  # --- snapshot selection ------------------------------------------------------
+
+  defp base(_store_mod, _store, nil), do: {:ok, @genesis, []}
+
+  defp base(store_mod, store, decode) when is_function(decode, 1) do
+    with snapshots when is_list(snapshots) <- store_mod.snapshots(store) do
+      head = store_mod.head(store)
+
+      snapshots
+      |> Enum.filter(& &1.verified)
+      |> Enum.reduce_while([], fn snapshot, skipped ->
+        case usable(snapshot, head, decode) do
+          {:ok, base} -> {:halt, {:ok, base, Enum.reverse(skipped)}}
+          {:skip, reason} -> {:cont, [{snapshot.id, reason} | skipped]}
+        end
+      end)
+      |> case do
+        {:ok, _base, _skipped} = found -> found
+        skipped -> {:ok, @genesis, Enum.reverse(skipped)}
+      end
+    end
+  end
+
+  defp usable(%{position: position}, head, _decode) when position > head, do: {:skip, :beyond_head}
+
+  defp usable(%{position: position, body: body}, _head, decode) do
+    case decode.(body) do
+      {:ok, %{position: ^position, state: %{hall: hall, control: control}}} ->
+        {:ok, %{snapshot: position, position: position, hall: hall, control: control}}
+
+      {:ok, %{position: other}} when other != position ->
+        {:skip, :position_mismatch}
+
+      {:ok, _} ->
+        {:skip, :malformed_snapshot}
+
+      {:error, reason} ->
+        {:skip, reason}
+    end
+  end
+
+  # --- restore and check -------------------------------------------------------
+
+  defp restore(base, tail) do
+    %{
+      hall: tail |> Enum.flat_map(& &1.events) |> Hall.replay(base.hall),
+      control: tail |> Enum.flat_map(& &1.control_events) |> Control.replay(base.control),
+      position: if(tail == [], do: base.position, else: List.last(tail).position)
+    }
+  end
+
+  defp check(hall) do
+    with {:error, problems} <- Invariants.check(hall), do: {:error, {:invariants, problems}}
+  end
+
+  defp runtime(store_mod, store, restored, epoch, opts) do
+    versions = store_mod.stream_versions(store, CommandWorkflow.hall_stream(restored.hall))
+
+    CommandWorkflow.from_state(store_mod, store, Map.put(restored, :versions, versions),
+      epoch: epoch,
+      diagnostics: Keyword.get(opts, :diagnostics)
+    )
+  end
+
+  # --- new transitions ---------------------------------------------------------
+
+  defp reconcile(%{state: nil} = runtime), do: {:ok, runtime, nil, nil}
+
+  defp reconcile(runtime) do
+    case Control.pending_recovery_id(runtime.control) do
+      nil ->
+        {:ok, runtime, nil, nil}
+
+      id ->
+        envelope = %{command_id: id, actor: @authority, command: {:reconcile_recovery, %{recovery_id: id}}}
+
+        case CommandWorkflow.execute(runtime, envelope) do
+          {:accepted, _receipt, runtime} ->
+            {:ok, runtime, id, :accepted}
+
+          {:replayed, %{outcome: :accepted}, runtime} ->
+            {:ok, runtime, id, :replayed}
+
+          # Resumed earlier under another command ID: nothing is left to reconcile.
+          {status, %{outcome: {:rejected, :already_reconciled}}, runtime} when status in [:rejected, :replayed] ->
+            {:ok, runtime, id, :already_reconciled}
+
+          {status, %{outcome: {:rejected, reason}}, _runtime} when status in [:rejected, :replayed] ->
+            {:error, {:reconciliation_rejected, reason}}
+
+          other ->
+            failure(other)
+        end
+    end
+  end
+
+  defp start(runtime, epoch_id) do
+    envelope = %{
+      command_id: "start:" <> epoch_id,
+      actor: @authority,
+      command: {:start_availability, %{epoch_id: epoch_id}}
+    }
+
+    case CommandWorkflow.execute(runtime, envelope) do
+      {status, %{outcome: :accepted}, runtime} when status in [:accepted, :replayed] ->
+        {:ok, runtime}
+
+      {status, %{outcome: {:rejected, reason}}, _runtime} when status in [:rejected, :replayed] ->
+        {:error, {:start_rejected, reason}}
+
+      other ->
+        failure(other)
+    end
+  end
+
+  defp failure({:error, :fenced, _runtime}), do: {:error, :fenced}
+  defp failure({:uncertain, command_id, _runtime}), do: {:error, {:uncertain, command_id}}
+  defp failure({:error, _reason} = error), do: error
+end

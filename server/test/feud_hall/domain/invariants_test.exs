@@ -1,0 +1,69 @@
+defmodule FeudHall.Domain.InvariantsTest do
+  use ExUnit.Case, async: true
+
+  import FeudHall.Fixtures
+
+  alias FeudHall.Domain.{Clock, Hall.Invariants}
+
+  # A hall with an accepted, still-reserved tray (two components claiming stock).
+  defp reserved_world do
+    {state, _} = simulated_visit(stocked_world(), "d1", "bean_tacos", "horchata")
+    state
+  end
+
+  defp reserved_order(state) do
+    state.orders |> Map.values() |> Enum.find(&(&1.status == :reserved and &1.reservations != []))
+  end
+
+  test "an uninitialised hall and consistent halls pass" do
+    assert Invariants.check(nil) == :ok
+    assert Invariants.check(elem(stocked_world(), 0)) == :ok
+    assert Invariants.check(reserved_world()) == :ok
+  end
+
+  test "a broken trial balance is reported per restaurant" do
+    state = update_in(reserved_world(), [:restaurants, "r1", :ledger, :cash], &(&1 + 1))
+    assert Invariants.check(state) == {:error, [{"r1", :trial_balance}]}
+  end
+
+  test "batch reservations must stay within quantity and match the reserved orders' claims" do
+    state = reserved_world()
+    %{reservations: [%{batch_id: batch_id} | _]} = reserved_order(state)
+
+    stranded = update_in(state, [:restaurants, "r1", :batches, batch_id, :reserved], &(&1 + 1))
+    assert {:error, [{"r1", {:stranded_reservation, ^batch_id}}]} = Invariants.check(stranded)
+
+    qty = state.restaurants["r1"].batches[batch_id].qty
+    over = put_in(stranded, [:restaurants, "r1", :batches, batch_id, :reserved], qty + 1)
+    assert {:error, problems} = Invariants.check(over)
+    assert {"r1", {:reservation_out_of_range, batch_id}} in problems
+  end
+
+  test "a claim on a batch the restaurant no longer holds is reported" do
+    state = reserved_world()
+    %{reservations: [%{batch_id: batch_id} | _]} = reserved_order(state)
+    state = update_in(state, [:restaurants, "r1", :batches], &Map.delete(&1, batch_id))
+    assert {:error, problems} = Invariants.check(state)
+    assert {"r1", {:claim_on_missing_batch, batch_id}} in problems
+  end
+
+  test "every tray component must exist" do
+    state = reserved_world()
+    [tray_id] = Map.keys(state.trays)
+    [order_id | _] = state.trays[tray_id].components
+    {order, state} = pop_in(state, [:orders, order_id])
+    assert order
+    assert {:error, problems} = Invariants.check(state)
+    assert {:missing_tray_component, tray_id, order_id} in problems
+  end
+
+  test "hall access must match the cleaning calendar" do
+    state = elem(stocked_world(), 0)
+    refute Clock.cleaning?(state.now)
+    assert Invariants.check(%{state | access: :cleaning}) == {:error, [{:access_gate_mismatch, state.now}]}
+
+    cleaning = %{state | now: Clock.cleaning_start_of(0)}
+    assert Invariants.check(cleaning) == {:error, [{:access_gate_mismatch, cleaning.now}]}
+    assert Invariants.check(%{cleaning | access: :cleaning}) == :ok
+  end
+end
