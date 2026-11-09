@@ -3,11 +3,13 @@ defmodule FeudHall.Properties.PostgresTraceTest do
   Model-based property: pure hall traces replayed through the command workflow
   on PostgreSQL, with authority restarts and injected commit failures.
 
-  Each run generates a trace (`FeudHall.HallTrace`) and a list of injection
-  points, runs the trace against the pure hall, then sends every recorded
+  Each run generates trace actions (`FeudHall.HallTrace`), appends a closing
+  service (leave or avoid the cleaning window, restock, reopen the stall,
+  admit a simulated visit, run a service cycle) so trays are served, runs the trace against the pure hall, and then generates
+  injection points for the recorded commands. It sends every recorded
   command, in order, through `CommandWorkflow` on an emptied database. An
-  injection names a command by index (taken modulo the command count, so
-  shrinking moves it towards the first command) and one of:
+  injection names a command by its index in the recorded list (generated
+  within range, so no wrapping) and one of:
 
     * `:snapshot`: before the command, a verified snapshot of the head is
       stored, so later restarts recover from it plus the tail after it;
@@ -26,16 +28,25 @@ defmodule FeudHall.Properties.PostgresTraceTest do
   command ID has exactly one receipt (the only others are recovery and
   availability-start receipts), `Invariants.check/1` passes, rebuilding the
   projections leaves their values unchanged, and genesis replay of the stored
-  log equals the live head. Aggregate counters guard against vacuous passes.
+  log equals the live head.
 
-  Budgets: 15 runs, traces of at most 40 actions, at most 12 injections per run.
+  Every run's injections hold one of each kind on a gameplay command (an index
+  past the fixture setup): a snapshot, a later restart (so that restart
+  replays a tail after the snapshot), a before-commit failure, and then a lost
+  reply. At most 12 random extras, which may also hit setup commands, follow.
+  At one index the fixed injections come first, so each kind is exercised in
+  every run; aggregate floors across runs restate that and also require
+  served trays and snapshot recoveries with a non-empty trace tail.
+
+  Budgets: 15 runs, traces of at most 40 generated actions (plus the closing
+  service), at most 4 + 12 injections per run.
   """
 
   use FeudHall.PostgresCase
   use ExUnitProperties
 
   alias FeudHall.Application.{CommandWorkflow, Recovery}
-  alias FeudHall.Domain.{Control, Hall}
+  alias FeudHall.Domain.{Clock, Control, Hall}
   alias FeudHall.Domain.Hall.Invariants
   alias FeudHall.HallTrace
   alias FeudHall.Infrastructure.{PostgresEventStore, Snapshot}
@@ -46,12 +57,44 @@ defmodule FeudHall.Properties.PostgresTraceTest do
   @max_injections 12
   @scope "hall:test"
 
-  defp injection, do: tuple({integer(0..999), member_of([:snapshot, :restart, :before_commit, :lost_reply])})
+  @kinds [:snapshot, :restart, :before_commit, :lost_reply]
+
+  # Move clear of the cleaning window when service could not finish before it, restock bean
+  # tacos' ingredients (cilantro and salsa spoil within a trace; indices into the sorted product
+  # list: black_beans_dried, cilantro, corn_tortilla, onion, salsa_roja), reopen the stall (a
+  # random action may have closed it), admit an unrestricted simulated diner for bean tacos, and
+  # run one service cycle long enough to cook it.
+  @closing [
+    {:clear_of_cleaning, 2 * Clock.hour()},
+    {:purchase, 1, 600},
+    {:purchase, 4, 200},
+    {:purchase, 6, 600},
+    {:purchase, 14, 300},
+    {:purchase, 21, 600},
+    {:stall, :open_stall},
+    {:sim_visit, 0, nil, 0, 4_000},
+    {:cycle, 20_000, false}
+  ]
+
+  # The fixed part targets gameplay commands (indices `setup..count - 1`); the closing service
+  # guarantees at least three, so a snapshot index below the last leaves room for a later restart.
+  defp injections(setup, count) do
+    gen all(
+          snapshot <- integer(setup..(count - 2)),
+          restart <- integer((snapshot + 1)..(count - 1)),
+          before_commit <- integer(setup..(count - 1)),
+          lost_reply <- integer(setup..(count - 1)),
+          extras <- list_of(tuple({integer(0..(count - 1)), member_of(@kinds)}), max_length: @max_injections)
+        ) do
+      [{snapshot, :snapshot}, {restart, :restart}, {before_commit, :before_commit}, {lost_reply, :lost_reply} | extras]
+    end
+  end
 
   property "PostgreSQL replays pure traces exactly through restarts and injected commit failures" do
     Process.put(:pg_progress, %{
       commands: 0,
       served_trays: 0,
+      gameplay_injections: 0,
       snapshots: 0,
       restarts: 0,
       snapshot_tail_restarts: 0,
@@ -63,17 +106,17 @@ defmodule FeudHall.Properties.PostgresTraceTest do
 
     check all(
             actions <- list_of(HallTrace.action(), max_length: @max_actions),
-            injections <- list_of(injection(), max_length: @max_injections),
+            trace = HallTrace.run(actions ++ @closing),
+            count = length(trace.commands),
+            injections <- injections(trace.setup_count, count),
             max_runs: @runs,
             initial_size: 30
           ) do
       # Many runs share this one test: each starts from an emptied database.
       PostgresCase.reset!()
 
-      trace = HallTrace.run(actions)
       envelopes = HallTrace.envelopes(trace.commands)
-      count = length(envelopes)
-      plan = Enum.group_by(injections, fn {index, _kind} -> rem(index, count) end, &elem(&1, 1))
+      plan = Enum.group_by(injections, &elem(&1, 0), &elem(&1, 1))
 
       {:ok, rt} = CommandWorkflow.open(PostgresEventStore, PostgresCase.fresh_store())
 
@@ -82,7 +125,7 @@ defmodule FeudHall.Properties.PostgresTraceTest do
         |> Enum.zip(trace.outcomes)
         |> Enum.with_index()
         |> Enum.reduce(%{rt: rt, owners: 0, snapshot: nil}, fn {{envelope, expected}, index}, run ->
-          deliver(run, envelope, expected, Map.get(plan, index, []))
+          deliver(run, envelope, expected, Map.get(plan, index, []), index >= trace.setup_count)
         end)
 
       bump(:commands, count)
@@ -121,11 +164,10 @@ defmodule FeudHall.Properties.PostgresTraceTest do
           restarts: 10,
           before_commit: 10,
           lost_replies: 10,
+          gameplay_injections: 10,
           snapshot_tail_restarts: 3,
           reconciliations: 3,
-          # Traces at this budget are short (the pure property covers lifecycle breadth); at
-          # least one tray must still be served through the workflow.
-          served_trays: 1
+          served_trays: 10
         ] do
       assert progress[key] >= min, "too little #{key} across runs: #{inspect(progress)}"
     end
@@ -135,21 +177,26 @@ defmodule FeudHall.Properties.PostgresTraceTest do
   # attempts at it, in generated order, until one commits. A fault after the command committed
   # would never reach an append (the retry is a receipt replay), so it is skipped rather than
   # left armed for the next command.
-  defp deliver(run, envelope, expected, injections) do
+  defp deliver(run, envelope, expected, injections, gameplay?) do
     {run, status} =
       Enum.reduce(injections, {run, :pending}, fn
-        :snapshot, {run, status} ->
-          {snapshot(run), status}
-
-        :restart, {run, status} ->
-          {restart(run, if(status == :pending, do: envelope)), status}
-
-        _fault, {run, :committed} ->
+        fault, {run, :committed} when fault in [:before_commit, :lost_reply] ->
           {run, :committed}
 
-        fault, {run, :pending} ->
-          {rt, status} = attempt(run.rt, fault, envelope, expected)
-          {%{run | rt: rt}, status}
+        kind, {run, status} ->
+          if gameplay?, do: bump(:gameplay_injections)
+
+          case kind do
+            :snapshot ->
+              {snapshot(run), status}
+
+            :restart ->
+              {restart(run, if(status == :pending, do: envelope)), status}
+
+            fault ->
+              {rt, status} = attempt(run.rt, fault, envelope, expected)
+              {%{run | rt: rt}, status}
+          end
       end)
 
     case status do
@@ -218,9 +265,16 @@ defmodule FeudHall.Properties.PostgresTraceTest do
     end
 
     bump(:restarts)
-    if run.snapshot && report.tail_batches > 0, do: bump(:snapshot_tail_restarts)
+    if run.snapshot && trace_tail?(recovered.store, run.snapshot), do: bump(:snapshot_tail_restarts)
     if report.reconciliation == :accepted, do: bump(:reconciliations)
     %{run | rt: recovered, owners: owners}
+  end
+
+  # Whether a batch after the snapshot came from a trace command: recovery batches hold only
+  # control events and `hall_resumed`.
+  defp trace_tail?(store, position) do
+    assert {:ok, tail} = PostgresEventStore.read_from(store, position)
+    Enum.any?(tail, fn batch -> Enum.any?(batch.events, &(&1.type != :hall_resumed)) end)
   end
 
   defp strip(nil), do: nil
