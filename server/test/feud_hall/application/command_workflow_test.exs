@@ -129,12 +129,31 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     assert {:error, :fenced, fenced} = Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(100)))
     assert fenced.mode == :fenced
     assert fenced.state == rt.state
+    assert fenced.position == rt.position
+    assert fenced.versions == rt.versions
     assert InMemoryEventStore.receipt(fenced.store, "buy-1") == :none
 
-    # The injected failure was one-shot, so only the runtime's mode refuses further work.
-    assert {:error, :fenced} = Workflow.execute(fenced, env("buy-1", {:principal, "alice"}, purchase(100)))
-    assert {:error, :fenced} = Workflow.execute(fenced, env("buy-2", {:principal, "alice"}, purchase(5)), 60_000)
-    assert {:error, :fenced} = Workflow.resolve(fenced, "buy-1")
+    # The injected failure was one-shot, so only the runtime's mode refuses further work,
+    # and every later fenced result has the same shape and leaves the runtime unchanged.
+    assert {:error, :fenced, ^fenced} = Workflow.execute(fenced, env("buy-1", {:principal, "alice"}, purchase(100)))
+
+    assert {:error, :fenced, ^fenced} =
+             Workflow.execute(fenced, env("buy-2", {:principal, "alice"}, purchase(5)), 60_000)
+
+    assert {:error, :fenced, ^fenced} = Workflow.resolve(fenced, "buy-1")
+  end
+
+  test "a fenced clock advance stops the runtime before the command is decided" do
+    rt = runtime()
+    armed = %{rt | store: InMemoryEventStore.fail_next(rt.store, :fenced)}
+
+    assert {:error, :fenced, fenced} =
+             Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(100)), 60_000)
+
+    assert fenced.mode == :fenced
+    assert fenced.position == rt.position
+    assert fenced.versions == rt.versions
+    assert InMemoryEventStore.receipt(fenced.store, "adv:buy-1") == :none
   end
 
   test "an accepted command commits its projection rows and stream versions with the batch" do

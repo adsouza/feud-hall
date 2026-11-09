@@ -54,6 +54,8 @@ defmodule FeudHall.EventStoreContract do
         store
       end
 
+      @contract_control [%{type: :clock_advanced, to: 24}]
+
       describe "event store contract" do
         test "contract: a fresh store is empty" do
           store = contract_fresh()
@@ -179,6 +181,83 @@ defmodule FeudHall.EventStoreContract do
 
           store = contract_append!(store, "b", events: [%{type: :clock_advanced, to: 72}])
           assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 3, control: 0}
+        end
+
+        test "contract: a control-only batch creates a position and advances only the control version" do
+          store = contract_append!(contract_fresh(), "a")
+          assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 1, control: 0}
+
+          control = @contract_control ++ [%{type: :clock_advanced, to: 48}]
+          request = contract_request(store, "c", events: [], control_events: control)
+          assert {:ok, store, 2} = @contract_adapter.append(store, request)
+
+          assert @contract_adapter.head(store) == 2
+          assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 1, control: 2}
+          assert @contract_adapter.stream_versions(store, "hall:other") == %{hall: 0, control: 2}
+          assert {:ok, %{position: 2}} = @contract_adapter.receipt(store, "c")
+
+          assert {:ok, [%{position: 2, command_id: "c", events: [], control_events: ^control}]} =
+                   @contract_adapter.read_from(store, 1)
+
+          both = contract_request(store, "d", control_events: @contract_control)
+          assert {:ok, store, 3} = @contract_adapter.append(store, both)
+          assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 2, control: 3}
+
+          assert {:ok, [%{events: [%{type: :clock_advanced, to: 24}], control_events: @contract_control}]} =
+                   @contract_adapter.read_from(store, 2)
+        end
+
+        test "contract: a stale control version conflicts and writes nothing" do
+          store = contract_fresh()
+          store = contract_append!(store, "c", events: [], control_events: @contract_control)
+
+          stale = %{
+            contract_request(store, "d", control_events: @contract_control)
+            | expected_versions: %{hall: 0, control: 0}
+          }
+
+          assert {:error, :conflict, _} = @contract_adapter.append(store, stale)
+          assert @contract_adapter.head(store) == 1
+          assert @contract_adapter.receipt(store, "d") == :none
+          assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 0, control: 1}
+        end
+
+        test "contract: snapshots are saved unverified and listed newest first" do
+          store = contract_fresh()
+          assert @contract_adapter.snapshots(store) == []
+
+          assert {:ok, store, first} = @contract_adapter.save_snapshot(store, 3, "one")
+          assert {:ok, store, second} = @contract_adapter.save_snapshot(store, 7, <<0, 255, 1>>)
+          assert first != second
+
+          assert [
+                   %{id: ^second, position: 7, body: <<0, 255, 1>>, verified: false},
+                   %{id: ^first, position: 3, body: "one", verified: false}
+                 ] = @contract_adapter.snapshots(store)
+        end
+
+        test "contract: marking a snapshot verified changes only that snapshot" do
+          store = contract_fresh()
+          {:ok, store, first} = @contract_adapter.save_snapshot(store, 3, "one")
+          {:ok, store, second} = @contract_adapter.save_snapshot(store, 7, "two")
+
+          assert {:ok, store} = @contract_adapter.mark_snapshot_verified(store, first)
+
+          assert [%{id: ^second, verified: false}, %{id: ^first, verified: true}] =
+                   @contract_adapter.snapshots(store)
+
+          # Verifying again is harmless.
+          assert {:ok, store} = @contract_adapter.mark_snapshot_verified(store, first)
+          assert [%{verified: false}, %{verified: true}] = @contract_adapter.snapshots(store)
+        end
+
+        test "contract: marking an unknown snapshot verified is refused" do
+          store = contract_fresh()
+          {:ok, store, id} = @contract_adapter.save_snapshot(store, 3, "one")
+          unknown = if is_integer(id), do: id + 1_000, else: {:unknown, id}
+
+          assert {:error, :unknown_snapshot} = @contract_adapter.mark_snapshot_verified(store, unknown)
+          assert [%{id: ^id, verified: false}] = @contract_adapter.snapshots(store)
         end
       end
     end

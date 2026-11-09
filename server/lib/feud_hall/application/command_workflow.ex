@@ -19,6 +19,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   new economic commands until `resolve/2` has looked up that same command ID.
   A fenced append (another owner holds the hall's authority) puts the runtime
   into `:fenced`; it refuses all later commands and never becomes ready again.
+  Every fenced result, first or later, is `{:error, :fenced, runtime}`.
   Authentication happens before this workflow: `actor` is the server-resolved
   principal or system capability, never a client-supplied ID.
   """
@@ -69,7 +70,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   """
   def execute(runtime, envelope, observed_service_ms \\ nil)
 
-  def execute(%{mode: :fenced}, _envelope, _observed), do: {:error, :fenced}
+  def execute(%{mode: :fenced} = runtime, _envelope, _observed), do: {:error, :fenced, runtime}
   def execute(%{mode: :recovery_required}, _envelope, _observed), do: {:error, :recovery_required}
 
   def execute(runtime, envelope, observed_service_ms) do
@@ -90,7 +91,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   Resolves an uncertain command by its original ID. A found receipt means it
   committed: the head is rebuilt from the store. No receipt means it did not.
   """
-  def resolve(%{mode: :fenced}, _command_id), do: {:error, :fenced}
+  def resolve(%{mode: :fenced} = runtime, _command_id), do: {:error, :fenced, runtime}
 
   def resolve(runtime, command_id) do
     with {:ok, reopened} <- open(runtime.store_mod, runtime.store, diagnostics: runtime.diagnostics) do

@@ -12,7 +12,9 @@ defmodule FeudHall.Application.EventStore do
 
   An append may report `{:error, :unknown_outcome, store}` (a lost response);
   that is never proof of rollback, and callers resolve it by looking up the
-  same command ID. Stream versions count events: a stream's version advances
+  same command ID. Snapshot callbacks return the store like `append/2`, so
+  value-typed adapters keep snapshots with the log they describe. Stream
+  versions count events: a stream's version advances
   by the number of events appended to it and is unchanged by a batch that has
   none for it.
   """
@@ -60,8 +62,9 @@ defmodule FeudHall.Application.EventStore do
   @callback acquire_authority(store, scope :: String.t(), owner :: String.t()) ::
               {:ok, store, pos_integer()} | {:error, :unavailable}
   @callback save_snapshot(store, position :: non_neg_integer(), binary()) ::
-              {:ok, snapshot_id :: term()} | {:error, :unavailable}
-  @callback mark_snapshot_verified(store, snapshot_id :: term()) :: :ok
+              {:ok, store, snapshot_id :: term()} | {:error, :unavailable}
+  @callback mark_snapshot_verified(store, snapshot_id :: term()) ::
+              {:ok, store} | {:error, :unknown_snapshot}
   @doc "Stored snapshots, newest first."
   @callback snapshots(store) :: [snapshot()]
   @callback projection(store, :balances | :stock) :: [map()]

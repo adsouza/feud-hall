@@ -3,12 +3,11 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   Functional in-memory implementation of `FeudHall.Application.EventStore`
   for focused tests and the pure-core milestone.
 
-  The event log, receipts, stream versions, and projections live in the
-  struct, so every append returns the next store value. There is one implicit
-  authority: appends are never fenced unless a failure is injected, and
-  `acquire_authority/3` only counts epochs. Snapshots are the exception to the
-  functional style: the port's snapshot callbacks return no store, so they
-  live in a public ETS table created by `new/0` and owned by its caller.
+  The event log, receipts, stream versions, projections, and snapshots live
+  in the struct, so every write returns the next store value and no state is
+  shared between copies. There is one implicit authority: appends are never
+  fenced unless a failure is injected, and `acquire_authority/3` only counts
+  epochs.
 
   Failure injection (`fail_next/2`, one-shot) mirrors the cases the PostgreSQL
   adapter must survive: `:before_commit` and `:unavailable` fail with nothing
@@ -30,10 +29,11 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
             stock: %{},
             outbox: [],
             epoch: 0,
-            snapshot_table: nil,
+            snapshots: [],
+            next_snapshot_id: 1,
             fail_next: nil
 
-  def new, do: %__MODULE__{snapshot_table: :ets.new(__MODULE__, [:set, :public])}
+  def new, do: %__MODULE__{}
 
   @doc "Arms a one-shot failure for the next append."
   def fail_next(store, mode) when mode in @failure_modes, do: %{store | fail_next: mode}
@@ -154,24 +154,21 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
 
   @impl true
   def save_snapshot(store, position, body) when is_binary(body) do
-    id = :ets.update_counter(store.snapshot_table, :next_id, 1, {:next_id, 0})
-    true = :ets.insert(store.snapshot_table, {{:snapshot, id}, position, body, false})
-    {:ok, id}
+    id = store.next_snapshot_id
+    snapshot = %{id: id, position: position, body: body, verified: false}
+    {:ok, %{store | snapshots: [snapshot | store.snapshots], next_snapshot_id: id + 1}, id}
   end
 
   @impl true
   def mark_snapshot_verified(store, id) do
-    :ets.update_element(store.snapshot_table, {:snapshot, id}, {4, true})
-    :ok
+    if Enum.any?(store.snapshots, &(&1.id == id)) do
+      snapshots = Enum.map(store.snapshots, &if(&1.id == id, do: %{&1 | verified: true}, else: &1))
+      {:ok, %{store | snapshots: snapshots}}
+    else
+      {:error, :unknown_snapshot}
+    end
   end
 
   @impl true
-  def snapshots(store) do
-    store.snapshot_table
-    |> :ets.match_object({{:snapshot, :_}, :_, :_, :_})
-    |> Enum.map(fn {{:snapshot, id}, position, body, verified} ->
-      %{id: id, position: position, body: body, verified: verified}
-    end)
-    |> Enum.sort_by(& &1.id, :desc)
-  end
+  def snapshots(store), do: store.snapshots
 end

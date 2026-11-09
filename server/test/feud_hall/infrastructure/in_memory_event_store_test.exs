@@ -46,15 +46,11 @@ defmodule FeudHall.Infrastructure.InMemoryEventStoreTest do
     assert {:ok, _store, 2} = InMemoryEventStore.acquire_authority(store, "hall:h1", "node-b")
   end
 
-  test "snapshots are listed newest first and can be marked verified" do
-    store = InMemoryEventStore.new()
-    assert {:ok, first} = InMemoryEventStore.save_snapshot(store, 3, "one")
-    assert {:ok, second} = InMemoryEventStore.save_snapshot(store, 7, "two")
-    assert :ok = InMemoryEventStore.mark_snapshot_verified(store, first)
+  test "snapshots belong to the store value that saved them" do
+    empty = InMemoryEventStore.new()
+    {:ok, saved, _id} = InMemoryEventStore.save_snapshot(empty, 0, "one")
 
-    assert [
-             %{id: ^second, position: 7, body: "two", verified: false},
-             %{id: ^first, position: 3, body: "one", verified: true}
-           ] = InMemoryEventStore.snapshots(store)
+    assert [%{position: 0}] = InMemoryEventStore.snapshots(saved)
+    assert InMemoryEventStore.snapshots(empty) == []
   end
 end
