@@ -227,13 +227,35 @@ defmodule FeudHall.Application.CommandWorkflow do
       not String.printable?(id) -> {:error, :malformed_command_id}
       kind not in @commands and kind not in @control_commands -> {:error, :unknown_command}
       not valid_actor?(actor) -> {:error, :unauthenticated}
+      reserved_prefix?(id) and not reserved_allowed?(id, actor) -> {:error, :reserved_command_id}
       true -> :ok
     end
   end
 
   defp validate(_), do: {:error, :malformed_envelope}
 
+  @reserved_prefixes ~w(adv: tick: recovery: start: npc:)
+
+  @doc """
+  True when `command_id` begins with a prefix reserved for system and NPC
+  actors (`adv:`, `tick:`, `recovery:`, `start:`, `npc:`), so a client cannot
+  pre-claim an ID the platform derives later.
+  """
+  @spec reserved_prefix?(term()) :: boolean()
+  def reserved_prefix?(command_id) when is_binary(command_id),
+    do: Enum.any?(@reserved_prefixes, &String.starts_with?(command_id, &1))
+
+  def reserved_prefix?(_), do: false
+
+  # System actors may use every reserved prefix; NPCs only `npc:`.
+  defp reserved_allowed?(_id, {:system, _}), do: true
+  defp reserved_allowed?(id, {:npc, _}), do: String.starts_with?(id, "npc:")
+  defp reserved_allowed?(_id, _actor), do: false
+
   defp valid_actor?({:principal, id}), do: is_binary(id) and byte_size(id) in 1..64
+
+  defp valid_actor?({:npc, id}), do: is_binary(id) and byte_size(id) in 1..32 and String.printable?(id)
+
   defp valid_actor?({:system, cap}), do: cap in [:admin, :authority, :scheduler, :kitchen, :demand, :visitor_fund]
   defp valid_actor?(_), do: false
 

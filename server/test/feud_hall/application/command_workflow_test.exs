@@ -61,6 +61,56 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   defp purchase(qty),
     do: {:purchase_stock, %{restaurant_id: "r1", product: "rice_long", qty: qty, max_price_per_kunit: 1_000}}
 
+  test "reserved command-ID prefixes are refused for principals and NPCs except npc: for NPCs" do
+    rt = runtime()
+
+    for id <- ~w(adv:500 tick:1:2 recovery:x start:x npc:a:1) do
+      assert {:error, :reserved_command_id, _} = Workflow.execute(rt, env(id, {:principal, "alice"}, purchase(10)))
+    end
+
+    for id <- ~w(adv:500 tick:1:2 recovery:x start:x) do
+      assert {:error, :reserved_command_id, _} = Workflow.execute(rt, env(id, {:npc, "budget"}, purchase(10)))
+    end
+
+    assert Workflow.reserved_prefix?("npc:a:1")
+    refute Workflow.reserved_prefix?("buy-1")
+  end
+
+  test "system actors may use reserved prefixes" do
+    rt = runtime()
+
+    assert {:accepted, _, _} =
+             Workflow.execute(rt, env("tick:1:24", {:system, :scheduler}, {:advance_clock, %{to_service_ms: 1_000}}))
+  end
+
+  test "an NPC actor with an npc: command ID is accepted by validation" do
+    rt = runtime()
+
+    {:accepted, _, rt} =
+      Workflow.execute(
+        rt,
+        env(
+          "npc:budget:1",
+          {:npc, "budget"},
+          {:create_restaurant, %{restaurant_id: "r2", stall_id: "s2", name: "Budget", cuisine: "mexican"}}
+        )
+      )
+
+    assert rt.state.restaurants["r2"].owner_kind == :npc
+  end
+
+  test "NPC operator IDs must be printable and 1..32 bytes" do
+    rt = runtime()
+
+    for bad <- ["", String.duplicate("a", 33), <<0, 1>>, 7] do
+      assert {:error, :unauthenticated, _} = Workflow.execute(rt, env("x1", {:npc, bad}, purchase(10)))
+    end
+
+    # Valid actor: passes validation and is refused by the domain (it owns nothing).
+    assert {:rejected, %{outcome: {:rejected, :forbidden}}, _} =
+             Workflow.execute(rt, env("x2", {:npc, String.duplicate("a", 32)}, purchase(10)))
+  end
+
   test "an identical retry returns the original receipt without a second purchase" do
     rt = runtime()
     {:accepted, receipt, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))

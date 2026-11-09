@@ -49,7 +49,7 @@ defmodule FeudHall.Domain.Hall.Decider do
     if target < state.now, do: {:error, :clock_cannot_move_backwards}, else: {:ok, Advance.run(state, target)}
   end
 
-  def decide(state, {:create_restaurant, p}, %{actor: {:principal, owner}} = ctx) do
+  def decide(state, {:create_restaurant, p}, %{actor: {kind, owner}} = ctx) when kind in [:principal, :npc] do
     catalog = state.catalog
 
     starter =
@@ -57,11 +57,11 @@ defmodule FeudHall.Domain.Hall.Decider do
 
     cond do
       not (id?(p[:restaurant_id]) and id?(p[:stall_id]) and name?(p[:name])) -> {:error, :invalid_payload}
-      Map.has_key?(state.owners, owner) -> {:error, :venture_already_active}
+      Map.has_key?(state.owners, {kind, owner}) -> {:error, :venture_already_active}
       Map.has_key?(state.restaurants, p.restaurant_id) -> {:error, :duplicate_restaurant}
       Map.has_key?(state.stalls, p.stall_id) -> {:error, :stall_taken}
       starter == nil -> {:error, :unknown_cuisine}
-      true -> {:ok, create_restaurant_events(p, owner, starter, catalog, ctx)}
+      true -> {:ok, create_restaurant_events(p, kind, owner, starter, catalog, ctx)}
     end
   end
 
@@ -422,11 +422,12 @@ defmodule FeudHall.Domain.Hall.Decider do
 
   # -- lookups and guards -------------------------------------------------------
 
-  defp create_restaurant_events(p, owner, starter, catalog, _ctx) do
+  defp create_restaurant_events(p, owner_kind, owner, starter, catalog, _ctx) do
     [
       %{
         type: :restaurant_created,
         restaurant_id: p.restaurant_id,
+        owner_kind: owner_kind,
         owner: owner,
         name: p.name,
         cuisine: starter.cuisine,
@@ -438,10 +439,10 @@ defmodule FeudHall.Domain.Hall.Decider do
     ]
   end
 
-  defp owned_restaurant(state, r, %{actor: {:principal, who}}) do
+  defp owned_restaurant(state, r, %{actor: {kind, who}}) when kind in [:principal, :npc] do
     case state.restaurants[r] do
       nil -> {:error, :unknown_restaurant}
-      %{owner: ^who} = restaurant -> {:ok, restaurant}
+      %{owner_kind: ^kind, owner: ^who} = restaurant -> {:ok, restaurant}
       _ -> {:error, :forbidden}
     end
   end

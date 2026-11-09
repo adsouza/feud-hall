@@ -19,7 +19,7 @@ defmodule FeudHall.Domain.Hall do
 
   @type state :: map() | nil
   @type event :: map()
-  @type actor :: {:principal, String.t()} | {:system, atom()}
+  @type actor :: {:principal, String.t()} | {:npc, String.t()} | {:system, atom()}
   @type context :: %{command_id: String.t(), actor: actor()}
 
   @doc "Decides a command against the current head state."

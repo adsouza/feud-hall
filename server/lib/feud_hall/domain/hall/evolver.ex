@@ -57,6 +57,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
   def evolve(state, %{type: :restaurant_created} = e) do
     restaurant = %{
       id: e.restaurant_id,
+      # Events written before NPC operators existed carry no kind: principal-owned.
+      owner_kind: Map.get(e, :owner_kind, :principal),
       owner: e.owner,
       name: e.name,
       cuisine: e.cuisine,
@@ -69,7 +71,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
     state
     |> put_in([:restaurants, e.restaurant_id], restaurant)
-    |> put_in([:owners, e.owner], e.restaurant_id)
+    |> put_in([:owners, {Map.get(e, :owner_kind, :principal), e.owner}], e.restaurant_id)
     |> put_in([:stalls, e.stall_id], %{id: e.stall_id, restaurant: e.restaurant_id, mode: :closed})
   end
 
