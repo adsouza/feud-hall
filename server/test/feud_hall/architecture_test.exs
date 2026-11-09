@@ -29,6 +29,8 @@ defmodule FeudHall.ArchitectureTest do
     ~w(FeudHall Application),
     ~w(FeudHall Infrastructure)
   ]
+  # Application use cases emit through the diagnostics port and never touch logging or processes.
+  @application_process_aliases [~w(Logger), ~w(GenServer), ~w(Process)]
   @domain_forbidden_erlang [:rand, :os, :ets, :persistent_term, :timer, :erlang_time]
   @domain_forbidden_calls [{:erlang, :monotonic_time}, {:erlang, :system_time}, {:erlang, :now}]
 
@@ -44,6 +46,16 @@ defmodule FeudHall.ArchitectureTest do
     for file <- Path.wildcard(Path.join(@root, "application/**/*.ex")) do
       assert violations(File.read!(file), [~w(FeudHall Infrastructure), ~w(Ecto), ~w(Phoenix)], [], []) == [],
              "#{Path.relative_to_cwd(file)} depends on an adapter"
+    end
+  end
+
+  test "application modules never call Logger or processes directly except diagnostics ports" do
+    files = Path.wildcard(Path.join(@root, "application/**/*.ex"))
+    assert Enum.any?(files, &(Path.basename(&1) == "diagnostics.ex"))
+
+    for file <- files, Path.basename(file) != "diagnostics.ex" do
+      assert violations(File.read!(file), @application_process_aliases, [], []) == [],
+             "#{Path.relative_to_cwd(file)} calls Logger or a process API directly; route it through a port"
     end
   end
 
@@ -63,6 +75,29 @@ defmodule FeudHall.ArchitectureTest do
     assert {:alias, ["DateTime"]} in found
     assert {:erlang, :rand} in found
     assert {:call, :erlang, :monotonic_time} in found
+  end
+
+  test "the application process rule detects planted Logger, GenServer, and Process use" do
+    planted = """
+    defmodule PlantedUseCase do
+      require Logger
+      def a, do: Logger.info("x")
+      def b, do: GenServer.call(self(), :x)
+      def c, do: Process.sleep(1)
+    end
+    """
+
+    found = violations(planted, @application_process_aliases, [], [])
+    assert {:alias, ["Logger"]} in found
+    assert {:alias, ["GenServer"]} in found
+    assert {:alias, ["Process"]} in found
+
+    assert violations(
+             "defmodule Clean do\n  def a, do: System.monotonic_time()\nend\n",
+             @application_process_aliases,
+             [],
+             []
+           ) == []
   end
 
   defp violations(source, aliases, erlang_modules, calls) do

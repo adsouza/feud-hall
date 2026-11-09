@@ -20,6 +20,14 @@ defmodule MutationCohort do
   @flow "test/feud_hall/application/command_workflow_test.exs"
   @prop "test/feud_hall/properties/hall_trace_property_test.exs"
   @clock "test/feud_hall/domain/clock_test.exs"
+  @pg_store "test/feud_hall/infrastructure/postgres_event_store_test.exs"
+  @pg_atomic "test/feud_hall/infrastructure/postgres_atomicity_test.exs"
+  @projector "test/feud_hall/infrastructure/daily_activity_projector_test.exs"
+  @recovery "test/feud_hall/application/recovery_test.exs"
+  @diag "test/feud_hall/application/diagnostics_test.exs"
+  @authority "test/feud_hall/infrastructure/hall_authority_test.exs"
+  @memory_store "test/feud_hall/infrastructure/in_memory_event_store_test.exs"
+  @store "lib/feud_hall/infrastructure/postgres_event_store.ex"
 
   def mutants do
     [
@@ -57,7 +65,7 @@ defmodule MutationCohort do
        "{:ok, %{fingerprint: ^fingerprint} = receipt} -> {:replayed, receipt}",
        "{:ok, receipt} -> {:replayed, receipt}", [@flow]},
       {"expected-version check skipped", "lib/feud_hall/infrastructure/in_memory_event_store.ex",
-       "expected != store.head ->", "false ->", [@flow]},
+       "request.expected_position != store.head ->", "false ->", [@flow, @memory_store]},
       {"tray cancellation forgets visit finalization", "lib/feud_hall/domain/hall/settlement.ex",
        "[cancelled, finalize_event(state1, state1.visits[tray.visit], visit_reason(reason))]", "[cancelled]", [@tray]},
       {"deadline tie lost to patience", "lib/feud_hall/domain/hall/advance.ex",
@@ -69,7 +77,36 @@ defmodule MutationCohort do
        "Enum.reduce(e.consumed, batches, &consume_batch(&2, &1))",
        "Enum.reduce(e.consumed ++ e.consumed, batches, &consume_batch(&2, &1))", [@stock]},
       {"simulated budget ignored", "lib/feud_hall/domain/hall/decider.ex", "if quote.total <= budget,", "if true,",
-       [@prop]}
+       [@prop]},
+      {"postgres append skips the head position check", @store,
+       "if position != request.expected_position, do: repo.rollback(:conflict)",
+       "if false, do: repo.rollback(:conflict)", [@pg_store, @pg_atomic]},
+      {"postgres append skips the authority epoch check", @store,
+       "if authority_epoch(repo, store.scope) != store.epoch, do: repo.rollback(:fenced)",
+       "if false, do: repo.rollback(:fenced)", [@pg_atomic, @pg_store]},
+      {"postgres append writes events without the receipt", @store,
+       "    insert_receipt(repo, request, position)\n\n    if hooks.before_commit", "    if hooks.before_commit",
+       [@pg_store]},
+      {"postgres append accepts half a batch", @store,
+       "      advance_stream(repo, @control, versions.control + length(control_events), control_events)\n    end\n",
+       "    end\n", [@pg_store, @pg_atomic]},
+      {"projector checkpoint guard relaxed", "lib/feud_hall/infrastructure/postgres/daily_activity_projector.ex",
+       "update projector_checkpoints set position = $1 where name = $2 and position = $3",
+       "update projector_checkpoints set position = $1 where name = $2 and position <> $3", [@projector]},
+      {"projector checkpoint advances without deltas",
+       "lib/feud_hall/infrastructure/postgres/daily_activity_projector.ex",
+       "            add_deltas(repo, DailyActivity.deltas(batch))\n", "", [@projector]},
+      {"recovery replay calls side effects", "lib/feud_hall/application/recovery.ex", "restored = restore(base, tail),",
+       "restored = (if(fx = opts[:side_effects], do: Enum.each(tail, fx)); restore(base, tail)),", [@recovery]},
+      {"candidate state adopted before append succeeds", "lib/feud_hall/application/command_workflow.ex",
+       "{:error, reason, %{runtime | store: store}}",
+       "{:error, reason, %{runtime | store: store, state: candidate, control: candidate_control}}", [@flow]},
+      {"accepted emitted before append", "lib/feud_hall/application/command_workflow.ex",
+       "    case runtime.store_mod.append(runtime.store, request) do\n",
+       "    Diagnostics.emit(runtime.diagnostics, :command_outcome, %{outcome: :accepted, position: runtime.position})\n\n    case runtime.store_mod.append(runtime.store, request) do\n",
+       [@diag]},
+      {"authority charges the gap instead of recovering", "lib/feud_hall/infrastructure/hall_authority.ex",
+       "if elapsed > s.max_gap_ms do", "if false do", [@authority]}
     ]
   end
 
@@ -157,7 +194,12 @@ defmodule MutationCohort do
   end
 
   defp cmd(dir, args),
-    do: System.cmd("timeout", [@timeout_s, "mix" | args], cd: dir, stderr_to_stdout: true, env: [{"MIX_ENV", "test"}])
+    do:
+      System.cmd("timeout", [@timeout_s, "mix" | args],
+        cd: dir,
+        stderr_to_stdout: true,
+        env: [{"MIX_ENV", "test"}, {"FEUD_HALL_TEST_DB", "feud_hall_mutation"}]
+      )
 
   defp count(text, pattern), do: length(String.split(text, pattern)) - 1
 
