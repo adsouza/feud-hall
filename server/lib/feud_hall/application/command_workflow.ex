@@ -37,8 +37,7 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   @commands ~w(initialize_hall advance_clock create_restaurant open_stall close_stall unlock_recipe
                set_menu_price remove_menu_item set_substitution_policy purchase_stock grant_allowance
-               admit_visit cancel_tray start_preparation complete_preparation serve_tray accept_dessert
-               decline_dessert cancel_dessert serve_dessert)a
+               admit_visit cancel_tray accept_dessert decline_dessert cancel_dessert)a
   @control_commands ~w(start_availability reconcile_recovery)a
 
   defstruct store_mod: nil,
@@ -256,7 +255,7 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   defp valid_actor?({:npc, id}), do: is_binary(id) and byte_size(id) in 1..32 and String.printable?(id)
 
-  defp valid_actor?({:system, cap}), do: cap in [:admin, :authority, :scheduler, :kitchen, :demand, :visitor_fund]
+  defp valid_actor?({:system, cap}), do: cap in [:admin, :authority, :scheduler, :demand, :visitor_fund]
   defp valid_actor?(_), do: false
 
   defp lookup(runtime, command_id, fingerprint) do

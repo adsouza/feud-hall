@@ -167,25 +167,23 @@ defmodule FeudHall.Fixtures do
   def grant(world, guest, amount, id),
     do: run!(world, {:grant_allowance, %{principal: guest, amount: amount}}, {:system, :visitor_fund}, id)
 
-  def kitchen(world, command, payload, id), do: run!(world, {command, payload}, {:system, :kitchen}, id)
-
-  @doc "Starts every component of a tray, waits for the work, completes it."
-  def prepare_tray(world, tray_id) do
+  @doc """
+  Lets the automatic kitchen serve an accepted tray: advances hall time to
+  its `estimated_completion` (on a scheduler tick) and asserts it was served.
+  """
+  def serve_tray(world, tray_id) do
     {state, _} = world
-    orders = state.trays[tray_id].components
-
-    world = Enum.reduce(orders, world, &kitchen(&2, :start_preparation, %{order_id: &1}, "start-" <> &1))
-    {state, _} = world
-    ready_at = orders |> Enum.map(&state.orders[&1].ready_not_before) |> Enum.max()
-    world = advance_hall(world, ceil_to_tick(ready_at))
-    Enum.reduce(orders, world, &kitchen(&2, :complete_preparation, %{order_id: &1}, "complete-" <> &1))
+    world = advance_hall(world, ceil_to_tick(state.trays[tray_id].estimated_completion))
+    assert elem(world, 0).trays[tray_id].status == :served, "tray #{tray_id} was not served"
+    world
   end
 
-  def prepare_order(world, order_id) do
-    world = kitchen(world, :start_preparation, %{order_id: order_id}, "start-" <> order_id)
+  @doc "Like `serve_tray/2` for an accepted dessert order."
+  def serve_dessert(world, order_id) do
     {state, _} = world
-    world = advance_hall(world, ceil_to_tick(state.orders[order_id].ready_not_before))
-    kitchen(world, :complete_preparation, %{order_id: order_id}, "complete-" <> order_id)
+    world = advance_hall(world, ceil_to_tick(state.orders[order_id].estimated_completion))
+    assert elem(world, 0).orders[order_id].status == :served, "dessert #{order_id} was not served"
+    world
   end
 
   def ceil_to_tick(hall_ms), do: div(hall_ms + Clock.ratio() - 1, Clock.ratio()) * Clock.ratio()

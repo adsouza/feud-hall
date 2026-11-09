@@ -12,7 +12,7 @@ defmodule FeudHall.Domain.InvariantsTest do
   end
 
   defp reserved_order(state) do
-    state.orders |> Map.values() |> Enum.find(&(&1.status == :reserved and &1.reservations != []))
+    state.orders |> Map.values() |> Enum.find(&(&1.status == :queued_prep and &1.reservations != []))
   end
 
   test "an uninitialised hall and consistent halls pass" do

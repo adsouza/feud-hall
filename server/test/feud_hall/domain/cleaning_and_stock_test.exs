@@ -24,21 +24,22 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
     end
 
     test "the cutoff cancels unserved work once, keeps consumed cost as waste, and exempts scoring" do
-      # Late enough that the drink's 15-minute holding lifetime outlasts 03:00.
-      w = stocked_world() |> advance_hall(@three - 10 * Clock.minute())
+      w = stocked_world() |> advance_hall(@three - 14 * Clock.minute())
       w = simulated_visit(w, "prepared", "bean_tacos", "horchata")
       w = simulated_visit(w, "waiting", "chicken_tacos")
-      w = prepare_tray(w, tray_id("visit-prepared"))
+      # Both quotes finish before 03:00; a slower counter afterwards keeps the
+      # first tray in handover and the second ready at the cutoff.
+      {state, log} = w
+      w = {put_in(state, [:catalog, :rules, :handover_ms], 30 * Clock.minute()), log}
+      w = advance_hall(w, @three - Clock.ratio())
       {before, _} = w
       ledger = before.restaurants["r1"].ledger
       assert ledger.wip > 0
+      assert before.trays[tray_id("visit-prepared")].status == :accepted
 
-      # A ready tray cannot be served at exactly 03:00: the gate closes first.
+      # Nothing is served at exactly 03:00: the gate closes first.
       {state, events} = advance_hall(w, @three)
       assert state.access == :cleaning
-
-      assert {:error, _} =
-               Hall.decide(state, {:serve_tray, %{tray_id: tray_id("visit-prepared")}}, ctx({:system, :kitchen}, "s"))
 
       for id <- ["visit-prepared", "visit-waiting"] do
         visit = state.visits[visit_id(id)]
@@ -52,6 +53,7 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       assert after_ledger.wip == 0
       assert after_ledger.waste == ledger.waste + ledger.wip
       assert after_ledger.revenue == ledger.revenue
+      assert state.stalls["s001"].counter == nil
       assert Enum.count(events, &(&1.type == :hall_cleaning_started)) == 1
       Oracle.assert_settled!(state, events)
 
@@ -66,9 +68,10 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
     end
 
     test "an open dessert offer is closed by the cutoff, keeping the served tray's score" do
-      w = stocked_world() |> advance_hall(@three - 12 * Clock.minute())
+      # Served at 02:48 (eight minutes of work): the dessert still fits before 03:00.
+      w = stocked_world() |> advance_hall(@three - 20 * Clock.minute())
       w = simulated_visit(w, "d1", "bean_tacos")
-      w = prepare_tray(w, tray_id("visit-d1")) |> kitchen(:serve_tray, %{tray_id: tray_id("visit-d1")}, "serve")
+      w = serve_tray(w, tray_id("visit-d1"))
       {state, _} = w
       vid = visit_id("visit-d1")
       assert state.visits[vid].dessert == :offered
@@ -83,15 +86,11 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
     end
 
     test "no dessert is offered when its work cannot finish before the cutoff" do
+      # Served at 02:53: dessert work (seven minutes) would end exactly at 03:00.
       w = stocked_world() |> advance_hall(@three - 15 * Clock.minute())
       w = simulated_visit(w, "d1", "bean_tacos")
-      w = prepare_tray(w, tray_id("visit-d1"))
-      # Serve close enough to 03:00 that the 30 s offer window is capped by it.
-      w = advance_hall(w, @three - Clock.service_duration(10_000))
-      {state, _} = w
       # Dessert work no longer fits before the cutoff, so no offer is made.
-      {state, events} =
-        run!({state, elem(w, 1)}, {:serve_tray, %{tray_id: tray_id("visit-d1")}}, {:system, :kitchen}, "s")
+      {state, events} = serve_tray(w, tray_id("visit-d1"))
 
       assert state.visits[visit_id("visit-d1")].status == :finalized
       assert state.visits[visit_id("visit-d1")].outcome.score == 10_000
@@ -101,42 +100,48 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
 
   describe "warehouse stock" do
     test "raw stock expiring before preparation cancels the tray when no replacement exists" do
-      catalog =
-        update_in(SliceCatalog.catalog(), [:products, "cilantro", :shelf_life_ms], fn _ -> 30 * Clock.minute() end)
-
-      rules = %{catalog.rules | service_window_ms: 2 * Clock.hour()}
-      w = stocked_world(catalog: %{catalog | rules: rules})
-      w = simulated_visit(w, "d1", "bean_tacos")
-      {state, _} = w
+      # Six queued mains; two prep stations take two a minute, so the last two
+      # still hold cilantro claims when it expires at 2 minutes.
+      w = cilantro_queue()
+      {state, _} = advance_hall(w, Clock.minute())
       cilantro = state.restaurants["r1"].batches |> Map.values() |> Enum.find(&(&1.product == "cilantro"))
+      assert cilantro.expires_at == 2 * Clock.minute()
 
-      {state, events} = advance_hall(w, ceil_to_tick(cilantro.expires_at))
-      assert state.trays[tray_id("visit-d1")].status == :cancelled
-      assert state.visits[visit_id("visit-d1")].outcome.reason == :main_failed
+      {state, events} = advance_hall(w, cilantro.expires_at)
+
+      for i <- 1..6 do
+        expected = if i <= 4, do: :accepted, else: :cancelled
+        assert state.trays[tray_id("visit-d#{i}")].status == expected
+      end
+
+      assert state.visits[visit_id("visit-d6")].outcome.reason == :main_failed
+      [main] = state.trays[tray_id("visit-d6")].components
+      assert state.orders[main].cancel_reason == :ingredient_expired
       refute Map.has_key?(state.restaurants["r1"].batches, cilantro.id)
-      # Spoilage writes off the batch once; the unprepared order adds no waste.
+      # Spoilage writes off the remaining batch once; the unprepared orders add no waste.
       spoiled = Enum.filter(events, &(&1.type == :stock_spoiled and &1.batch_id == cilantro.id))
       assert [%{cost: cost}] = spoiled
       assert cost == cilantro.cost
+      assert state.restaurants["r1"].ledger.waste == cilantro.cost
       Oracle.assert_settled!(state, events)
     end
 
     test "with a fresh batch available the expiring claim moves instead of cancelling" do
-      catalog =
-        update_in(SliceCatalog.catalog(), [:products, "cilantro", :shelf_life_ms], fn _ -> 30 * Clock.minute() end)
-
-      rules = %{catalog.rules | service_window_ms: 2 * Clock.hour()}
-      w = stocked_world(catalog: %{catalog | rules: rules})
-      w = simulated_visit(w, "d1", "bean_tacos")
-      w = advance_hall(w, 10 * Clock.minute()) |> buy("cilantro", 10, "fresh")
+      w = cilantro_queue() |> advance_hall(Clock.minute()) |> buy("cilantro", 10, "fresh")
       {state, _} = w
       old = state.restaurants["r1"].batches |> Map.values() |> Enum.min_by(& &1.expires_at)
 
-      {state, events} = advance_hall(w, ceil_to_tick(old.expires_at))
-      [main] = state.trays[tray_id("visit-d1")].components
-      assert state.trays[tray_id("visit-d1")].status == :accepted
-      assert Enum.any?(state.orders[main].reservations, &(&1.batch_id == "B:fresh"))
-      assert Enum.any?(events, &(&1.type == :reservation_replaced))
+      {state, events} = advance_hall(w, old.expires_at)
+      [main] = state.trays[tray_id("visit-d6")].components
+      assert state.trays[tray_id("visit-d6")].status == :accepted
+      assert state.orders[main].status == :prep
+      assert Enum.any?(events, &(&1.type == :reservation_replaced and &1.order_id == main))
+
+      assert Enum.any?(
+               events,
+               &(&1.type == :stage_started and &1.order_id == main and hd(&1.consumed).batch_id != old.id)
+             )
+
       Oracle.assert_settled!(state, events)
     end
 
@@ -146,15 +151,18 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       [main] = before.trays[tray_id("visit-d1")].components
       raw_before = before.restaurants["r1"].ledger.raw
 
-      {state, events} = kitchen(w, :start_preparation, %{order_id: main}, "start")
+      # Prep starts at the acceptance instant on the next advance.
+      {state, events} = advance_hall(w, before.now)
+      assert state.orders[main].status == :prep
       consumed = state.orders[main].consumed_cost
       assert consumed > 0
       assert state.restaurants["r1"].ledger.raw == raw_before - consumed
       assert state.restaurants["r1"].ledger.wip == consumed
+      Oracle.assert_settled!(state, events)
 
-      assert {:error, :invalid_order_state} =
-               Hall.decide(state, {:start_preparation, %{order_id: main}}, ctx({:system, :kitchen}, "again"))
-
+      {state, events} = serve_tray({state, events}, tray_id("visit-d1"))
+      assert Enum.count(events, &(&1.type == :stage_started and &1.stage == :prep and &1.order_id == main)) == 1
+      assert state.restaurants["r1"].ledger.cost_of_sales == consumed
       Oracle.assert_settled!(state, events)
     end
   end
@@ -319,7 +327,7 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
                  bob
                )
 
-      # Kitchen and demand capabilities are not owner powers.
+      # Scheduler and visitor-fund capabilities are not owner powers.
       assert {:error, _} = Hall.decide(state, {:advance_clock, %{to_service_ms: 999}}, ctx(owner(), "clock"))
 
       assert {:error, _} =
@@ -342,6 +350,14 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
        }},
       ctx({:system, :demand}, id)
     )
+  end
+
+  defp cilantro_queue do
+    catalog =
+      update_in(SliceCatalog.catalog(), [:products, "cilantro", :shelf_life_ms], fn _ -> 2 * Clock.minute() end)
+
+    rules = %{catalog.rules | service_window_ms: 2 * Clock.hour()}
+    Enum.reduce(1..6, stocked_world(catalog: %{catalog | rules: rules}), &simulated_visit(&2, "d#{&1}", "bean_tacos"))
   end
 
   defp purchase(product, qty, limit),

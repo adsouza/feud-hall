@@ -8,10 +8,9 @@ defmodule FeudHall.Domain.Hall.Decider do
   derived from the command ID, so a decision is deterministic and a retried
   command cannot mint a second order or batch.
 
-  Kitchen progress (`start_preparation`, `complete_preparation`, `serve_tray`,
-  `serve_dessert`) is decided here as ordinary commands from the
-  `{:system, :kitchen}` capability. The workforce milestone will drive them
-  from staff coverage; they never bypass work time, freshness, or the gate.
+  Kitchen progress is not a command: stage starts and completions, counter
+  handover, and service are clock boundaries decided by
+  `FeudHall.Domain.Hall.Advance`.
   """
 
   alias FeudHall.Domain.{Clock, Content, Inventory, Money, Random, Substitution}
@@ -169,51 +168,8 @@ defmodule FeudHall.Domain.Hall.Decider do
   def decide(state, {:cancel_tray, %{tray_id: t}}, %{actor: {:principal, who}}) do
     with {:ok, tray, visit} <- active_tray(state, t),
          :ok <- ensure(visit.source == :guest and visit.principal == who, :forbidden),
-         :ok <- ensure(Enum.all?(tray.components, &(state.orders[&1].status == :reserved)), :preparation_started) do
+         :ok <- ensure(Enum.all?(tray.components, &(state.orders[&1].status == :queued_prep)), :preparation_started) do
       {:ok, Settlement.cancel_tray(state, tray, :guest_cancelled)}
-    end
-  end
-
-  def decide(state, {:start_preparation, %{order_id: o}}, %{actor: {:system, :kitchen}}) do
-    with {:ok, order} <- live_order(state, o),
-         :ok <- ensure(order.status == :reserved, :invalid_order_state),
-         :ok <- ensure(state.access == :open, :hall_cleaning) do
-      restaurant = state.restaurants[state.visits[order.visit].restaurant]
-      recipe = state.catalog.recipes[order.recipe_id]
-
-      consumed =
-        Enum.map(order.reservations, fn claim ->
-          batch = restaurant.batches[claim.batch_id]
-          %{batch_id: claim.batch_id, qty: claim.qty, cost: Inventory.consumption_cost(batch, claim.qty)}
-        end)
-
-      {:ok,
-       [
-         %{
-           type: :preparation_started,
-           order_id: o,
-           consumed: consumed,
-           ready_not_before: state.now + recipe.prep_ms + recipe.finish_ms
-         }
-       ]}
-    end
-  end
-
-  def decide(state, {:complete_preparation, %{order_id: o}}, %{actor: {:system, :kitchen}}) do
-    with {:ok, order} <- live_order(state, o),
-         :ok <- ensure(order.status == :preparing, :invalid_order_state),
-         :ok <- ensure(state.now >= order.ready_not_before, :work_incomplete) do
-      recipe = state.catalog.recipes[order.recipe_id]
-      {:ok, [%{type: :preparation_completed, order_id: o, expires_at: state.now + recipe.holding_ms}]}
-    end
-  end
-
-  def decide(state, {:serve_tray, %{tray_id: t}}, %{actor: {:system, :kitchen}}) do
-    with {:ok, tray, _visit} <- active_tray(state, t),
-         :ok <- ensure(state.access == :open, :hall_cleaning),
-         :ok <- ensure(state.now <= tray.deadline, :deadline_passed),
-         :ok <- ensure(Enum.all?(tray.components, &servable?(state, &1)), :tray_not_ready) do
-      {:ok, Settlement.serve_tray(state, tray)}
     end
   end
 
@@ -232,18 +188,8 @@ defmodule FeudHall.Domain.Hall.Decider do
     with {:ok, visit} <- diner_visit(state, v, ctx),
          :ok <- ensure(visit.source == :guest, :forbidden),
          {:ok, order} <- fetch(state.orders, visit.dessert_order, :no_dessert_order),
-         :ok <- ensure(order.status == :reserved, :preparation_started) do
+         :ok <- ensure(order.status == :queued_prep, :preparation_started) do
       {:ok, Settlement.cancel_dessert(state, order, :guest_cancelled)}
-    end
-  end
-
-  def decide(state, {:serve_dessert, %{order_id: o}}, %{actor: {:system, :kitchen}}) do
-    with {:ok, order} <- live_order(state, o),
-         :ok <- ensure(order.kind == :dessert, :not_a_dessert),
-         :ok <- ensure(state.access == :open, :hall_cleaning),
-         :ok <- ensure(state.now <= order.deadline, :deadline_passed),
-         :ok <- ensure(servable?(state, o), :not_ready) do
-      {:ok, Settlement.serve_dessert(state, order)}
     end
   end
 
@@ -369,19 +315,6 @@ defmodule FeudHall.Domain.Hall.Decider do
       %{status: :accepted} = tray -> {:ok, tray, state.visits[tray.visit]}
       _ -> {:error, :tray_settled}
     end
-  end
-
-  defp live_order(state, o) do
-    case state.orders[o] do
-      nil -> {:error, :unknown_order}
-      %{status: s} when s in [:served, :cancelled] -> {:error, :order_settled}
-      order -> {:ok, order}
-    end
-  end
-
-  defp servable?(state, order_id) do
-    order = state.orders[order_id]
-    order.status == :ready and state.now < order.ready_expires_at
   end
 
   defp find_line(recipe, line_id) do

@@ -11,9 +11,14 @@ defmodule FeudHall.Oracle do
   @doc "All violations for a hall state and the events that produced it."
   def violations(nil, _events), do: []
 
+  # Live work stages of a component order (then :served or :cancelled).
+  @live [:queued_prep, :prep, :queued_finish, :finish, :ready]
+  # Stages past the prep queue: their ingredients were consumed into work in progress.
+  @consumed [:prep, :queued_finish, :finish, :ready]
+
   def violations(state, events) do
     Enum.flat_map(state.restaurants, fn {rid, r} -> restaurant(state, rid, r, events) end) ++
-      orders(state) ++ visits(state) ++ wallets(state) ++ hall(state, events)
+      orders(state) ++ visits(state) ++ wallets(state) ++ kitchens(state) ++ hall(state, events)
   end
 
   def assert_settled!(state, events) do
@@ -33,13 +38,13 @@ defmodule FeudHall.Oracle do
     raw_from_batches = r.batches |> Map.values() |> Enum.map(& &1.cost) |> Enum.sum()
 
     wip_from_orders =
-      my_orders |> Enum.filter(&(&1.status in [:preparing, :ready])) |> Enum.map(& &1.consumed_cost) |> Enum.sum()
+      my_orders |> Enum.filter(&(&1.status in @consumed)) |> Enum.map(& &1.consumed_cost) |> Enum.sum()
 
     t = event_totals(events, rid, state)
 
     reserved_by_batch =
       my_orders
-      |> Enum.filter(&(&1.status == :reserved))
+      |> Enum.filter(&(&1.status == :queued_prep))
       |> Enum.flat_map(& &1.reservations)
       |> Enum.reduce(%{}, fn c, acc -> Map.update(acc, c.batch_id, c.qty, &(&1 + c.qty)) end)
 
@@ -111,8 +116,11 @@ defmodule FeudHall.Oracle do
       tray = o.tray && state.trays[o.tray]
 
       [
-        {o.status == :reserved or o.reservations == [], {:claims_after_preparation, oid}},
-        {o.status != :reserved or o.consumed_cost == 0, {:cost_before_preparation, oid}},
+        {o.status == :queued_prep or o.reservations == [], {:claims_after_preparation, oid}},
+        {o.status != :queued_prep or o.consumed_cost == 0, {:cost_before_preparation, oid}},
+        {o.status not in [:prep, :finish] or (is_integer(o.stage_done_at) and o.stage_done_at > state.now),
+         {:stage_overdue, oid}},
+        {o.status != :ready or (o.ready_at <= state.now and state.now < o.ready_expires_at), {:stale_ready_food, oid}},
         {tray == nil or tray_consistent?(tray, o), {:tray_component_mismatch, oid}},
         {o.kind != :dessert or o.tray == nil, {:dessert_in_tray, oid}},
         {o.kind == :dessert or o.tray != nil, {:course_outside_tray, oid}},
@@ -122,7 +130,7 @@ defmodule FeudHall.Oracle do
     end)
   end
 
-  defp tray_consistent?(%{status: :accepted}, o), do: o.status in [:reserved, :preparing, :ready]
+  defp tray_consistent?(%{status: :accepted}, o), do: o.status in @live
   defp tray_consistent?(%{status: :served}, o), do: o.status == :served
   defp tray_consistent?(%{status: :cancelled}, o), do: o.status == :cancelled
 
@@ -131,7 +139,7 @@ defmodule FeudHall.Oracle do
 
     Enum.flat_map(state.visits, fn {vid, v} ->
       os = Map.get(by_visit, vid, [])
-      active = Enum.filter(os, &(&1.status in [:reserved, :preparing, :ready]))
+      active = Enum.filter(os, &(&1.status in @live))
       served = Enum.filter(os, &(&1.status == :served))
       count = fn kind -> Enum.count(os, &(&1.kind == kind)) end
       carb = fn list -> list |> Enum.map(&(&1.carbs_mg || 0)) |> Enum.sum() end
@@ -163,7 +171,7 @@ defmodule FeudHall.Oracle do
     by_slice =
       state.orders
       |> Map.values()
-      |> Enum.filter(&(&1.status in [:reserved, :preparing, :ready]))
+      |> Enum.filter(&(&1.status in @live))
       |> Enum.flat_map(& &1.funding)
       |> Enum.reduce(%{}, fn f, acc -> Map.update(acc, f.slice_id, f.amount, &(&1 + f.amount)) end)
 
@@ -177,6 +185,38 @@ defmodule FeudHall.Oracle do
       end)
     end)
   end
+
+  # Station capacity per stall, and the counter holds one live item whose
+  # components are all ready and whose handover is still running.
+  defp kitchens(state) do
+    %{prep_stations: prep_n, finish_stations: finish_n} = state.catalog.rules.kitchen
+    by_stall = state.orders |> Map.values() |> Enum.group_by(&state.visits[&1.visit].stall)
+
+    Enum.flat_map(state.stalls, fn {sid, stall} ->
+      os = Map.get(by_stall, sid, [])
+      count = fn status -> Enum.count(os, &(&1.status == status)) end
+
+      counter =
+        case stall.counter do
+          nil ->
+            true
+
+          %{item: item, done_at: done_at} ->
+            items = Enum.filter(os, &(item_of(&1) == item))
+            done_at > state.now and items != [] and Enum.all?(items, &(&1.status == :ready))
+        end
+
+      [
+        {count.(:prep) <= prep_n, {:prep_over_capacity, sid}},
+        {count.(:finish) <= finish_n, {:finish_over_capacity, sid}},
+        {counter, {:bad_counter, sid}}
+      ]
+      |> failures()
+    end)
+  end
+
+  defp item_of(%{kind: :dessert, id: id}), do: {:dessert, id}
+  defp item_of(%{tray: tray}), do: {:tray, tray}
 
   defp hall(state, events) do
     granted = for(%{type: :allowance_granted, amount: a} <- events, do: a) |> Enum.sum()

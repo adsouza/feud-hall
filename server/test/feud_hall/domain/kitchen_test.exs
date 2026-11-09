@@ -9,7 +9,7 @@ defmodule FeudHall.Domain.KitchenTest do
 
   # A real initialised state with small round kitchen numbers so expected
   # completions can be written out by hand. Orders and trays are added by hand
-  # because the stage fields are written by the automatic kitchen's evolver.
+  # to place work in exact stages; `seq` follows insertion order.
   defp base(opts \\ []) do
     {state, _log} = Fixtures.stocked_world()
     kitchen = %{prep_stations: 2, finish_stations: 1, queue_limit: 6}
@@ -22,10 +22,23 @@ defmodule FeudHall.Domain.KitchenTest do
   end
 
   defp put_order(state, id, fields) do
+    fields = Map.new(fields)
+
     order =
       Map.merge(
-        %{id: id, visit: "V:x", tray: "T:" <> id, kind: :main, status: :accepted, prep_ms: 100, finish_ms: 10},
-        Map.new(fields)
+        %{
+          id: id,
+          visit: "V:x",
+          tray: "T:" <> id,
+          kind: :main,
+          status: Map.get(fields, :stage, :queued_prep),
+          seq: map_size(state.orders),
+          queued_at: state.now,
+          ready_at: state.now,
+          prep_ms: 100,
+          finish_ms: 10
+        },
+        Map.delete(fields, :stage)
       )
 
     put_in(state, [:orders, id], order)
@@ -42,8 +55,8 @@ defmodule FeudHall.Domain.KitchenTest do
   test "two prep stations run two mains in parallel and the third waits" do
     state =
       base()
-      |> put_order("A", stage: :queued_prep, queued_at: 1)
-      |> put_order("B", stage: :queued_prep, queued_at: 2)
+      |> put_order("A", stage: :queued_prep)
+      |> put_order("B", stage: :queued_prep)
 
     # A and B prepare 0..100; the new main prepares 100..200. Finishing is
     # serial: A 100..110, B 110..120, new 200..210. Handover follows each.
@@ -52,7 +65,7 @@ defmodule FeudHall.Domain.KitchenTest do
     roomy = base(kitchen: [prep_stations: 3])
 
     roomy =
-      roomy |> put_order("A", stage: :queued_prep, queued_at: 1) |> put_order("B", stage: :queued_prep, queued_at: 2)
+      roomy |> put_order("A", stage: :queued_prep) |> put_order("B", stage: :queued_prep)
 
     # With a third station the new main prepares 0..100 and finishes 120..130.
     assert estimate(roomy) == roomy.now + 135
@@ -116,17 +129,43 @@ defmodule FeudHall.Domain.KitchenTest do
     assert estimate(state, [%{prep_ms: 0, finish_ms: 10}]) == state.now + 20 + 5
   end
 
-  test "orders without stage fields leave the estimate unchanged" do
-    state = base() |> put_order("L", status: :preparing)
+  test "settled orders leave the estimate unchanged" do
+    state = base() |> put_order("S", stage: :served) |> put_order("C", stage: :cancelled)
     assert estimate(state) == state.now + 115
+  end
+
+  test "ready items hand over FIFO by ready time, not by acceptance" do
+    # B was accepted after A but became ready first: B takes the counter 0..5.
+    # A is ready at 3 and the new tray (its finish waits for A's station) also
+    # at 3; the tie goes to A by acceptance, so A hands over 5..10, new 10..15.
+    state =
+      base()
+      |> put_order("A", stage: :finish, stage_done_at: base().now + 3)
+      |> put_order("B", stage: :ready, ready_at: base().now)
+
+    assert Kitchen.next_start(state, @stall) == {:handover, {:tray, "T:B"}}
+    assert estimate(state, [%{prep_ms: 0, finish_ms: 0}]) == state.now + 15
+  end
+
+  test "dispatch starts prep FIFO by queue time then acceptance, up to the station count" do
+    state =
+      base()
+      |> Map.put(:now, 2)
+      |> put_order("late", stage: :queued_prep, queued_at: 2)
+      |> put_order("first", stage: :queued_prep, queued_at: 1)
+      |> put_order("second", stage: :queued_prep, queued_at: 1)
+
+    assert Kitchen.next_start(state, @stall) == {:prep, "first"}
+    busy = state |> put_in([:orders, "first", :status], :prep) |> put_in([:orders, "second", :status], :prep)
+    assert Kitchen.next_start(busy, @stall) == nil
   end
 
   test "other stalls' orders do not occupy this stall" do
     state =
       base()
       |> put_in([:visits, "V:y"], %{stall: "s002"})
-      |> put_order("A", stage: :queued_prep, queued_at: 1, visit: "V:y")
-      |> put_order("B", stage: :queued_prep, queued_at: 2, visit: "V:y")
+      |> put_order("A", stage: :queued_prep, visit: "V:y")
+      |> put_order("B", stage: :queued_prep, visit: "V:y")
 
     assert estimate(state) == state.now + 115
   end
@@ -139,7 +178,7 @@ defmodule FeudHall.Domain.KitchenTest do
         end)
 
       Enum.reduce(1..desserts//1, state, fn i, s ->
-        put_order(s, "D#{i}", kind: :dessert, status: :reserved)
+        put_order(s, "D#{i}", kind: :dessert, stage: :queued_prep)
       end)
     end
 
@@ -190,7 +229,7 @@ defmodule FeudHall.Domain.KitchenTest do
 
     test "a quote's earliest_completion equals Kitchen.estimate/4 for the same inputs" do
       {state, _} = Fixtures.stocked_world()
-      state = put_order(state, "A", stage: :queued_prep, queued_at: 1)
+      state = put_order(state, "A", stage: :queued_prep)
       {:ok, quote} = Offers.quote_tray(state, @stall, "bean_tacos", "horchata", blank())
       expected = Kitchen.estimate(state, @stall, quote.components, state.now)
       assert quote.earliest_completion == expected.earliest_completion

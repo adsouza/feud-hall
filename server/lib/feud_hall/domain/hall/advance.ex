@@ -3,24 +3,52 @@ defmodule FeudHall.Domain.Hall.Advance do
   Clock advancement through due boundaries, as one deterministic batch.
 
   The scheduler supplies only a target; the domain walks every due boundary in
-  order and records the outcome of each. At a shared timestamp the order is:
+  order and records the outcome of each. Boundaries due at one timestamp are
+  taken by class, lower first, and within a class by stable entity ID:
 
     1. raw-stock and ready-food expiry (expiry wins an exact freshness tie);
-    2. the 03:00 cleaning cutoff, which closes customer access before any
-       same-timestamp service and cancels all unserved customer work;
-    3. diner deadlines and dessert-offer timeouts (a tray deadline is missed
-       only strictly after it, so service at the exact deadline wins);
-    4. the 05:00 reopening of customer access.
+    2. the 03:00 cleaning cutoff, which closes customer access and cancels all
+       unserved customer work, queued or in progress;
+    3. kitchen stage completions and counter handover completions (service);
+    4. diner deadlines and dessert-offer timeouts (a deadline falls at its
+       instant, after same-timestamp service, so service exactly at the
+       deadline wins);
+    5. the 05:00 reopening of customer access;
+    6. the day boundary (reserved);
+    7. market clearing (reserved);
+    8. arrivals (reserved);
+    9. kitchen dispatch: start queued stages on free stations and select the
+       counter's next ready item, only while customer access is open.
 
-  Ties within a class resolve by stable entity ID. Commands at the same
-  timestamp are decided after this batch commits.
+  Each class is one entry in `classes/0`: a function from state to the
+  `{at, entity_id, ref}` boundaries it has due, with a matching `handle/2`
+  clause. Dispatch is due at the current instant whenever a stall can start
+  work, so work accepted by a command starts at the next advance, at the
+  acceptance instant. Commands at the same timestamp are decided after this
+  batch commits.
   """
 
-  alias FeudHall.Domain.{Clock, Inventory}
+  alias FeudHall.Domain.{Clock, Inventory, Kitchen}
   alias FeudHall.Domain.Hall.{Evolver, Settlement}
 
   @doc "Returns the events that advance `state` to hall time `target`."
   def run(state, target), do: loop(state, target, [])
+
+  @doc """
+  The boundary classes in same-timestamp order: `{class, due_fun}` where
+  `due_fun.(state)` lists `{at, entity_id, ref}`. Later work plugs in its own
+  class (6 day boundary, 7 market clearing, 8 arrivals) here.
+  """
+  def classes do
+    [
+      {1, &expiries/1},
+      {2, &cleaning_start/1},
+      {3, &kitchen_completions/1},
+      {4, &deadlines/1},
+      {5, &reopening/1},
+      {9, &dispatch/1}
+    ]
+  end
 
   defp loop(state, target, acc) do
     case next_due(state, target) do
@@ -28,7 +56,7 @@ defmodule FeudHall.Domain.Hall.Advance do
         tail = if target > state.now, do: [%{type: :clock_advanced, to: target}], else: []
         acc ++ tail
 
-      {at, _class, ref} ->
+      {at, _class, _id, ref} ->
         tick = if at > state.now, do: [%{type: :clock_advanced, to: at}], else: []
         state = Enum.reduce(tick, state, &Evolver.evolve(&2, &1))
         events = handle(state, ref)
@@ -38,47 +66,69 @@ defmodule FeudHall.Domain.Hall.Advance do
   end
 
   defp next_due(state, target) do
-    candidates =
-      batch_expiries(state) ++
-        ready_expiries(state) ++
-        cleaning(state) ++ deadlines(state) ++ offer_timeouts(state)
-
-    candidates
-    |> Enum.filter(fn {at, _, _} -> at <= target end)
+    classes()
+    |> Enum.flat_map(fn {class, due} -> for {at, id, ref} <- due.(state), do: {at, class, id, ref} end)
+    |> Enum.filter(fn {at, _, _, _} -> at <= target end)
     |> Enum.min(fn -> nil end)
   end
 
-  defp batch_expiries(state) do
-    for {rid, r} <- state.restaurants, {bid, b} <- r.batches, do: {b.expires_at, 1, {:batch, rid, bid}}
+  # Class 1.
+  defp expiries(state) do
+    batches =
+      for {rid, r} <- state.restaurants, {bid, b} <- r.batches, do: {b.expires_at, bid, {:batch, rid, bid}}
+
+    ready = for {oid, o} <- state.orders, o.status == :ready, do: {o.ready_expires_at, oid, {:ready, oid}}
+    batches ++ ready
   end
 
-  defp ready_expiries(state) do
-    for {oid, o} <- state.orders, o.status == :ready, do: {o.ready_expires_at, 1, {:ready, oid}}
+  # Class 2.
+  defp cleaning_start(%{access: :open, now: now}),
+    do: [{Clock.service_cutoff(now), "cleaning", {:cleaning_start}}]
+
+  defp cleaning_start(_state), do: []
+
+  # Class 3.
+  defp kitchen_completions(state) do
+    stages =
+      for {oid, o} <- state.orders, o.status in [:prep, :finish], do: {o.stage_done_at, oid, {:stage_done, oid}}
+
+    handovers =
+      for {sid, %{counter: %{done_at: at}}} <- state.stalls, do: {at, sid, {:handover_done, sid}}
+
+    stages ++ handovers
   end
 
-  defp cleaning(%{access: :open, now: now}), do: [{Clock.service_cutoff(now), 2, {:cleaning_start}}]
-
-  defp cleaning(%{access: :cleaning, now: now}),
-    do: [{Clock.cleaning_end_of(Clock.day_of(now)), 4, {:cleaning_end}}]
-
+  # Class 4.
   defp deadlines(state) do
-    trays = for {tid, t} <- state.trays, t.status == :accepted, do: {t.deadline + 1, 3, {:tray_deadline, tid}}
+    trays = for {tid, t} <- state.trays, t.status == :accepted, do: {t.deadline, tid, {:tray_deadline, tid}}
 
     desserts =
       for {oid, o} <- state.orders,
           o.kind == :dessert,
-          o.status in [:reserved, :preparing, :ready],
-          do: {o.deadline + 1, 3, {:dessert_deadline, oid}}
+          o.status in Kitchen.stages(),
+          do: {o.deadline, oid, {:dessert_deadline, oid}}
 
-    trays ++ desserts
+    offers =
+      for {vid, v} <- state.visits,
+          v.status == :active,
+          v.dessert == :offered,
+          do: {v.dessert_offer_deadline, vid, {:offer_timeout, vid}}
+
+    trays ++ desserts ++ offers
   end
 
-  defp offer_timeouts(state) do
-    for {vid, v} <- state.visits,
-        v.status == :active,
-        v.dessert == :offered,
-        do: {v.dessert_offer_deadline, 3, {:offer_timeout, vid}}
+  # Class 5.
+  defp reopening(%{access: :cleaning, now: now}),
+    do: [{Clock.cleaning_end_of(Clock.day_of(now)), "cleaning", {:cleaning_end}}]
+
+  defp reopening(_state), do: []
+
+  # Class 9.
+  defp dispatch(%{access: :open} = state) do
+    for sid <- Kitchen.busy_stalls(state), Kitchen.next_start(state, sid) != nil, do: {state.now, sid, {:dispatch, sid}}
   end
+
+  defp dispatch(_state), do: []
 
   # -- boundary handlers ----------------------------------------------------------
 
@@ -86,7 +136,7 @@ defmodule FeudHall.Domain.Hall.Advance do
     affected =
       state.orders
       |> Map.values()
-      |> Enum.filter(&(&1.status == :reserved and Enum.any?(&1.reservations, fn c -> c.batch_id == bid end)))
+      |> Enum.filter(&(&1.status == :queued_prep and Enum.any?(&1.reservations, fn c -> c.batch_id == bid end)))
       |> Enum.map(& &1.id)
       |> Enum.sort()
 
@@ -95,7 +145,7 @@ defmodule FeudHall.Domain.Hall.Advance do
         # A sibling component's cancellation may already have settled this one.
         order = st.orders[oid]
 
-        if order.status == :reserved and Enum.any?(order.reservations, &(&1.batch_id == bid)) do
+        if order.status == :queued_prep and Enum.any?(order.reservations, &(&1.batch_id == bid)) do
           events = replace_or_cancel(st, rid, bid, order)
           {Enum.reduce(events, st, &Evolver.evolve(&2, &1)), acc ++ events}
         else
@@ -118,7 +168,7 @@ defmodule FeudHall.Domain.Hall.Advance do
     desserts =
       for {_, o} <- Enum.sort(state.orders),
           o.kind == :dessert,
-          o.status in [:reserved, :preparing, :ready],
+          o.status in Kitchen.stages(),
           do: {:dessert, o.id}
 
     offers =
@@ -136,6 +186,30 @@ defmodule FeudHall.Domain.Hall.Advance do
   defp handle(state, {:cleaning_end}),
     do: [%{type: :hall_cleaning_ended, day: Clock.day_of(state.now), at: state.now}]
 
+  defp handle(state, {:stage_done, oid}) do
+    order = state.orders[oid]
+
+    case order.status do
+      :prep ->
+        [%{type: :stage_completed, order_id: oid, stage: :prep}]
+
+      :finish ->
+        holding = state.catalog.recipes[order.recipe_id].holding_ms
+        [%{type: :stage_completed, order_id: oid, stage: :finish, expires_at: state.now + holding}]
+    end
+  end
+
+  # Expiry, deadlines and the cutoff come first at this instant and release
+  # the counter, so an item still in hand here is fresh, in time and open.
+  defp handle(state, {:handover_done, sid}) do
+    case state.stalls[sid].counter.item do
+      {:tray, tid} -> Settlement.serve_tray(state, state.trays[tid])
+      {:dessert, oid} -> Settlement.serve_dessert(state, state.orders[oid])
+    end
+  end
+
+  defp handle(state, {:dispatch, sid}), do: dispatch_stall(state, sid, [])
+
   defp handle(state, {:tray_deadline, tid}), do: Settlement.cancel_tray(state, state.trays[tid], :deadline_missed)
 
   defp handle(state, {:dessert_deadline, oid}),
@@ -149,6 +223,46 @@ defmodule FeudHall.Domain.Hall.Advance do
 
   defp cleaning_settlement(state, {:offer, vid}),
     do: [Settlement.finalize_event(state, state.visits[vid], :cleaning)]
+
+  # Starts every piece of work the stall can take now, applying each start
+  # before choosing the next so shared batches are costed in order.
+  defp dispatch_stall(state, sid, acc) do
+    case Kitchen.next_start(state, sid) do
+      nil ->
+        acc
+
+      start ->
+        event = start_event(state, sid, start)
+        dispatch_stall(Evolver.evolve(state, event), sid, acc ++ [event])
+    end
+  end
+
+  defp start_event(state, _sid, {:prep, oid}) do
+    order = state.orders[oid]
+    batches = state.restaurants[state.visits[order.visit].restaurant].batches
+
+    consumed =
+      Enum.map(order.reservations, fn claim ->
+        %{
+          batch_id: claim.batch_id,
+          qty: claim.qty,
+          cost: Inventory.consumption_cost(batches[claim.batch_id], claim.qty)
+        }
+      end)
+
+    %{type: :stage_started, order_id: oid, stage: :prep, done_at: state.now + order.prep_ms, consumed: consumed}
+  end
+
+  defp start_event(state, _sid, {:finish, oid}),
+    do: %{type: :stage_started, order_id: oid, stage: :finish, done_at: state.now + state.orders[oid].finish_ms}
+
+  defp start_event(state, sid, {:handover, {kind, id}}),
+    do: %{
+      type: :handover_started,
+      stall_id: sid,
+      item: %{kind: kind, id: id},
+      done_at: state.now + state.catalog.rules.handover_ms
+    }
 
   # Expiring reserved stock may be replaced only by fresh stock of the same
   # bound product; otherwise the whole tray (or dessert) is cancelled.

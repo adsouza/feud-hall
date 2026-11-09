@@ -57,10 +57,10 @@ defmodule FeudHall.HallTrace do
          {constant(:guest_visit), integer(0..2), integer(0..2), member_of([nil, "horchata"]), integer(0..3), boolean()}
        )},
       {2, tuple({constant(:grant), integer(0..2), integer(100..2_500)})},
-      {6, tuple({constant(:kitchen), integer(0..1_000)})},
-      {2, constant({:kitchen_all})},
+      {6, tuple({constant(:wait), integer(1_000..20_000)})},
       {5, tuple({constant(:cycle), integer(4_000..20_000), boolean()})},
       {2, tuple({constant(:cancel), integer(0..1_000)})},
+      {2, tuple({constant(:regret), integer(0..2), integer(0..2), member_of([nil, "horchata"]), integer(0..3)})},
       {3, tuple({constant(:dessert), integer(0..1_000), member_of([:accept, :decline, :cancel, :stale])})},
       {1, tuple({constant(:stall), member_of([:open_stall, :open_stall, :close_stall])})},
       {1, tuple({constant(:intrude), integer(0..3)})}
@@ -95,12 +95,11 @@ defmodule FeudHall.HallTrace do
   end
 
   @doc """
-  Workflow envelopes for recorded commands, in order. The interpreter gives
-  every move of a `:kitchen_all` action the same command ID (the pure decider
-  does not check IDs, and kitchen moves embed none in their events); the
-  workflow binds an ID to one request, so the `k`-th repeat of an ID (k >= 1)
-  is renamed `"<id>/<k>"`. Every other ID is kept, and all stay within the
-  workflow's 1..64 printable bytes.
+  Workflow envelopes for recorded commands, in order. Should the interpreter
+  ever give two recorded commands the same ID, the workflow (which binds an
+  ID to one request) would see a conflict, so the `k`-th repeat of an ID
+  (k >= 1) is renamed `"<id>/<k>"`. Every other ID is kept, and all stay
+  within the workflow's 1..64 printable bytes.
   """
   def envelopes(commands) do
     {envelopes, _seen} =
@@ -148,8 +147,8 @@ defmodule FeudHall.HallTrace do
         Enum.reduce(parts, {state, batches, n + 1, acc}, fn part, {st, bs, m, acc} ->
           moves =
             case part do
-              :kitchen ->
-                kitchen_moves(st)
+              {:action, action} ->
+                List.wrap(command(st, action, id))
 
               :desserts ->
                 dessert_answers(st)
@@ -161,11 +160,6 @@ defmodule FeudHall.HallTrace do
           Enum.reduce(moves, {st, bs, m, acc}, fn {cmd, actor}, {st2, bs2, m2, acc2} ->
             apply_command(st2, bs2, m2 + 1, acc2, cmd, actor, "#{id}.#{m2}")
           end)
-        end)
-
-      list when is_list(list) ->
-        Enum.reduce(list, {state, batches, n + 1, acc}, fn {cmd, actor}, {st, bs, m, acc} ->
-          apply_command(st, bs, m, acc, cmd, actor, "#{id}.#{m}")
         end)
 
       {cmd, actor} ->
@@ -262,20 +256,38 @@ defmodule FeudHall.HallTrace do
   defp command(_state, {:grant, g, amount}, _id),
     do: {{:grant_allowance, %{principal: Enum.at(@guests, g), amount: amount}}, {:system, :visitor_fund}}
 
-  defp command(state, {:kitchen, k}, _id) do
-    case kitchen_moves(state) do
-      [] -> nil
-      moves -> Enum.at(moves, rem(k, length(moves)))
-    end
-  end
+  # Let the automatic kitchen work for `ms` available-service milliseconds: a
+  # short advance, at most about eight game minutes (one tray's work).
+  defp command(state, {:wait, ms}, id), do: command(state, {:advance, ms}, id)
 
-  defp command(state, {:kitchen_all}, _id), do: kitchen_moves(state)
-
-  # A service cycle: start waiting work, let it cook, complete and serve it.
-  # Later moves are planned against the state reached after earlier ones.
+  # A service cycle: let waiting work cook and be served, answer any dessert
+  # offers, then let the desserts (and later trays) be served. Later moves are
+  # planned against the state reached after earlier ones.
   defp command(_state, {:cycle, ms, desserts}, _id) do
     answer = if desserts, do: [:desserts], else: []
-    {:sequence, [:kitchen, {:wait, ms}, :kitchen, :kitchen] ++ answer ++ [:kitchen]}
+    {:sequence, [{:wait, ms}] ++ answer ++ [{:wait, ms}]}
+  end
+
+  # A funded guest orders and cancels before the kitchen starts on it (the
+  # next advance would start preparation and close voluntary cancellation).
+  defp command(_state, {:regret, g, m, drink, p}, _id) do
+    {:sequence,
+     [
+       {:action, {:grant, g, 2_500}},
+       {:action, {:guest_visit, g, m, drink, p, false}},
+       {:action, {:cancel_own, g}}
+     ]}
+  end
+
+  defp command(state, {:cancel_own, g}, _id) do
+    guest = Enum.at(@guests, g)
+
+    with vid when vid != nil <- state.active_visits[guest],
+         tid when tid != nil <- state.visits[vid].tray do
+      {{:cancel_tray, %{tray_id: tid}}, {:principal, guest}}
+    else
+      _ -> nil
+    end
   end
 
   defp command(state, {:cancel, k}, _id) do
@@ -316,7 +328,7 @@ defmodule FeudHall.HallTrace do
     end
   end
 
-  # An unrelated principal attempting owner, kitchen, or wallet operations.
+  # An unrelated principal attempting owner or wallet operations.
   defp command(_state, {:intrude, which}, _id) do
     cmd =
       case which do
@@ -376,30 +388,5 @@ defmodule FeudHall.HallTrace do
         _ -> []
       end
     end)
-  end
-
-  defp kitchen_moves(state) do
-    orders = state.orders |> Map.values() |> Enum.sort_by(& &1.id)
-
-    starts = for o <- orders, o.status == :reserved, do: {{:start_preparation, %{order_id: o.id}}, {:system, :kitchen}}
-
-    completes =
-      for o <- orders,
-          o.status == :preparing,
-          state.now >= o.ready_not_before,
-          do: {{:complete_preparation, %{order_id: o.id}}, {:system, :kitchen}}
-
-    serves =
-      for {_, t} <- Enum.sort(state.trays),
-          t.status == :accepted,
-          do: {{:serve_tray, %{tray_id: t.id}}, {:system, :kitchen}}
-
-    desserts =
-      for o <- orders,
-          o.kind == :dessert,
-          o.status == :ready,
-          do: {{:serve_dessert, %{order_id: o.id}}, {:system, :kitchen}}
-
-    completes ++ serves ++ desserts ++ starts
   end
 end

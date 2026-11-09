@@ -17,11 +17,9 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     assert length(tray.components) == 2
 
     # Two components, one queue place, one deadline.
-    assert Enum.all?(tray.components, &(state.orders[&1].status == :reserved))
-    refute Hall.decide(state, {:serve_tray, %{tray_id: tray.id}}, ctx({:system, :kitchen}, "early")) == :ok
+    assert Enum.all?(tray.components, &(state.orders[&1].status == :queued_prep))
 
-    w = prepare_tray(w, tray.id)
-    w = kitchen(w, :serve_tray, %{tray_id: tray.id}, "serve")
+    w = serve_tray(w, tray.id)
     {state, events} = w
     Oracle.assert_settled!(state, events)
 
@@ -34,8 +32,7 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     w = run!(w, {:accept_dessert, %{visit_id: visit.id}}, {:system, :demand}, "dessert")
     {state, _} = w
     dessert = state.orders[state.visits[visit.id].dessert_order]
-    w = prepare_order(w, dessert.id)
-    w = kitchen(w, :serve_dessert, %{order_id: dessert.id}, "serve-dessert")
+    w = serve_dessert(w, dessert.id)
     {state, events} = w
     Oracle.assert_settled!(state, events)
 
@@ -69,7 +66,7 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     assert state.orders[main].quality == 97
     assert state.orders[main].penalty == 3
 
-    w = prepare_tray(w, tray.id) |> kitchen(:serve_tray, %{tray_id: tray.id}, "serve")
+    w = serve_tray(w, tray.id)
     w = run!(w, {:decline_dessert, %{visit_id: visit_id("visit-d2")}}, {:system, :demand}, "decline")
     {state, events} = w
     outcome = state.visits[visit_id("visit-d2")].outcome
@@ -133,10 +130,10 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     assert after_cancel.visits[visit_id("g1")].outcome.score == nil
     assert after_cancel.active_visits == %{}
 
-    # Preparation of either component closes voluntary cancellation.
-    [main, _drink] = tray.components
-    w = kitchen(w, :start_preparation, %{order_id: main}, "start-main")
-    {state, _} = w
+    # Preparation starting (at the acceptance instant, on the next advance)
+    # closes voluntary cancellation.
+    {state, _} = advance_hall(w, state.now)
+    assert Enum.all?(tray.components, &(state.orders[&1].status == :prep))
 
     assert {:error, :preparation_started} =
              Hall.decide(state, {:cancel_tray, %{tray_id: tray.id}}, ctx({:principal, "gina"}, "cancel2"))
@@ -150,7 +147,7 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     assert {:error, :no_dessert_offer} =
              Hall.decide(state, {:accept_dessert, %{visit_id: vid}}, ctx({:principal, "gina"}, "d0"))
 
-    w = prepare_tray(w, tray_id("g1")) |> kitchen(:serve_tray, %{tray_id: tray_id("g1")}, "serve")
+    w = serve_tray(w, tray_id("g1"))
     {state, _} = w
     assert state.visits[vid].dessert == :offered
     {:ok, quote} = Offers.quote_dessert(state, state.visits[vid])
@@ -191,7 +188,7 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
 
   test "an unaccepted dessert offer times out after 30 available-service seconds", %{world: w} do
     w = simulated_visit(w, "d1", "bean_tacos")
-    w = prepare_tray(w, tray_id("visit-d1")) |> kitchen(:serve_tray, %{tray_id: tray_id("visit-d1")}, "serve")
+    w = serve_tray(w, tray_id("visit-d1"))
     {state, _} = w
     vid = visit_id("visit-d1")
     deadline = state.visits[vid].dessert_offer_deadline
@@ -207,21 +204,26 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     Oracle.assert_settled!(state, events)
   end
 
-  test "service wins an exact deadline tie; one tick later the tray is cancelled as waste", %{world: w} do
-    # A short service window so the deadline binds before ready-food expiry.
-    rules = %{elem(w, 0).catalog.rules | service_window_ms: 10 * Clock.minute()}
+  test "service wins an exact deadline tie; a deadline missed mid-handover cancels the tray as waste", %{world: w} do
+    # A service window exactly as long as the work, so the deadline is the handover's end.
+    rules = %{elem(w, 0).catalog.rules | service_window_ms: 8 * Clock.minute()}
     w = stocked_world(catalog: put_in(FeudHall.Domain.Content.SliceCatalog.catalog(), [:rules], rules))
     w = simulated_visit(w, "d1", "bean_tacos")
-    {state, _} = w
+    {state, log} = w
     tray = state.trays[tray_id("visit-d1")]
-    w = prepare_tray(w, tray.id)
-    at_deadline = advance_hall(w, tray.deadline)
-    {state, _} = at_deadline
-    assert state.trays[tray.id].status == :accepted
-    {served, _} = kitchen(at_deadline, :serve_tray, %{tray_id: tray.id}, "serve")
+    assert tray.deadline == tray.estimated_completion
+
+    {before, _} = advance_hall(w, tray.deadline - Clock.ratio())
+    assert before.trays[tray.id].status == :accepted
+    {served, _} = advance_hall(w, tray.deadline)
     assert served.trays[tray.id].status == :served
 
-    {late, events} = advance_hall(w, tray.deadline + Clock.ratio())
+    # Quotes never bind a deadline before the estimate; force one to show the
+    # deadline boundary cancelling work in progress.
+    [main] = tray.components
+    early = tray.deadline - Clock.ratio()
+    state = state |> put_in([:trays, tray.id, :deadline], early) |> put_in([:orders, main, :deadline], early)
+    {late, events} = advance_hall({state, log}, tray.deadline)
     assert late.trays[tray.id].status == :cancelled
     assert late.visits[visit_id("visit-d1")].outcome.reason == :main_failed
     assert late.visits[visit_id("visit-d1")].outcome.score == 0
@@ -229,36 +231,21 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     Oracle.assert_settled!(late, events)
   end
 
-  test "ready-food expiry wins an exact freshness tie", %{world: w} do
-    # Stretch the deadline window so the holding lifetime binds first.
-    rules = %{elem(w, 0).catalog.rules | service_window_ms: 6 * Clock.hour()}
-    w = stocked_world(catalog: put_in(FeudHall.Domain.Content.SliceCatalog.catalog(), [:rules], rules))
-    w = simulated_visit(w, "d1", "bean_tacos")
+  test "ready-food expiry wins an exact freshness tie with the handover" do
+    # The main is ready at 4 min and handed over 4..8; a four-minute holding
+    # life expires it exactly as the handover would complete.
+    catalog =
+      put_in(FeudHall.Domain.Content.SliceCatalog.catalog(), [:recipes, "bean_tacos", :holding_ms], 4 * Clock.minute())
+
+    w = stocked_world(catalog: catalog) |> simulated_visit("d1", "bean_tacos")
     tray = tray_id("visit-d1")
-    w = prepare_tray(w, tray)
     {state, _} = w
     [main] = state.trays[tray].components
-    expires = state.orders[main].ready_expires_at
-    {state, events} = advance_hall(w, ceil_to_tick(expires))
+    {state, events} = advance_hall(w, state.trays[tray].estimated_completion)
+    assert state.orders[main].ready_expires_at == state.now
     assert state.trays[tray].status == :cancelled
     assert state.orders[main].cancel_reason == :ready_food_expired
-    assert {:error, :tray_settled} = Hall.decide(state, {:serve_tray, %{tray_id: tray}}, ctx({:system, :kitchen}, "s"))
+    refute Enum.any?(events, &(&1.type == :tray_served))
     Oracle.assert_settled!(state, events)
-  end
-
-  test "the serve guard itself refuses food at its exact expiry instant" do
-    # The scheduler normally expires food first; this checks the decider's own
-    # guard against a state where the boundary has not been processed.
-    w = stocked_world() |> simulated_visit("d1", "bean_tacos")
-    tray = tray_id("visit-d1")
-    {state, _} = prepare_tray(w, tray)
-    [main] = state.trays[tray].components
-    at_expiry = put_in(state, [:orders, main, :ready_expires_at], state.now)
-
-    assert {:error, :tray_not_ready} =
-             Hall.decide(at_expiry, {:serve_tray, %{tray_id: tray}}, ctx({:system, :kitchen}, "s"))
-
-    just_fresh = put_in(state, [:orders, main, :ready_expires_at], state.now + 1)
-    assert {:ok, _} = Hall.decide(just_fresh, {:serve_tray, %{tray_id: tray}}, ctx({:system, :kitchen}, "s"))
   end
 end

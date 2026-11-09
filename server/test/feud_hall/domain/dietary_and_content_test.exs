@@ -58,7 +58,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
 
     test "dessert is not offered when it would exceed the remaining carbohydrate allowance" do
       w = stocked_world() |> simulated_visit("c1", "chicken_tacos", nil, "carb_conscious")
-      w = prepare_tray(w, tray_id("visit-c1")) |> kitchen(:serve_tray, %{tray_id: tray_id("visit-c1")}, "serve")
+      w = serve_tray(w, tray_id("visit-c1"))
       {state, events} = w
       visit = state.visits[visit_id("visit-c1")]
       assert visit.carbs_served == 28_200
@@ -71,13 +71,13 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
       # 90 g ceiling: dessert alone (67,400 mg) fits, main + dessert does not.
       catalog = put_in(SliceCatalog.catalog(), [:profiles, "carb_conscious", :carb_ceiling_mg], 90_000)
       w = stocked_world(catalog: catalog) |> simulated_visit("c1", "chicken_tacos", nil, "carb_conscious")
-      w = prepare_tray(w, tray_id("visit-c1")) |> kitchen(:serve_tray, %{tray_id: tray_id("visit-c1")}, "serve")
+      w = serve_tray(w, tray_id("visit-c1"))
       {state, _} = w
       assert state.visits[visit_id("visit-c1")].status == :finalized
 
       # The same diner profile with an unrestricted first course gets the offer.
       w = stocked_world(catalog: catalog) |> simulated_visit("u1", "chicken_tacos", nil, "unrestricted")
-      w = prepare_tray(w, tray_id("visit-u1")) |> kitchen(:serve_tray, %{tray_id: tray_id("visit-u1")}, "serve")
+      w = serve_tray(w, tray_id("visit-u1"))
       {state, _} = w
       assert state.visits[visit_id("visit-u1")].dessert == :offered
     end

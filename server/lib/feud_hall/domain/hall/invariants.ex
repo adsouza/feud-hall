@@ -68,7 +68,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   defp claims_by_restaurant(state) do
     state.orders
     |> Map.values()
-    |> Enum.filter(&(&1.status == :reserved))
+    |> Enum.filter(&(&1.status == :queued_prep))
     |> Enum.reduce(%{}, fn order, acc ->
       rid = state.visits |> Map.get(order.visit, %{}) |> Map.get(:restaurant)
 

@@ -9,10 +9,12 @@ defmodule FeudHall.Domain.Hall.Evolver do
   Fact ownership inside the hall boundary:
 
   * hall: clock, cleaning gate, visitor fund
-  * restaurant: cash/ledger, warehouse batches, unlocks, menu, policies
+  * restaurant: cash/ledger, warehouse batches, unlocks, menu, policies;
+    its stall's mode and counter handover
   * customer visit: requirement bundle, carbohydrate commitments, course slots,
     finalization
-  * tray / component order: bill, reservations, production state, funding
+  * tray / component order: bill, reservations, work stage (see
+    `FeudHall.Domain.Kitchen`), funding
   * dining wallet: funded credit slices and their spending reservations
 
   Ledger accounts per restaurant are signed so the trial balance
@@ -91,7 +93,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
       id: e.stall_id,
       restaurant: e.restaurant_id,
       tier: Map.get(state.layout, e.stall_id),
-      mode: :closed
+      mode: :closed,
+      counter: nil
     })
   end
 
@@ -189,6 +192,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
       stall: e.stall_id,
       components: Enum.map(e.components, & &1.order_id),
       deadline: e.deadline,
+      # Trays accepted before the automatic kitchen carry no estimate.
+      estimated_completion: Map.get(e, :estimated_completion),
       status: :accepted
     }
 
@@ -213,24 +218,40 @@ defmodule FeudHall.Domain.Hall.Evolver do
     end)
   end
 
-  def evolve(state, %{type: :preparation_started} = e) do
-    order = state.orders[e.order_id]
-    rid = state.visits[order.visit].restaurant
-    consumed_cost = e.consumed |> Enum.map(& &1.cost) |> Enum.sum()
-
+  def evolve(state, %{type: :stage_started, stage: :prep} = e) do
     state
-    |> update_in([:restaurants, rid, :batches], fn batches ->
-      batches = Enum.reduce(e.consumed, batches, &consume_batch(&2, &1))
-      batches |> Enum.reject(fn {_, b} -> b.qty == 0 end) |> Map.new()
-    end)
-    |> post(rid, raw: -consumed_cost, wip: consumed_cost)
-    |> update_in([:orders, e.order_id], fn o ->
-      %{o | status: :preparing, reservations: [], consumed_cost: consumed_cost, ready_not_before: e.ready_not_before}
+    |> consume(e.order_id, e.consumed)
+    |> update_in([:orders, e.order_id], &%{&1 | status: :prep, stage_done_at: e.done_at})
+  end
+
+  def evolve(state, %{type: :stage_started, stage: :finish} = e),
+    do: update_in(state, [:orders, e.order_id], &%{&1 | status: :finish, stage_done_at: e.done_at})
+
+  def evolve(state, %{type: :stage_completed, stage: :prep} = e),
+    do:
+      update_in(state, [:orders, e.order_id], &%{&1 | status: :queued_finish, stage_done_at: nil, queued_at: state.now})
+
+  def evolve(state, %{type: :stage_completed, stage: :finish} = e) do
+    update_in(state, [:orders, e.order_id], fn o ->
+      %{o | status: :ready, stage_done_at: nil, ready_at: state.now, ready_expires_at: e.expires_at}
     end)
   end
 
+  def evolve(state, %{type: :handover_started, item: item} = e),
+    do: put_in(state, [:stalls, e.stall_id, :counter], %{item: counter_item(item), done_at: e.done_at})
+
+  # Milestone 1 kitchen commands, kept for historical replay: the combined
+  # preparation occupies the finishing stage until `ready_not_before`.
+  def evolve(state, %{type: :preparation_started} = e) do
+    state
+    |> consume(e.order_id, e.consumed)
+    |> update_in([:orders, e.order_id], &%{&1 | status: :finish, stage_done_at: e.ready_not_before})
+  end
+
   def evolve(state, %{type: :preparation_completed} = e) do
-    update_in(state, [:orders, e.order_id], &%{&1 | status: :ready, ready_expires_at: e.expires_at})
+    update_in(state, [:orders, e.order_id], fn o ->
+      %{o | status: :ready, stage_done_at: nil, ready_at: state.now, ready_expires_at: e.expires_at}
+    end)
   end
 
   def evolve(state, %{type: :tray_served} = e) do
@@ -243,7 +264,9 @@ defmodule FeudHall.Domain.Hall.Evolver do
         |> count_served(acc.orders[c.order_id].kind)
       end)
 
-    put_in(state, [:trays, e.tray_id, :status], :served)
+    state
+    |> put_in([:trays, e.tray_id, :status], :served)
+    |> release_counter(tray.stall, {:tray, e.tray_id})
   end
 
   def evolve(state, %{type: :tray_cancelled} = e) do
@@ -252,7 +275,9 @@ defmodule FeudHall.Domain.Hall.Evolver do
     state =
       Enum.reduce(e.components, state, &cancel_order(&2, tray.restaurant, tray.visit, &1, e.reason))
 
-    put_in(state, [:trays, e.tray_id, :status], :cancelled)
+    state
+    |> put_in([:trays, e.tray_id, :status], :cancelled)
+    |> release_counter(tray.stall, {:tray, e.tray_id})
   end
 
   def evolve(state, %{type: :dessert_offered} = e) do
@@ -274,7 +299,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
       visit_id: e.visit_id,
       restaurant_id: visit.restaurant,
       tray_id: nil,
-      deadline: e.deadline
+      deadline: e.deadline,
+      estimated_completion: Map.get(e, :estimated_completion)
     })
   end
 
@@ -284,11 +310,15 @@ defmodule FeudHall.Domain.Hall.Evolver do
     state
     |> serve_order(visit.restaurant, visit.id, e)
     |> count_served(:dessert)
+    |> release_counter(visit.stall, {:dessert, e.order_id})
   end
 
   def evolve(state, %{type: :dessert_cancelled} = e) do
     visit = state.visits[state.orders[e.order_id].visit]
-    cancel_order(state, visit.restaurant, visit.id, e, e.reason)
+
+    state
+    |> cancel_order(visit.restaurant, visit.id, e, e.reason)
+    |> release_counter(visit.stall, {:dessert, e.order_id})
   end
 
   def evolve(state, %{type: :visit_finalized} = e) do
@@ -308,7 +338,12 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
   # -- helpers -------------------------------------------------------------
 
+  # A new order joins its stall's prep queue. Its stage durations are bound
+  # from the accepted quote; events written before they were recorded fall
+  # back to the hall's (fixed) catalog recipe.
   defp accept_order(state, c, e) do
+    recipe = state.catalog.recipes[c.recipe_id]
+
     order = %{
       id: c.order_id,
       visit: e.visit_id,
@@ -324,11 +359,17 @@ defmodule FeudHall.Domain.Hall.Evolver do
       funding: c.funding,
       carbs_mg: c.carbs_mg,
       deadline: e.deadline,
+      estimated_completion: Map.get(e, :estimated_completion),
       consumed_cost: 0,
-      ready_not_before: nil,
+      prep_ms: Map.get(c, :prep_ms, recipe.prep_ms),
+      finish_ms: Map.get(c, :finish_ms, recipe.finish_ms),
+      seq: map_size(state.orders),
+      queued_at: state.now,
+      stage_done_at: nil,
+      ready_at: nil,
       ready_expires_at: nil,
       cancel_reason: nil,
-      status: :reserved
+      status: :queued_prep
     }
 
     rid = e.restaurant_id
@@ -339,6 +380,31 @@ defmodule FeudHall.Domain.Hall.Evolver do
     |> update_in([:restaurants, rid, :batches], &Inventory.adjust_reserved(&1, c.reservations, 1))
     |> reserve_funding(e.visit_id, c.funding, c.price)
     |> update_in([:visits, e.visit_id, :carbs_reserved], &(&1 + carbs))
+  end
+
+  # Moves an order's reserved units into work in progress at their recorded cost.
+  defp consume(state, order_id, consumed) do
+    rid = state.visits[state.orders[order_id].visit].restaurant
+    consumed_cost = consumed |> Enum.map(& &1.cost) |> Enum.sum()
+
+    state
+    |> update_in([:restaurants, rid, :batches], fn batches ->
+      batches = Enum.reduce(consumed, batches, &consume_batch(&2, &1))
+      batches |> Enum.reject(fn {_, b} -> b.qty == 0 end) |> Map.new()
+    end)
+    |> post(rid, raw: -consumed_cost, wip: consumed_cost)
+    |> update_in([:orders, order_id], &%{&1 | reservations: [], consumed_cost: consumed_cost})
+  end
+
+  defp counter_item(%{kind: :tray, id: id}), do: {:tray, id}
+  defp counter_item(%{kind: :dessert, id: id}), do: {:dessert, id}
+
+  # A settled item leaves the counter if it was being handed over.
+  defp release_counter(state, stall_id, item) do
+    case state.stalls[stall_id] do
+      %{counter: %{item: ^item}} -> put_in(state, [:stalls, stall_id, :counter], nil)
+      _ -> state
+    end
   end
 
   defp reserve_funding(state, visit_id, funding, price) do

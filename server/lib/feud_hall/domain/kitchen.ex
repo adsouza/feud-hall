@@ -1,107 +1,156 @@
 defmodule FeudHall.Domain.Kitchen do
   @moduledoc """
-  Pure model of a stall's kitchen queue, shared by quotes, acceptance and
-  diner choice so they all see the same wait.
+  Pure model of a stall's automatic kitchen: the queue-aware completion
+  estimate shared by quotes, acceptance and diner choice, and the dispatch
+  decisions the clock advance takes. Both read the same FIFO keys, so a
+  quoted completion is exactly when the dispatch hands the item over.
 
-  Each live order carries a work stage: `:queued_prep | :prep | :queued_finish
-  | :finish | :ready`, with `queued_at`, `prep_ms` and `finish_ms` copied from
-  the accepted quote, and `stage_done_at` while it occupies a station. A stall
-  has `counter: nil | %{item: {:tray, tray_id} | {:dessert, order_id}, done_at}`
-  for the handover in progress. Station counts, handover time and the queue
-  limit come from validated catalog content.
+  A live order's `status` is its work stage: `:queued_prep | :prep |
+  :queued_finish | :finish | :ready` (then `:served` or `:cancelled`). It
+  carries `queued_at` (when it joined its current queue: acceptance for prep,
+  prep completion for finish), an acceptance sequence number `seq`, `prep_ms`
+  and `finish_ms` bound at acceptance, `stage_done_at` while it occupies a
+  station, and `ready_at` once finished. A stall has `counter: nil |
+  %{item: {:tray, tray_id} | {:dessert, order_id}, done_at}` for the handover
+  in progress. Station counts, handover time and the queue limit come from
+  validated catalog content.
 
-  Orders without a `:stage` key are not part of the model and are ignored, so
-  an empty kitchen estimates `now + prep + finish + handover` for one main.
+  FIFO rules: each stage queue is served by `{queued_at, seq}` on the
+  earliest-free station; the counter takes the item whose last component
+  became ready first, ties by its first component's `seq`. A new order's
+  `seq` is the next one the evolver assigns, so it sorts after every order
+  already accepted.
   """
 
-  @finished [:served, :cancelled]
+  @stages [:queued_prep, :prep, :queued_finish, :finish, :ready]
+
+  @doc "The live work stages, in order."
+  def stages, do: @stages
 
   @doc """
   Earliest hall time a new tray (or dessert) made of `new_components`
   (`%{prep_ms, finish_ms}`) finishes its handover at `stall_id`.
 
-  A deterministic list-scheduling simulation: prep stations, then finish
-  stations (each served FIFO by release time then ID), then the single
-  counter (FIFO by ready time), starting from the stall's current state.
+  A deterministic list-scheduling simulation of the stall from its current
+  state, using the same FIFO keys as `next_start/2`.
   """
   def estimate(state, stall_id, new_components, now) do
     %{prep_stations: prep_n, finish_stations: finish_n} = state.catalog.rules.kitchen
     handover = state.catalog.rules.handover_ms
     orders = live_orders(state, stall_id)
+    next = next_seq(state)
 
     new =
       new_components
       |> Enum.with_index()
-      |> Enum.map(fn {c, i} -> %{key: {:new, i}, prep_ms: c.prep_ms, finish_ms: c.finish_ms} end)
+      |> Enum.map(fn {c, i} ->
+        %{
+          id: {:new, i},
+          item: :new,
+          status: :queued_prep,
+          seq: next + i,
+          queued_at: now,
+          prep_ms: c.prep_ms,
+          finish_ms: c.finish_ms
+        }
+      end)
 
     # 1. Prep stations.
-    prep_free = pad(for(o <- orders, o.stage == :prep, do: o.stage_done_at), prep_n, now)
+    prep_free = pad(for(o <- orders, o.status == :prep, do: o.stage_done_at), prep_n, now)
+    prep_queue = fifo(Enum.filter(orders, &(&1.status == :queued_prep)) ++ new, & &1.queued_at)
+    prep_end = schedule(prep_queue, prep_free, & &1.queued_at, & &1.prep_ms)
 
-    prep_queue =
-      orders
-      |> Enum.filter(&(&1.stage == :queued_prep))
-      |> Enum.sort_by(&{&1.queued_at, &1.id})
-      |> Enum.map(&%{key: &1.id, prep_ms: &1.prep_ms})
+    # 2. Finish stations, released when prep ends.
+    finish_free = pad(for(o <- orders, o.status == :finish, do: o.stage_done_at), finish_n, now)
 
-    {prep_end, _} =
-      Enum.reduce(prep_queue ++ new, {%{}, prep_free}, fn job, {ends, free} ->
-        {finish_at, free} = assign(free, now, job.prep_ms)
-        {Map.put(ends, job.key, finish_at), free}
-      end)
+    release = fn o ->
+      case o.status do
+        :prep -> o.stage_done_at
+        :queued_finish -> o.queued_at
+        :queued_prep -> prep_end[o.id]
+      end
+    end
 
-    # 2. Finish stations.
-    finish_free = pad(for(o <- orders, o.stage == :finish, do: o.stage_done_at), finish_n, now)
-
-    released =
-      Enum.flat_map(orders, fn o ->
-        case o.stage do
-          :prep -> [{o.stage_done_at, 0, o.id, o.id, o.finish_ms}]
-          :queued_prep -> [{prep_end[o.id], 0, o.id, o.id, o.finish_ms}]
-          :queued_finish -> [{now, 0, o.id, o.id, o.finish_ms}]
-          _ -> []
-        end
-      end) ++ Enum.map(new, &{prep_end[&1.key], 1, "", &1.key, &1.finish_ms})
-
-    {finish_end, _} =
-      released
-      |> Enum.sort_by(fn {release, rank, id, _key, _ms} -> {release, rank, id} end)
-      |> Enum.reduce({%{}, finish_free}, fn {release, _rank, _id, key, ms}, {ends, free} ->
-        {finish_at, free} = assign(free, release, ms)
-        {Map.put(ends, key, finish_at), free}
-      end)
+    finish_queue = fifo(Enum.filter(orders, &(&1.status in [:queued_prep, :prep, :queued_finish])) ++ new, release)
+    finish_end = schedule(finish_queue, finish_free, release, & &1.finish_ms)
 
     done_at = fn o ->
-      case o.stage do
+      case o.status do
         :finish -> o.stage_done_at
-        :ready -> now
+        :ready -> o.ready_at
         _ -> finish_end[o.id]
       end
     end
 
-    # 3. Counter: items are ready when their last component is.
-    counter = state.stalls[stall_id] |> Map.get(:counter)
+    # 3. Counter: an item is ready when its last component is.
+    counter = Map.get(state.stalls[stall_id], :counter)
     in_hand = counter && counter.item
 
-    existing_items =
-      orders
+    items =
+      (orders ++ new)
       |> Enum.group_by(&item_key/1)
       |> Map.delete(in_hand)
-      |> Enum.map(fn {key, os} -> {os |> Enum.map(done_at) |> Enum.max(), 0, key} end)
+      |> Enum.map(fn {key, os} -> %{key: key, ready: os |> Enum.map(done_at) |> Enum.max(), seq: min_seq(os)} end)
+      |> fifo(& &1.ready)
 
-    new_ready = new |> Enum.map(&finish_end[&1.key]) |> Enum.max()
-
-    counter_free = if counter, do: counter.done_at, else: now
-
-    {handover_end, _} =
-      [{new_ready, 1, :new} | existing_items]
-      |> Enum.sort_by(fn {ready, rank, key} -> {ready, rank, key} end)
-      |> Enum.reduce({%{}, counter_free}, fn {ready, _rank, key}, {ends, free} ->
-        finish_at = max(free, ready) + handover
-        {Map.put(ends, key, finish_at), finish_at}
+    {ends, _free} =
+      Enum.reduce(items, {%{}, if(counter, do: counter.done_at, else: now)}, fn item, {ends, free} ->
+        finish_at = max(free, item.ready) + handover
+        {Map.put(ends, item.key, finish_at), finish_at}
       end)
 
-    %{earliest_completion: handover_end[:new]}
+    %{earliest_completion: ends[:new]}
   end
+
+  @doc """
+  The next piece of work the stall can start at hall time `state.now`, or
+  `nil`: `{:prep, order_id}` or `{:finish, order_id}` when a station is free
+  and its queue is not empty, otherwise `{:handover, item}` when the counter
+  is free and an item has all components ready. Callers apply the started
+  work and ask again until `nil`.
+  """
+  def next_start(state, stall_id) do
+    %{prep_stations: prep_n, finish_stations: finish_n} = state.catalog.rules.kitchen
+    orders = live_orders(state, stall_id)
+    count = fn status -> Enum.count(orders, &(&1.status == status)) end
+
+    cond do
+      count.(:prep) < prep_n and count.(:queued_prep) > 0 ->
+        {:prep, head(orders, :queued_prep).id}
+
+      count.(:finish) < finish_n and count.(:queued_finish) > 0 ->
+        {:finish, head(orders, :queued_finish).id}
+
+      Map.get(state.stalls[stall_id], :counter) == nil ->
+        orders
+        |> Enum.group_by(&item_key/1)
+        |> Enum.filter(fn {_key, os} -> Enum.all?(os, &(&1.status == :ready)) end)
+        |> Enum.map(fn {key, os} ->
+          %{key: key, ready: os |> Enum.map(& &1.ready_at) |> Enum.max(), seq: min_seq(os)}
+        end)
+        |> fifo(& &1.ready)
+        |> case do
+          [first | _] -> {:handover, first.key}
+          [] -> nil
+        end
+
+      true ->
+        nil
+    end
+  end
+
+  @doc "Stall IDs holding live kitchen work, sorted."
+  def busy_stalls(state) do
+    state.orders
+    |> Map.values()
+    |> Enum.filter(&(&1.status in @stages))
+    |> Enum.map(&stall_of(state, &1))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  @doc "The sequence number the evolver gives the next accepted order."
+  def next_seq(state), do: map_size(state.orders)
 
   @doc """
   Whether the stall can take another customer order: accepted-but-unserved
@@ -112,7 +161,7 @@ defmodule FeudHall.Domain.Kitchen do
 
     desserts =
       Enum.count(state.orders, fn {_id, o} ->
-        o.kind == :dessert and o.status not in @finished and stall_of(state, o) == stall_id
+        o.kind == :dessert and o.status in @stages and stall_of(state, o) == stall_id
       end)
 
     trays + desserts < state.catalog.rules.kitchen.queue_limit
@@ -123,23 +172,36 @@ defmodule FeudHall.Domain.Kitchen do
   defp live_orders(state, stall_id) do
     state.orders
     |> Map.values()
-    |> Enum.filter(&(Map.has_key?(&1, :stage) and &1.status not in @finished and stall_of(state, &1) == stall_id))
+    |> Enum.filter(&(&1.status in @stages and stall_of(state, &1) == stall_id))
   end
 
   defp stall_of(state, order), do: get_in(state, [:visits, order.visit, :stall])
 
+  defp head(orders, status), do: orders |> Enum.filter(&(&1.status == status)) |> fifo(& &1.queued_at) |> hd()
+
+  # The one FIFO order every queue uses: by time, then acceptance sequence.
+  defp fifo(jobs, time), do: Enum.sort_by(jobs, &{time.(&1), &1.seq})
+
+  defp min_seq(orders), do: orders |> Enum.map(& &1.seq) |> Enum.min()
+
+  defp item_key(%{item: :new}), do: :new
   defp item_key(%{kind: :dessert, id: id}), do: {:dessert, id}
   defp item_key(%{tray: tray}), do: {:tray, tray}
 
   # Station free times, padded with `now` up to the station count.
   defp pad(free, n, now), do: free ++ List.duplicate(now, max(n - length(free), 0))
 
-  # Starts a job at the earliest-free station (not before `release`); returns
-  # its end and the updated station free times.
-  defp assign(free, release, duration) do
-    {earliest, rest} = pop_min(free)
-    finish_at = max(earliest, release) + duration
-    {finish_at, [finish_at | rest]}
+  # Runs FIFO-ordered jobs on the earliest-free station, each not before its
+  # release; returns each job's end time.
+  defp schedule(jobs, free, release, duration) do
+    {ends, _free} =
+      Enum.reduce(jobs, {%{}, free}, fn job, {ends, free} ->
+        {earliest, rest} = pop_min(free)
+        finish_at = max(earliest, release.(job)) + duration.(job)
+        {Map.put(ends, job.id, finish_at), [finish_at | rest]}
+      end)
+
+    ends
   end
 
   defp pop_min(list) do

@@ -55,6 +55,7 @@ defmodule FeudHall.Domain.Hall.Admission do
             restaurant_id: quote.restaurant_id,
             stall_id: quote.stall_id,
             deadline: deadline,
+            estimated_completion: quote.earliest_completion,
             components: components
           }
 
@@ -75,7 +76,16 @@ defmodule FeudHall.Domain.Hall.Admission do
          {:ok, funding} <- fund_dessert(state, visit, quote),
          batches = state.restaurants[visit.restaurant].batches,
          {:ok, [order]} <- reserve_components(batches, quote.components, funding, state.now, entity_id) do
-      {:ok, [%{type: :dessert_accepted, visit_id: visit.id, deadline: deadline, order: order}]}
+      {:ok,
+       [
+         %{
+           type: :dessert_accepted,
+           visit_id: visit.id,
+           deadline: deadline,
+           estimated_completion: quote.earliest_completion,
+           order: order
+         }
+       ]}
     end
   end
 
@@ -131,7 +141,18 @@ defmodule FeudHall.Domain.Hall.Admission do
         {:ok, claims} ->
           order =
             c
-            |> Map.take([:kind, :recipe_id, :recipe_version, :price, :lines, :penalty, :quality, :carbs_mg])
+            |> Map.take([
+              :kind,
+              :recipe_id,
+              :recipe_version,
+              :price,
+              :lines,
+              :penalty,
+              :quality,
+              :carbs_mg,
+              :prep_ms,
+              :finish_ms
+            ])
             |> Map.merge(%{order_id: "O:#{entity_id}:#{c.kind}", reservations: claims, funding: slices})
 
           {:cont, {:ok, acc ++ [order], Inventory.adjust_reserved(batches, claims, 1)}}
