@@ -20,6 +20,22 @@ env:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGHOST: localhost
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
@@ -36,6 +52,7 @@ jobs:
       - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
       # Full suite runs in hosted CI only; locally, run focused files.
+      # Local full runs need the owner's permission.
       - run: mix test --warnings-as-errors
 
   mutation:
@@ -43,6 +60,22 @@ jobs:
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGHOST: localhost
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
