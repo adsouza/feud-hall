@@ -108,26 +108,40 @@ suite or any indirect `tsc` execution.
 ## Implemented backend entry points
 
 Run from `server/` with Elixir/OTP pinned in `server/.tool-versions` and
-dependencies locked in `server/mix.lock` (StreamData, test-only). The project
-defines no Mix aliases, so these commands have no hidden child steps.
+dependencies locked in `server/mix.lock` (Ecto, Postgrex, and test-only
+StreamData). The only Mix alias is `test`, which runs `ecto.create --quiet` and
+`ecto.migrate --quiet` and then `test`; every `mix test` therefore needs the
+PostgreSQL server below.
+
+PostgreSQL requirement: use the system PostgreSQL server on `localhost:5432`
+(never start another server or a container). Connection settings come from
+`PGUSER` (default: the OS user), `PGPASSWORD`, `PGHOST` (default `localhost`),
+and `PGPORT` (default `5432`). Databases: `feud_hall_dev`, `feud_hall_test`
+(override with `FEUD_HALL_TEST_DB`), and `feud_hall_mutation` (used only by the
+mutation cohort). Database test modules are `async: false`, start from
+truncated tables, and never share rows; keep destructive setup on these
+disposable databases.
 
 | Check | Command | Scope and cost |
 | --- | --- | --- |
-| Dependencies | `mix deps.get` (CI: `--check-locked`) | Fetches StreamData only. |
+| Dependencies | `mix deps.get` (CI: `--check-locked`) | Fetches Ecto, Postgrex, StreamData. |
 | Formatting | `mix format`; CI: `mix format --check-formatted` | `.formatter.exs` covers `lib`, `test`, `scripts`, and Mix files. |
-| Compile | `mix compile --warnings-as-errors` | Pure Elixir, no NIFs or network. |
-| Focused tests | `mix test <file> --max-cases 1` | One file at a time locally; each domain file runs in well under a second. |
-| Model-based property | `mix test test/feud_hall/properties/hall_trace_property_test.exs --max-cases 1` | Explicit budget: 100 runs, at most 70 actions; measured about 130 MB peak RSS locally. |
-| Full suite | `mix test` | Hosted CI. Locally only with the owner's advance permission. |
-| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>` | Copies the project into `<empty-dir>`, never edits the checkout; one worker, focused files per mutant, baseline verified before and after. Hosted CI job; about 20 s and under 100 MB RSS locally. |
+| Compile | `mix compile --warnings-as-errors`; also `MIX_ENV=test mix compile --warnings-as-errors` | Pure Elixir, no NIFs. |
+| Focused tests | `mix test <file> --max-cases 1` | One file at a time. PostgreSQL files (`postgres_*`, `hall_authority`, `daily_activity_projector`, `projection`, `schema`, `snapshot_store`, `recovery`) run against `feud_hall_test` after the alias creates and migrates it. |
+| Model-based property (M1) | `mix test test/feud_hall/properties/hall_trace_property_test.exs --max-cases 1` | Pure; 100 runs, at most 70 actions; about 130 MB peak RSS locally. |
+| Model-based property (PostgreSQL) | `mix test test/feud_hall/properties/postgres_trace_property_test.exs --max-cases 1` | Replays pure traces through `CommandWorkflow` on PostgreSQL with snapshots, restarts, aborted commits, and lost replies; structural floors on injections and served trays; checks projection rebuild and genesis replay at the end. |
+| Full suite | `mix test --max-cases 1 [--seed N]` | Locally permitted only because the owner gave advance permission on 2026-11-09, serially, with combined `beam.smp` and `postgres` RSS sampled every second and the run killed above 2 GiB. Otherwise hosted CI. |
+| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>` | Copies the project into `<empty-dir>`, never edits the checkout, and runs mutants with `MIX_ENV=test` against `feud_hall_mutation`; one worker, focused files per mutant, baseline verified before and after. Hosted CI job. |
+| Projection rebuild (maintenance) | `PostgresEventStore.rebuild_projections/1`, `Postgres.DailyActivityProjector.rebuild/1` | Recompute derived tables from the log. Not a Mix task and exercised by tests only; never point it at a live hall without an operations procedure. |
 
-The property test checks the independent oracle (`test/support/oracle.ex`) after
-every accepted command, then genesis replay, snapshot-plus-tail replay, JSON
-codec round-trip replay, and clock-partition equivalence, and asserts
+The M1 property test checks the independent oracle (`test/support/oracle.ex`)
+after every accepted command, then genesis replay, snapshot-plus-tail replay,
+JSON codec round-trip replay, and clock-partition equivalence, and asserts
 cross-run progress floors so an all-rejected trace cannot pass. The mutation
 cohort's curated faults each name the test file expected to kill them; a
 compile failure is reported as invalid and a timeout as a timeout, never as a
-kill.
+kill. Architecture checks (`test/feud_hall/architecture_test.exs`) guard the
+domain and application dependency direction and the storage boundaries.
 
 ## Choose checks by change
 

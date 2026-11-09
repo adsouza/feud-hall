@@ -959,14 +959,16 @@ the picker or its list alternative.
 
 ## Implementation status
 
-Milestone 1 (economic core) has an internal one-cuisine slice in `server/`.
-It qualifies none of the capacity, recovery, or PostgreSQL contracts above.
+Milestone 1 (economic core) built an internal one-cuisine slice in `server/`;
+Milestone 2A adds durable PostgreSQL storage for it. Together they qualify the
+event-store, recovery, fencing, and projection contracts above for that slice.
+They do not qualify capacity, the full market, or any online surface.
 
 | Layer | Modules |
 | --- | --- |
-| Domain (pure) | `FeudHall.Domain.Money`, `Clock`, `Content` (+ `SliceCatalog`), `Dietary`, `Substitution`, `Inventory`, `Offers`, and the hall boundary `Hall` with `Decider`, `Evolver`, `Advance`, `Settlement` |
-| Application | `CommandWorkflow` (validation, fingerprinted receipts, separate clock-advance batch, decide, append) and the `EventStore` port |
-| Infrastructure | `InMemoryEventStore` (with failure injection), `EventCodec` (allowlisted JSON), `Snapshot` (versioned, checksummed) |
+| Domain (pure) | `FeudHall.Domain.Money`, `Clock`, `Content` (+ `SliceCatalog`), `Dietary`, `Substitution`, `Inventory`, `Offers`; the hall boundary `Hall` with `Decider`, `Evolver`, `Advance`, `Settlement`, `Invariants`; and `Control` (the availability/recovery control stream) |
+| Application | `CommandWorkflow` (validation, fingerprinted receipts, separate clock-advance batch, decide, append, `resolve/2` for uncertain appends), the `EventStore` port, `Recovery` (snapshot-then-tail rebuild plus the idempotent reconciliation batch), `Diagnostics`, `MonotonicClock`, and the projections `Projections.Balances` and `Projections.DailyActivity` |
+| Infrastructure | `Repo`, `PostgresEventStore` (migrations in `server/priv/repo/migrations`), `Postgres.DailyActivityProjector`, `InMemoryEventStore` (failure injection; the second adapter for the shared port contract), `EventCodec` (allowlisted JSON), `Snapshot` (versioned, checksummed), `HallAuthority`, `Diagnostics.MemorySink` and `Diagnostics.Exporter`, `SystemClock`, `ManualClock` |
 
 Implementation decisions within the contracts above:
 
@@ -983,10 +985,56 @@ Implementation decisions within the contracts above:
   staff coverage, and purchases fill directly at the catalog base price until
   the batched scarcity-priced market lands. Both already emit the same facts
   the later mechanisms will produce.
+- **One hall per database.** Milestone 2 stores exactly one hall's global log
+  per PostgreSQL database; `read_from/2` returns the whole log. Multi-hall
+  hosting needs a hall key on every table and is a later decision.
+- **Append order.** A PostgreSQL append locks the append head, checks the
+  authority epoch, then checks the expected position, so a fenced owner gets
+  `:fenced` rather than a position conflict. A `lock_timeout` turns a stuck
+  writer into `{:error, :unavailable}`. Each batch records its `event_count`;
+  reads verify it and report `{:event_count_mismatch, recorded, found}` instead
+  of replaying a torn batch.
+- **Authority acquisition.** `acquire_authority/4` may carry an expected epoch;
+  the bump happens only if the stored epoch equals it. It also succeeds when the
+  row already shows the same owner at exactly the expected epoch plus one, which
+  recognises that owner's own acquisition whose reply was lost. That makes owner
+  names identify one authority incarnation: production owner names must be
+  unique per incarnation (32 bytes at most).
+- **Control stream and recovery identity.** Availability transitions live in a
+  separate control stream. Starting an epoch is recorded only by
+  `start_availability`; reconciliation is keyed by an epoch-independent
+  `recovery_id`, so every owner retrying the same interrupted recovery sends an
+  identical fingerprint and gets the original receipt. `Control` rejects any
+  other recovery ID as not pending.
+- **Projector checkpoint.** The asynchronous daily-activity projector advances
+  its checkpoint only from the exact predecessor position (contiguous batch
+  positions) in the same transaction as its deltas, so concurrent or repeated
+  runs cannot double-count. `PostgresEventStore.rebuild_projections/1` and
+  `Postgres.DailyActivityProjector.rebuild/1` recompute derived tables from the
+  log.
+- **Snapshots, evolution 2.** A snapshot encodes the hall and control states at
+  a position and is accepted only for the current evolution version; version 1
+  (hall only) is rejected as incompatible. Recovery uses only verified
+  snapshots, skips one beyond the store head, and falls back to older ones or
+  genesis. Snapshots never justify skipping history that fails to replay.
+- **Unavailable storage.** Connection errors surface as `{:error, :unavailable}`
+  from every port call. The authority freezes its clocks at the last committed
+  boundary and, after more than five unobserved seconds, recovers instead of
+  charging the gap.
 
-Not yet implemented: the PostgreSQL adapter and projections, market clearing,
-simulated arrivals and choice, workforce/helpers and wages, rent and leases,
-identity/invitations/licensing, reports, NPCs, Phoenix, and every client.
+Not yet implemented, and therefore not qualified:
+
+- Project B: the batched market, simulated diners and choice, kitchen jobs and
+  staffing, helpers and wages, rent and leases, reports, and NPCs.
+- Project C: the 150-stall capacity and latency measurements; no performance
+  claim exists yet.
+- The outbox delivery worker (intents are committed atomically but nothing
+  delivers them) and production wiring of authorities: the application
+  supervises the `Repo` and an empty authority `DynamicSupervisor`, but nothing
+  starts a `HallAuthority` outside tests, and owner-name allocation is
+  unspecified.
+- Identity, invitations, licensing, Phoenix, Channels, deployment on Render,
+  and every client.
 
 ## Architecture verification
 
