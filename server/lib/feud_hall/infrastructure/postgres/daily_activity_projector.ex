@@ -4,8 +4,9 @@ defmodule FeudHall.Infrastructure.Postgres.DailyActivityProjector do
 
   Runs on its own connection after the appends have committed; it never takes the append-head lock,
   so it cannot block writers. Each batch is applied in its own transaction: the checkpoint row
-  `"daily_activity"` advances only if it is still below the batch's position (zero rows means the
-  batch was already applied, so nothing is added), then the batch's deltas are added to
+  `"daily_activity"` advances only if it is exactly one below the batch's position, which relies on
+  batch positions being contiguous (the append head moves by one per stored batch). Zero rows means
+  the batch was already applied or arrived out of order, so nothing is added, then the batch's deltas are added to
   `daily_activity`. Both writes commit together or not at all, so a crash leaves the rows and the
   checkpoint unapplied and a redelivered batch adds once. Batches are applied in position order.
 
@@ -41,14 +42,15 @@ defmodule FeudHall.Infrastructure.Postgres.DailyActivityProjector do
     end
   end
 
-  @doc "Applies one batch atomically with its checkpoint advance; a batch at or below the checkpoint is skipped."
+  @doc "Applies one batch atomically with its checkpoint advance; a batch already applied or ahead of the next one is skipped."
   @spec apply_batch(module(), map(), keyword()) :: :applied | :skipped
   def apply_batch(repo, %{position: position} = batch, opts \\ []) do
     {:ok, result} =
       repo.transaction(fn ->
-        case repo.query!("update projector_checkpoints set position = $1 where name = $2 and position < $1", [
+        case repo.query!("update projector_checkpoints set position = $1 where name = $2 and position = $3", [
                position,
-               @name
+               @name,
+               position - 1
              ]) do
           %{num_rows: 0} ->
             :skipped

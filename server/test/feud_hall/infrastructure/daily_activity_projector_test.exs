@@ -171,6 +171,39 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
     assert checkpoint() == [[batch.position]]
   end
 
+  defp project(projected) do
+    for [day, r, visits, trays] <- projected, reduce: %{} do
+      acc -> acc |> Map.put({day, r, :visit_admitted}, visits) |> Map.put({day, r, :tray_accepted}, trays)
+    end
+    |> Map.reject(fn {_, n} -> n == 0 end)
+  end
+
+  test "batch positions in a world are contiguous from 1 to the head" do
+    rt = world(3)
+    {:ok, batches} = Store.read_from(rt.store, 0)
+    assert Enum.map(batches, & &1.position) == Enum.to_list(1..Store.head(rt.store))
+  end
+
+  test "a batch delivered ahead of the checkpoint is skipped, and catch_up then applies the gap in order" do
+    rt = world(3)
+    {:ok, batches} = Store.read_from(rt.store, 0)
+    {early, [gap, ahead]} = Enum.split(batches, -2)
+    assert Enum.any?(ahead.events, &(&1.type == :visit_admitted))
+
+    Repo.query!("insert into projector_checkpoints (name, position) values ('daily_activity', 0)")
+    for batch <- early, do: assert(:applied = Projector.apply_batch(Repo, batch))
+    assert checkpoint() == [[gap.position - 1]]
+    rows = activity()
+
+    assert :skipped = Projector.apply_batch(Repo, ahead)
+    assert checkpoint() == [[gap.position - 1]]
+    assert activity() == rows
+
+    head = Store.head(rt.store)
+    assert {:ok, ^head} = Projector.catch_up(Repo)
+    assert project(activity()) == counted(rt.store)
+  end
+
   test "killing the projector inside the transaction leaves deltas and checkpoint unapplied" do
     rt = world(2)
     head = Store.head(rt.store)
