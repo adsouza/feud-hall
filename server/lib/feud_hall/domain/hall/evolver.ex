@@ -9,6 +9,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
   Fact ownership inside the hall boundary:
 
   * hall: clock, cleaning gate, visitor fund
+  * wholesale market: stock, pending purchase requests, batch number, and the
+    next clearing instant (see `FeudHall.Domain.Market`)
   * restaurant: cash/ledger, warehouse batches, unlocks, menu, policies;
     its stall's mode and counter handover
   * customer visit: requirement bundle, carbohydrate commitments, course slots,
@@ -22,7 +24,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
   holds after every event.
   """
 
-  alias FeudHall.Domain.{Inventory, Random}
+  alias FeudHall.Domain.{Inventory, Market, Random}
 
   @ledger %{cash: 0, raw: 0, wip: 0, cost_of_sales: 0, waste: 0, capex: 0, capital: 0, revenue: 0}
 
@@ -122,20 +124,39 @@ defmodule FeudHall.Domain.Hall.Evolver do
     end)
   end
 
-  def evolve(state, %{type: :stock_purchased} = e) do
-    batch = %{
-      id: e.batch_id,
-      product: e.product,
-      product_version: e.product_version,
-      qty: e.qty,
-      reserved: 0,
-      cost: e.cost,
-      expires_at: e.expires_at
-    }
+  # Milestone 1 instant purchase, kept for historical replay.
+  def evolve(state, %{type: :stock_purchased} = e), do: receive_stock(state, e)
 
-    state
-    |> put_in([:restaurants, e.restaurant_id, :batches, e.batch_id], batch)
-    |> post(e.restaurant_id, cash: -e.cost, raw: e.cost)
+  def evolve(state, %{type: :purchase_requested} = e) do
+    request =
+      e
+      |> Map.take([:restaurant_id, :product, :qty, :max_price_per_kunit])
+      |> Map.put(:submitted_at, state.now)
+
+    Map.update!(state, :market, &Market.put_request(&1, e.request_id, request))
+  end
+
+  def evolve(state, %{type: :purchase_request_cancelled, request_id: id}) do
+    Map.update!(state, :market, fn market ->
+      %{restaurant_id: r, product: p} = Map.fetch!(market.requests, id)
+      %{market | requests: Map.delete(market.requests, id), by_key: Map.delete(market.by_key, {r, p})}
+    end)
+  end
+
+  # Every pending request is settled by the clearing: filled, unfilled, or both.
+  def evolve(state, %{type: :market_cleared} = e) do
+    state = Enum.reduce(e.fills, state, &receive_stock(&2, &1))
+
+    Map.update!(state, :market, fn market ->
+      %{
+        market
+        | stock: Market.stock_after(market, e),
+          requests: %{},
+          by_key: %{},
+          batch: e.batch + 1,
+          next_clear_at: market.next_clear_at + clear_interval(state.catalog)
+      }
+    end)
   end
 
   def evolve(state, %{type: :stock_spoiled} = e) do
@@ -394,6 +415,23 @@ defmodule FeudHall.Domain.Hall.Evolver do
     end)
     |> post(rid, raw: -consumed_cost, wip: consumed_cost)
     |> update_in([:orders, order_id], &%{&1 | reservations: [], consumed_cost: consumed_cost})
+  end
+
+  # A purchased or filled lot enters the warehouse at its recorded cost.
+  defp receive_stock(state, e) do
+    batch = %{
+      id: e.batch_id,
+      product: e.product,
+      product_version: e.product_version,
+      qty: e.qty,
+      reserved: 0,
+      cost: e.cost,
+      expires_at: e.expires_at
+    }
+
+    state
+    |> put_in([:restaurants, e.restaurant_id, :batches, e.batch_id], batch)
+    |> post(e.restaurant_id, cash: -e.cost, raw: e.cost)
   end
 
   defp counter_item(%{kind: :tray, id: id}), do: {:tray, id}

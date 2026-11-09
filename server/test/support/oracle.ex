@@ -18,7 +18,8 @@ defmodule FeudHall.Oracle do
 
   def violations(state, events) do
     Enum.flat_map(state.restaurants, fn {rid, r} -> restaurant(state, rid, r, events) end) ++
-      orders(state) ++ visits(state) ++ wallets(state) ++ kitchens(state) ++ hall(state, events)
+      orders(state) ++
+      visits(state) ++ wallets(state) ++ kitchens(state) ++ hall(state, events) ++ market(state, events)
   end
 
   def assert_settled!(state, events) do
@@ -84,6 +85,7 @@ defmodule FeudHall.Oracle do
       case e do
         %{type: :starter_grant_issued, restaurant_id: ^rid, amount: a} -> %{t | granted: t.granted + a}
         %{type: :stock_purchased, restaurant_id: ^rid, cost: c} -> %{t | purchased: t.purchased + c}
+        %{type: :market_cleared, fills: fs} -> %{t | purchased: t.purchased + fill_cost(fs, rid)}
         %{type: :recipe_unlocked, restaurant_id: ^rid, cost: c} -> %{t | unlocked: t.unlocked + c}
         %{type: :stock_spoiled, restaurant_id: ^rid, cost: c} -> %{t | waste: t.waste + c}
         %{type: :tray_served, components: cs} -> sum_served(t, cs, rid, state)
@@ -94,6 +96,8 @@ defmodule FeudHall.Oracle do
       end
     end)
   end
+
+  defp fill_cost(fills, rid), do: fills |> Enum.filter(&(&1.restaurant_id == rid)) |> Enum.map(& &1.cost) |> Enum.sum()
 
   defp mine?(state, order_id, rid), do: state.visits[state.orders[order_id].visit].restaurant == rid
 
@@ -236,6 +240,62 @@ defmodule FeudHall.Oracle do
     ]
     |> failures()
   end
+
+  # Market conservation, replayed from the facts alone: the opening stock, less
+  # every fill in order (never driving a product below zero), is the market's
+  # stock now. Pending requests are those submitted and neither replaced,
+  # cancelled, nor settled by a later clearing; each clearing settles exactly
+  # the requests pending at it, and fill + unfilled = requested for each.
+  # Only checked over a log that starts at genesis.
+  defp market(state, [%{type: :hall_initialized} = genesis | _] = events) do
+    opening = get_in(genesis, [:market, :stock]) || %{}
+
+    {stock, pending, problems} =
+      Enum.reduce(events, {opening, %{}, []}, fn e, {stock, pending, problems} ->
+        case e do
+          %{type: :purchase_requested} ->
+            pending = pending |> Map.delete(e.replaces) |> Map.put(e.request_id, e.qty)
+            {stock, pending, problems}
+
+          %{type: :purchase_request_cancelled, request_id: id} ->
+            {stock, Map.delete(pending, id), problems}
+
+          %{type: :market_cleared, fills: fills, unfilled: unfilled} ->
+            stock = Enum.reduce(fills, stock, fn f, s -> Map.update(s, f.product, -f.qty, &(&1 - f.qty)) end)
+
+            settled =
+              Enum.reduce(fills ++ unfilled, %{}, fn x, acc -> Map.update(acc, x.request_id, x.qty, &(&1 + x.qty)) end)
+
+            new =
+              [
+                {Enum.all?(stock, fn {_, q} -> q >= 0 end), {:market_oversold, e.batch}},
+                {Enum.all?(Map.keys(settled), &Map.has_key?(pending, &1)), {:settled_unknown_request, e.batch}},
+                {Enum.all?(pending, fn {id, q} -> Map.get(settled, id, 0) == q end),
+                 {:request_not_settled_exactly, e.batch}}
+              ]
+              |> failures()
+
+            {stock, %{}, problems ++ new}
+
+          _ ->
+            {stock, pending, problems}
+        end
+      end)
+
+    conservation =
+      for product <- Enum.uniq(Map.keys(stock) ++ Map.keys(state.market.stock)),
+          Map.get(stock, product, 0) != Map.get(state.market.stock, product, 0),
+          do: {:market_stock_not_conserved, product}
+
+    pending_check =
+      if Enum.sort(Map.keys(pending)) == Enum.sort(Map.keys(state.market.requests)),
+        do: [],
+        else: [:pending_requests_mismatch]
+
+    problems ++ conservation ++ pending_check
+  end
+
+  defp market(_state, _events), do: []
 
   defp failures(checks), do: for({false, problem} <- checks, do: problem)
 end

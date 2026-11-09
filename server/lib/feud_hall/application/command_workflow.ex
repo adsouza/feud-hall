@@ -36,8 +36,9 @@ defmodule FeudHall.Application.CommandWorkflow do
   alias FeudHall.Domain.{Clock, Control, Hall}
 
   @commands ~w(initialize_hall advance_clock create_restaurant open_stall close_stall unlock_recipe
-               set_menu_price remove_menu_item set_substitution_policy purchase_stock grant_allowance
-               admit_visit cancel_tray accept_dessert decline_dessert cancel_dessert)a
+               set_menu_price remove_menu_item set_substitution_policy submit_purchase_request
+               cancel_purchase_request grant_allowance admit_visit cancel_tray accept_dessert decline_dessert
+               cancel_dessert)a
   @control_commands ~w(start_availability reconcile_recovery)a
 
   defstruct store_mod: nil,

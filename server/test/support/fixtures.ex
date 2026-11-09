@@ -35,14 +35,22 @@ defmodule FeudHall.Fixtures do
     advance(world, div(hall_ms, Clock.ratio()), "advh#{hall_ms}")
   end
 
-  @doc "A hall with alice's open restaurant fully unlocked and stocked."
+  @doc """
+  A hall with alice's open restaurant fully unlocked and stocked. The stock is
+  bought through purchase requests filled at the first market clearing (hall
+  time `clear_every_hall_ms`), so a stocked world starts at that instant; with
+  `stock: %{}` nothing is bought and the hall stays at time 0.
+  """
   def stocked_world(opts \\ []) do
-    opts
-    |> stocked_world_steps()
-    |> Enum.reduce({nil, []}, fn step, {state, _log} = world ->
-      {command, actor, id} = step.(state)
-      run!(world, command, actor, id)
-    end)
+    world =
+      opts
+      |> stocked_world_steps()
+      |> Enum.reduce({nil, []}, fn step, {state, _log} = world ->
+        {command, actor, id} = step.(state)
+        run!(world, command, actor, id)
+      end)
+
+    assert_filled!(world, Keyword.get(opts, :stock, default_stock()))
   end
 
   @doc """
@@ -80,6 +88,8 @@ defmodule FeudHall.Fixtures do
         fn state -> {purchase(product, qty), owner(), "buy-#{product}-#{state.now}"} end
       end)
 
+    purchases = if purchases == [], do: [], else: purchases ++ [&clearing_step/1]
+
     [
       fixed.({:initialize_hall, %{hall_id: "hall-1", catalog: catalog}}, {:system, :admin}, "init"),
       fixed.(
@@ -90,15 +100,16 @@ defmodule FeudHall.Fixtures do
     ] ++ unlocks ++ purchases ++ [fixed.({:open_stall, %{stall_id: @stall}}, owner(), "open")]
   end
 
+  @doc "The default stock: every quantity fits in the market's opening stock."
   def default_stock do
     %{
       "corn_tortilla" => 40,
       "black_beans_dried" => 1_200,
-      "salsa_roja" => 1_500,
+      "salsa_roja" => 1_200,
       "salsa_verde" => 800,
       "onion" => 600,
       "cilantro" => 200,
-      "chicken_thigh" => 2_000,
+      "chicken_thigh" => 1_200,
       "flour_tortilla" => 20,
       "queso_oaxaca" => 1_000,
       "peppers" => 1_000,
@@ -110,18 +121,56 @@ defmodule FeudHall.Fixtures do
     }
   end
 
+  @doc """
+  Submits one purchase request per product, advances to the next market
+  clearing, and asserts every request was filled in full.
+  """
   def stock(world, stock) do
     stock
     |> Enum.sort()
     |> Enum.reduce(world, fn {product, qty}, w ->
-      buy(w, product, qty, "buy-#{product}-#{elem(w, 0).now}")
+      run!(w, purchase(product, qty), owner(), "buy-#{product}-#{elem(w, 0).now}")
     end)
+    |> to_clearing()
+    |> assert_filled!(stock)
   end
 
-  def buy(world, product, qty, id), do: run!(world, purchase(product, qty), owner(), id)
+  @doc "Like `stock/2` for one product under command ID `id`."
+  def buy(world, product, qty, id) do
+    world
+    |> run!(purchase(product, qty), owner(), id)
+    |> to_clearing()
+    |> assert_filled!(%{product => qty})
+  end
+
+  @doc "Advances to the next market clearing."
+  def to_clearing({state, _} = world) do
+    {command, actor, id} = clearing_step(state)
+    run!(world, command, actor, id)
+  end
+
+  defp clearing_step(state) do
+    at = state.market.next_clear_at
+    {{:advance_clock, %{to_service_ms: div(at, Clock.ratio())}}, {:system, :scheduler}, "clear#{at}"}
+  end
+
+  # The last clearing in the log filled each product's request in full.
+  defp assert_filled!({_state, log} = world, stock) do
+    if stock != %{} do
+      %{fills: fills, unfilled: unfilled} = log |> Enum.filter(&(&1.type == :market_cleared)) |> List.last()
+
+      for {product, qty} <- stock do
+        filled = for %{restaurant_id: "r1", product: ^product, qty: q} <- fills, do: q
+        assert Enum.sum(filled) == qty, "#{product}: filled #{inspect(filled)} of #{qty}; unfilled #{inspect(unfilled)}"
+      end
+    end
+
+    world
+  end
 
   defp purchase(product, qty),
-    do: {:purchase_stock, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
+    do:
+      {:submit_purchase_request, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
 
   def simulated_visit(world, id, main, drink \\ nil, profile \\ "unrestricted", budget \\ 10_000) do
     run!(

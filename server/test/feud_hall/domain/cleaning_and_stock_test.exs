@@ -102,10 +102,11 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
     test "raw stock expiring before preparation cancels the tray when no replacement exists" do
       # Six queued mains; two prep stations take two a minute, so the last two
       # still hold cilantro claims when it expires at 2 minutes.
-      w = cilantro_queue()
-      {state, _} = advance_hall(w, Clock.minute())
+      w = cilantro_queue(2 * Clock.minute())
+      {queued, _} = w
+      {state, _} = advance_hall(w, queued.now + Clock.minute())
       cilantro = state.restaurants["r1"].batches |> Map.values() |> Enum.find(&(&1.product == "cilantro"))
-      assert cilantro.expires_at == 2 * Clock.minute()
+      assert cilantro.expires_at == queued.now + 2 * Clock.minute()
 
       {state, events} = advance_hall(w, cilantro.expires_at)
 
@@ -127,9 +128,13 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
     end
 
     test "with a fresh batch available the expiring claim moves instead of cancelling" do
-      w = cilantro_queue() |> advance_hall(Clock.minute()) |> buy("cilantro", 10, "fresh")
+      # The fresh batch arrives at the next market clearing, four minutes after
+      # the stocked world's; the queue is built then, two minutes before the
+      # first batch expires, so the same two mains still hold claims at expiry.
+      w = cilantro_queue(6 * Clock.minute(), &buy(&1, "cilantro", 10, "fresh"))
       {state, _} = w
       old = state.restaurants["r1"].batches |> Map.values() |> Enum.min_by(& &1.expires_at)
+      assert old.expires_at == state.now + 2 * Clock.minute()
 
       {state, events} = advance_hall(w, old.expires_at)
       [main] = state.trays[tray_id("visit-d6")].components
@@ -288,16 +293,16 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       w = stocked_world()
       {state, _} = w
 
-      assert {:error, :price_above_limit} =
-               Hall.decide(state, purchase("rice_long", 10, 1), ctx(owner(), "p1"))
-
-      assert {:error, :insufficient_storage} =
-               Hall.decide(state, purchase("rice_long", 400_000, 1_000_000), ctx(owner(), "p2"))
-
+      # Quantities are validated at submission; limits, storage and cash at clearing.
       assert {:error, :invalid_quantity} = Hall.decide(state, purchase("rice_long", 0, 1_000_000), ctx(owner(), "p3"))
 
-      poor = put_in(state, [:restaurants, "r1", :ledger, :cash], 1)
-      assert {:error, :insufficient_cash} = Hall.decide(poor, purchase("rice_long", 10, 1_000_000), ctx(owner(), "p4"))
+      assert [%{reason: :price_above_limit, qty: 10}] = unfilled_at_clearing(w, purchase("rice_long", 10, 1))
+
+      assert %{reason: :insufficient_storage} =
+               w |> unfilled_at_clearing(purchase("rice_long", 400_000, 1_000_000)) |> hd()
+
+      poor = {put_in(state, [:restaurants, "r1", :ledger, :cash], 0), []}
+      assert [%{reason: :insufficient_cash, qty: 10}] = unfilled_at_clearing(poor, purchase("rice_long", 10, 1_000_000))
     end
 
     test "a rival owner cannot spend, price, or reconfigure another restaurant" do
@@ -352,14 +357,22 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
     )
   end
 
-  defp cilantro_queue do
-    catalog =
-      update_in(SliceCatalog.catalog(), [:products, "cilantro", :shelf_life_ms], fn _ -> 2 * Clock.minute() end)
-
+  # Six queued bean taco mains accepted at once, after `before_queue` has run on
+  # a stocked world whose cilantro keeps for `shelf_ms`.
+  defp cilantro_queue(shelf_ms, before_queue \\ & &1) do
+    catalog = put_in(SliceCatalog.catalog(), [:products, "cilantro", :shelf_life_ms], shelf_ms)
     rules = %{catalog.rules | service_window_ms: 2 * Clock.hour()}
-    Enum.reduce(1..6, stocked_world(catalog: %{catalog | rules: rules}), &simulated_visit(&2, "d#{&1}", "bean_tacos"))
+    w = before_queue.(stocked_world(catalog: %{catalog | rules: rules}))
+    Enum.reduce(1..6, w, &simulated_visit(&2, "d#{&1}", "bean_tacos"))
+  end
+
+  # Submits `request` and returns its unfilled entries at the next clearing.
+  defp unfilled_at_clearing(world, request) do
+    {_, events} = world |> run!(request, owner(), "req") |> to_clearing()
+    %{unfilled: unfilled} = events |> Enum.filter(&(&1.type == :market_cleared)) |> List.last()
+    Enum.filter(unfilled, &(&1.request_id == "PR:req"))
   end
 
   defp purchase(product, qty, limit),
-    do: {:purchase_stock, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: limit}}
+    do: {:submit_purchase_request, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: limit}}
 end

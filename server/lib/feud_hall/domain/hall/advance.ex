@@ -15,7 +15,8 @@ defmodule FeudHall.Domain.Hall.Advance do
        deadline wins);
     5. the 05:00 reopening of customer access;
     6. the day boundary (reserved);
-    7. market clearing (reserved);
+    7. market clearing every `clear_every_hall_ms`, cleaning included: one
+       `market_cleared` batch that settles every pending purchase request;
     8. arrivals (reserved);
     9. kitchen dispatch: start queued stages on free stations and select the
        counter's next ready item, only while customer access is open.
@@ -28,7 +29,7 @@ defmodule FeudHall.Domain.Hall.Advance do
   batch commits.
   """
 
-  alias FeudHall.Domain.{Clock, Inventory, Kitchen}
+  alias FeudHall.Domain.{Clock, Inventory, Kitchen, Market}
   alias FeudHall.Domain.Hall.{Evolver, Settlement}
 
   @doc "Returns the events that advance `state` to hall time `target`."
@@ -37,7 +38,7 @@ defmodule FeudHall.Domain.Hall.Advance do
   @doc """
   The boundary classes in same-timestamp order: `{class, due_fun}` where
   `due_fun.(state)` lists `{at, entity_id, ref}`. Later work plugs in its own
-  class (6 day boundary, 7 market clearing, 8 arrivals) here.
+  class (6 day boundary, 8 arrivals) here.
   """
   def classes do
     [
@@ -46,6 +47,7 @@ defmodule FeudHall.Domain.Hall.Advance do
       {3, &kitchen_completions/1},
       {4, &deadlines/1},
       {5, &reopening/1},
+      {7, &market_clearing/1},
       {9, &dispatch/1}
     ]
   end
@@ -122,6 +124,14 @@ defmodule FeudHall.Domain.Hall.Advance do
     do: [{Clock.cleaning_end_of(Clock.day_of(now)), "cleaning", {:cleaning_end}}]
 
   defp reopening(_state), do: []
+
+  # Class 7: every `clear_every_hall_ms`, cleaning included, whether or not
+  # requests are pending. Halls recorded without market rules never clear.
+  defp market_clearing(%{market: %{next_clear_at: at}, catalog: %{rules: %{market: %{clear_every_hall_ms: n}}}})
+       when is_integer(n) and n > 0,
+       do: [{at, "market", {:market_clear}}]
+
+  defp market_clearing(_state), do: []
 
   # Class 9.
   defp dispatch(%{access: :open} = state) do
@@ -207,6 +217,8 @@ defmodule FeudHall.Domain.Hall.Advance do
       {:dessert, oid} -> Settlement.serve_dessert(state, state.orders[oid])
     end
   end
+
+  defp handle(state, {:market_clear}), do: [Market.clear(state)]
 
   defp handle(state, {:dispatch, sid}), do: dispatch_stall(state, sid, [])
 

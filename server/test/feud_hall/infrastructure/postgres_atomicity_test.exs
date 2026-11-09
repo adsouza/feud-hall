@@ -163,7 +163,7 @@ defmodule FeudHall.Infrastructure.PostgresAtomicityTest do
     defp env(id, command), do: %{command_id: id, actor: {:principal, "alice"}, command: command}
 
     defp purchase(qty),
-      do: {:purchase_stock, %{restaurant_id: "r1", product: "rice_long", qty: qty, max_price_per_kunit: 1_000}}
+      do: {:submit_purchase_request, %{restaurant_id: "r1", product: "rice_long", qty: qty, max_price_per_kunit: 1_000}}
 
     defp runtime do
       {:ok, rt} = Workflow.open(PostgresEventStore, fresh_store())

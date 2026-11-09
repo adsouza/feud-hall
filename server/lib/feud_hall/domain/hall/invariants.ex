@@ -13,11 +13,16 @@ defmodule FeudHall.Domain.Hall.Invariants do
       claims of the restaurant's still-reserved orders, and no claim names a
       batch the restaurant no longer holds;
     * every tray component names an existing order;
-    * the access gate matches the cleaning calendar (`Clock.cleaning?/1`).
+    * the access gate matches the cleaning calendar (`Clock.cleaning?/1`);
+    * the market's pending purchase requests and their `{restaurant, product}`
+      index agree, each names an existing restaurant, market stock is never
+      negative, and the next clearing lies after the clock.
 
   Problems are terms naming the broken invariant: `{restaurant_id, problem}`
-  for restaurant checks, `{:missing_tray_component, tray_id, order_id}`, and
-  `{:access_gate_mismatch, hall_ms}`.
+  for restaurant checks, `{:missing_tray_component, tray_id, order_id}`,
+  `{:access_gate_mismatch, hall_ms}`, `{:unindexed_purchase_request, id}`,
+  `{:dangling_request_index, id}`, `{:request_for_unknown_restaurant, id}`,
+  `{:negative_market_stock, product}`, and `{:market_clearing_overdue, at}`.
   """
 
   alias FeudHall.Domain.Clock
@@ -26,7 +31,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   def check(nil), do: :ok
 
   def check(state) do
-    case restaurants(state) ++ trays(state) ++ access(state) do
+    case restaurants(state) ++ trays(state) ++ access(state) ++ market(state) do
       [] -> :ok
       problems -> {:error, problems}
     end
@@ -84,6 +89,37 @@ defmodule FeudHall.Domain.Hall.Invariants do
         not Map.has_key?(state.orders, oid),
         do: {:missing_tray_component, tid, oid}
   end
+
+  # Pending requests and their one-per-key index agree, each names an existing
+  # restaurant (clearing funds it from that restaurant), stock is never
+  # negative, and the next clearing is still ahead of the clock.
+  defp market(%{market: market} = state) do
+    indexed =
+      for {id, r} <- Enum.sort(market.requests),
+          Map.get(market.by_key, {r.restaurant_id, r.product}) != id,
+          do: {:unindexed_purchase_request, id}
+
+    dangling =
+      for {{r, p}, id} <- Enum.sort(market.by_key),
+          not match?(%{restaurant_id: ^r, product: ^p}, Map.get(market.requests, id)),
+          do: {:dangling_request_index, id}
+
+    orphaned =
+      for {id, r} <- Enum.sort(market.requests),
+          not Map.has_key?(state.restaurants, r.restaurant_id),
+          do: {:request_for_unknown_restaurant, id}
+
+    negative = for {product, qty} <- Enum.sort(market.stock), qty < 0, do: {:negative_market_stock, product}
+
+    overdue =
+      if clears?(state) and market.next_clear_at <= state.now,
+        do: [{:market_clearing_overdue, market.next_clear_at}],
+        else: []
+
+    indexed ++ dangling ++ orphaned ++ negative ++ overdue
+  end
+
+  defp clears?(state), do: (get_in(state.catalog, [:rules, :market, :clear_every_hall_ms]) || 0) > 0
 
   defp access(state) do
     if state.access == :cleaning == Clock.cleaning?(state.now),

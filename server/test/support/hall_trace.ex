@@ -44,6 +44,8 @@ defmodule FeudHall.HallTrace do
       {4, tuple({constant(:advance), integer(1..60_000)})},
       {1, tuple({constant(:advance_to), member_of([:cleaning_start, :cleaning_end]), integer(-2..2)})},
       {4, tuple({constant(:purchase), integer(0..24), integer(50..600)})},
+      {1, tuple({constant(:cancel_request), integer(0..24)})},
+      {2, constant(:clearing)},
       {1,
        tuple(
          {constant(:policy), integer(0..4), integer(0..4),
@@ -200,8 +202,25 @@ defmodule FeudHall.HallTrace do
     product = state.catalog.products |> Map.keys() |> Enum.sort() |> Enum.at(idx)
     scale = if state.catalog.products[product].unit == :each, do: max(div(qty, 20), 1), else: qty
 
-    {{:purchase_stock, %{restaurant_id: "r1", product: product, qty: scale, max_price_per_kunit: 1_000_000_000}},
-     {:principal, "alice"}}
+    {{:submit_purchase_request,
+      %{restaurant_id: "r1", product: product, qty: scale, max_price_per_kunit: 1_000_000_000}}, {:principal, "alice"}}
+  end
+
+  # A full market clearing: advance to the next clearing instant, which fills or
+  # expires every pending purchase request.
+  defp command(state, :clearing, _id),
+    do: {{:advance_clock, %{to_service_ms: Clock.service_ms(state.market.next_clear_at)}}, {:system, :scheduler}}
+
+  # Cancel one of alice's pending requests (by index over pending products).
+  defp command(state, {:cancel_request, idx}, _id) do
+    case state.market.by_key |> Map.keys() |> Enum.sort() do
+      [] ->
+        nil
+
+      keys ->
+        {"r1", product} = Enum.at(keys, rem(idx, length(keys)))
+        {{:cancel_purchase_request, %{restaurant_id: "r1", product: product}}, {:principal, "alice"}}
+    end
   end
 
   defp command(state, {:policy, r, l, policy}, _id) do
@@ -332,10 +351,17 @@ defmodule FeudHall.HallTrace do
   defp command(_state, {:intrude, which}, _id) do
     cmd =
       case which do
-        0 -> {:purchase_stock, %{restaurant_id: "r1", product: "sugar", qty: 1, max_price_per_kunit: 1_000_000}}
-        1 -> {:set_menu_price, %{restaurant_id: "r1", recipe_id: "bean_tacos", price: 1}}
-        2 -> {:close_stall, %{stall_id: @stall}}
-        3 -> {:grant_allowance, %{principal: "mallory", amount: 100}}
+        0 ->
+          {:submit_purchase_request, %{restaurant_id: "r1", product: "sugar", qty: 1, max_price_per_kunit: 1_000_000}}
+
+        1 ->
+          {:set_menu_price, %{restaurant_id: "r1", recipe_id: "bean_tacos", price: 1}}
+
+        2 ->
+          {:close_stall, %{stall_id: @stall}}
+
+        3 ->
+          {:grant_allowance, %{principal: "mallory", amount: 100}}
       end
 
     {:expect_reject, cmd, {:principal, "mallory"}, if(which == 3, do: :unauthorized_or_malformed, else: :forbidden)}

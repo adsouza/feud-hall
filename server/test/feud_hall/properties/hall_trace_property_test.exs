@@ -32,7 +32,9 @@ defmodule FeudHall.Properties.HallTraceTest do
       cleanings: 0,
       cancellations: 0,
       spoiled: 0,
-      stale_rejected: 0
+      stale_rejected: 0,
+      trace_fills: 0,
+      requests_cancelled: 0
     })
 
     # A large initial size yields long traces while still letting shrinking
@@ -91,7 +93,9 @@ defmodule FeudHall.Properties.HallTraceTest do
           cleanings: 10,
           cancellations: 10,
           spoiled: 10,
-          stale_rejected: 10
+          stale_rejected: 10,
+          trace_fills: 25,
+          requests_cancelled: 5
         ] do
       assert progress[key] >= min, "too little #{key} across runs: #{inspect(progress)}"
     end
@@ -104,6 +108,11 @@ defmodule FeudHall.Properties.HallTraceTest do
     bump(:cleanings, count.(:hall_cleaning_started))
     bump(:cancellations, count.(:tray_cancelled) + count.(:dessert_cancelled))
     bump(:spoiled, count.(:stock_spoiled))
+    bump(:requests_cancelled, count.(:purchase_request_cancelled))
+
+    # Fills of requests the trace submitted (IDs "PR:c<n>"), not the fixture's opening stock.
+    fills = for %{type: :market_cleared, fills: fs} <- events, %{request_id: "PR:c" <> _} <- fs, do: 1
+    bump(:trace_fills, length(fills))
   end
 
   defp bump(key, by), do: Process.put(:progress, Map.update!(Process.get(:progress), key, &(&1 + by)))

@@ -59,7 +59,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   end
 
   defp purchase(qty),
-    do: {:purchase_stock, %{restaurant_id: "r1", product: "rice_long", qty: qty, max_price_per_kunit: 1_000}}
+    do: {:submit_purchase_request, %{restaurant_id: "r1", product: "rice_long", qty: qty, max_price_per_kunit: 1_000}}
 
   test "reserved command-ID prefixes are refused for principals and NPCs except npc: for NPCs" do
     rt = runtime()
@@ -131,10 +131,10 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   test "rejections keep their original result and append no domain events" do
     rt = runtime()
     head = rt.position
-    {:rejected, receipt, rt} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(900_000)))
-    assert receipt.outcome == {:rejected, :insufficient_storage}
+    {:rejected, receipt, rt} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(2_000_000)))
+    assert receipt.outcome == {:rejected, :invalid_quantity}
     assert rt.position == head
-    assert {:replayed, ^receipt, _} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(900_000)))
+    assert {:replayed, ^receipt, _} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(2_000_000)))
   end
 
   describe "control stream" do
@@ -208,7 +208,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     assert InMemoryEventStore.receipt(failing.store, "buy-1") == :none
 
     {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
-    assert map_size(rt.state.restaurants["r1"].batches) == 1
+    assert Map.keys(rt.state.market.requests) == ["PR:buy-1"]
   end
 
   @tag :capture_log
@@ -253,7 +253,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     armed = %{rt | store: InMemoryEventStore.fail_next(rt.store, :lost_reply)}
     {:uncertain, "buy-1", stuck} = Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(100)))
     # The in-memory head did not apply the batch, and new work is refused.
-    assert stuck.state.restaurants["r1"].batches == %{}
+    assert stuck.state.market.requests == %{}
 
     assert {:error, :recovery_required, ^stuck} =
              Workflow.execute(stuck, env("buy-2", {:principal, "alice"}, purchase(5)))
@@ -264,7 +264,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
 
     assert {:committed, receipt, recovered} = Workflow.resolve(stuck, "buy-1")
     assert receipt.outcome == :accepted
-    assert map_size(recovered.state.restaurants["r1"].batches) == 1
+    assert Map.keys(recovered.state.market.requests) == ["PR:buy-1"]
     # Retrying the original ID returns the original receipt, not a second fill.
     assert {:replayed, _, _} = Workflow.execute(recovered, env("buy-1", {:principal, "alice"}, purchase(100)))
   end
@@ -337,8 +337,15 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     rt = runtime()
     assert rt.versions.hall == length(Enum.flat_map(elem(InMemoryEventStore.read_from(rt.store, 0), 1), & &1.events))
 
-    {:accepted, receipt, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
+    {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
+    assert InMemoryEventStore.projection(rt.store, :stock) == []
+
+    # The request fills at the next market clearing, inside the clock advance.
+    clearing = div(rt.state.market.next_clear_at, 24)
+    tick = env("tick", {:system, :scheduler}, {:advance_clock, %{to_service_ms: clearing}})
+    {:accepted, receipt, rt} = Workflow.execute(rt, tick)
     ledger = rt.state.restaurants["r1"].ledger
+    assert ledger.raw > 0
 
     assert %{restaurant_id: "r1", account: :cash, amount: ledger.cash, position: receipt.position} in InMemoryEventStore.projection(
              rt.store,
@@ -474,10 +481,10 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     test "a rejection keeps its stored receipt and appends no batch" do
       rt = pg_runtime()
       head = rt.position
-      {:rejected, receipt, rt} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(900_000)))
-      assert receipt.outcome == {:rejected, :insufficient_storage}
+      {:rejected, receipt, rt} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(2_000_000)))
+      assert receipt.outcome == {:rejected, :invalid_quantity}
       assert PostgresEventStore.head(rt.store) == head
-      assert {:replayed, ^receipt, _} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(900_000)))
+      assert {:replayed, ^receipt, _} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(2_000_000)))
     end
 
     test "a failure before commit leaves nothing; retrying the same ID then succeeds once" do
@@ -488,19 +495,19 @@ defmodule FeudHall.Application.CommandWorkflowTest do
       assert PostgresEventStore.head(rt.store) == rt.position
 
       {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
-      assert map_size(rt.state.restaurants["r1"].batches) == 1
+      assert Map.keys(rt.state.market.requests) == ["PR:buy-1"]
     end
 
     test "a lost reply is uncertain, blocks new commands, and resolves by the same ID" do
       rt = pg_runtime()
       armed = %{rt | store: PostgresEventStore.fail_next(rt.store, :lost_reply)}
       {:uncertain, "buy-1", stuck} = Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(100)))
-      assert stuck.state.restaurants["r1"].batches == %{}
+      assert stuck.state.market.requests == %{}
       assert {:error, :recovery_required, _} = Workflow.execute(stuck, env("buy-2", {:principal, "alice"}, purchase(5)))
 
       assert {:committed, receipt, recovered} = Workflow.resolve(stuck, "buy-1")
       assert receipt.outcome == :accepted
-      assert map_size(recovered.state.restaurants["r1"].batches) == 1
+      assert Map.keys(recovered.state.market.requests) == ["PR:buy-1"]
       assert {:replayed, _, _} = Workflow.execute(recovered, env("buy-1", {:principal, "alice"}, purchase(100)))
     end
 

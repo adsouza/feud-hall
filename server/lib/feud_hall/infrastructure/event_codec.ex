@@ -43,6 +43,8 @@ defmodule FeudHall.Infrastructure.EventCodec do
     wait_weight leave_weight main_preference slot_id tier quiet standard busy prime price_permille
     restock_days preferred_tier stock requests by_key batch next_clear_at rng
     stage_started stage_completed handover_started stage prep finish done_at item tray estimated_completion
+    purchase_requested purchase_request_cancelled market_cleared request_id max_price_per_kunit replaces
+    prices fills unfilled price_above_limit insufficient_cash insufficient_storage stock_exhausted
   )a
 
   @by_name Map.new(@atoms, &{Atom.to_string(&1), &1})

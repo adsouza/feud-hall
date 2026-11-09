@@ -13,11 +13,13 @@ defmodule FeudHall.Domain.Hall.Decider do
   `FeudHall.Domain.Hall.Advance`.
   """
 
-  alias FeudHall.Domain.{Clock, Content, Inventory, Money, Random, Substitution}
+  alias FeudHall.Domain.{Clock, Content, Random, Substitution}
   alias FeudHall.Domain.Hall.{Admission, Advance, Evolver, Settlement}
 
   @max_qty 1_000_000
   @max_price 1_000_000
+  # Purchase price limits are compared, never multiplied; the bound keeps them small integers.
+  @max_price_limit 1_000_000_000
 
   @max_seed 18_446_744_073_709_551_615
 
@@ -120,35 +122,35 @@ defmodule FeudHall.Domain.Hall.Decider do
     end
   end
 
-  # Direct wholesale fill at the catalog base price. This is a seam for the
-  # batched scarcity-priced market (milestone 2), which will produce the same
-  # stock_purchased facts from cleared fills.
-  def decide(state, {:purchase_stock, p}, ctx) do
-    catalog = state.catalog
-
+  # A pending wholesale purchase, cleared with every other pending request at
+  # the next market clearing (`FeudHall.Domain.Market`). No cash or storage is
+  # held now: funding is decided at clearing. One request per restaurant and
+  # product: a new one replaces the pending one.
+  def decide(state, {:submit_purchase_request, p}, ctx) do
     with {:ok, restaurant} <- owned_restaurant(state, p[:restaurant_id], ctx),
-         {:ok, product} <- fetch(catalog.products, p[:product], :unknown_product),
+         {:ok, product} <- fetch(state.catalog.products, p[:product], :unknown_product),
          :ok <- ensure(is_integer(p[:qty]) and p.qty > 0 and p.qty <= @max_qty, :invalid_quantity),
-         :ok <- ensure(is_integer(p[:max_price_per_kunit]), :invalid_price_limit),
-         :ok <- ensure(product.base_price_per_kunit <= p.max_price_per_kunit, :price_above_limit),
-         cost = Money.ceil_div(p.qty * product.base_price_per_kunit, 1000),
-         :ok <- ensure(restaurant.ledger.cash >= cost, :insufficient_cash),
-         used = Inventory.storage_used(restaurant.batches, catalog),
-         needed = Inventory.storage_for(catalog, product.id, p.qty),
-         :ok <- ensure(used + needed <= catalog.rules.storage_capacity, :insufficient_storage) do
+         limit = p[:max_price_per_kunit],
+         :ok <- ensure(is_integer(limit) and limit > 0 and limit <= @max_price_limit, :invalid_price_limit) do
       {:ok,
        [
          %{
-           type: :stock_purchased,
+           type: :purchase_requested,
+           request_id: "PR:" <> ctx.command_id,
            restaurant_id: restaurant.id,
-           batch_id: "B:" <> ctx.command_id,
            product: product.id,
-           product_version: product.version,
            qty: p.qty,
-           cost: cost,
-           expires_at: state.now + product.shelf_life_ms
+           max_price_per_kunit: limit,
+           replaces: Map.get(state.market.by_key, {restaurant.id, product.id})
          }
        ]}
+    end
+  end
+
+  def decide(state, {:cancel_purchase_request, p}, ctx) do
+    with {:ok, restaurant} <- owned_restaurant(state, p[:restaurant_id], ctx),
+         {:ok, request_id} <- fetch(state.market.by_key, {restaurant.id, p[:product]}, :no_pending_request) do
+      {:ok, [%{type: :purchase_request_cancelled, request_id: request_id}]}
     end
   end
 

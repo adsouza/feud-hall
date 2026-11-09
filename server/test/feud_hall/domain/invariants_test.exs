@@ -62,8 +62,52 @@ defmodule FeudHall.Domain.InvariantsTest do
     refute Clock.cleaning?(state.now)
     assert Invariants.check(%{state | access: :cleaning}) == {:error, [{:access_gate_mismatch, state.now}]}
 
-    cleaning = %{state | now: Clock.cleaning_start_of(0)}
+    # Jump the clock (keeping the next market clearing ahead of it).
+    three = Clock.cleaning_start_of(0)
+    cleaning = %{state | now: three, market: %{state.market | next_clear_at: three + Clock.minute()}}
     assert Invariants.check(cleaning) == {:error, [{:access_gate_mismatch, cleaning.now}]}
     assert Invariants.check(%{cleaning | access: :cleaning}) == :ok
+  end
+
+  describe "market" do
+    defp pending_world do
+      request = %{restaurant_id: "r1", product: "rice_long", qty: 10, max_price_per_kunit: 1_000}
+      {state, _} = run!(stocked_world(), {:submit_purchase_request, request}, owner(), "buy")
+      state
+    end
+
+    test "a hall with a pending request passes" do
+      assert map_size(pending_world().market.requests) == 1
+      assert Invariants.check(pending_world()) == :ok
+    end
+
+    test "pending requests and their index must agree" do
+      state = pending_world()
+
+      unindexed = put_in(state, [:market, :by_key], %{})
+      assert Invariants.check(unindexed) == {:error, [{:unindexed_purchase_request, "PR:buy"}]}
+
+      dangling = put_in(state, [:market, :requests], %{})
+      assert Invariants.check(dangling) == {:error, [{:dangling_request_index, "PR:buy"}]}
+
+      wrong_key = put_in(state, [:market, :by_key], %{{"r1", "sugar"} => "PR:buy"})
+      assert {:error, problems} = Invariants.check(wrong_key)
+      assert {:dangling_request_index, "PR:buy"} in problems
+      assert {:unindexed_purchase_request, "PR:buy"} in problems
+    end
+
+    test "a request must name an existing restaurant, stock stays non-negative, and clearing stays due" do
+      state = pending_world()
+
+      orphan = update_in(state, [:restaurants], &Map.delete(&1, "r1"))
+      assert {:error, problems} = Invariants.check(orphan)
+      assert {:request_for_unknown_restaurant, "PR:buy"} in problems
+
+      negative = put_in(state, [:market, :stock, "sugar"], -1)
+      assert Invariants.check(negative) == {:error, [{:negative_market_stock, "sugar"}]}
+
+      overdue = put_in(state, [:market, :next_clear_at], state.now)
+      assert Invariants.check(overdue) == {:error, [{:market_clearing_overdue, state.now}]}
+    end
   end
 end

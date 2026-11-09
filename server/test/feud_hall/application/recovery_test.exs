@@ -70,7 +70,8 @@ defmodule FeudHall.Application.RecoveryTest do
   end
 
   defp purchase(product, qty),
-    do: {:purchase_stock, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
+    do:
+      {:submit_purchase_request, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
 
   defp first_commands do
     [
@@ -88,7 +89,8 @@ defmodule FeudHall.Application.RecoveryTest do
     [
       {env("buy-milk", @alice, purchase("milk_whole", 200)), 2_000},
       {env("buy-sugar", @alice, purchase("sugar", 50)), nil},
-      {env("buy-rice-2", @alice, purchase("rice_long", 30)), 3_000}
+      # Observed past the first market clearing (10 s of service): the pending requests fill.
+      {env("buy-rice-2", @alice, purchase("rice_long", 30)), 11_000}
     ]
   end
 

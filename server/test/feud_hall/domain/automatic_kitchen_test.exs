@@ -13,6 +13,8 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
   @stall "s001"
   @three Clock.cleaning_start_of(0)
   @five Clock.cleaning_end_of(0)
+  # A stocked world starts at the first market clearing, where its stock was filled.
+  @t0 SliceCatalog.rules().market.clear_every_hall_ms
 
   # Each event paired with the hall time at which it was recorded.
   defp timeline(events) do
@@ -53,15 +55,15 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
       for {t, e} <- timeline(events), e.type in [:stage_started, :stage_completed, :handover_started], do: {t, e}
 
     assert [
-             {0, %{type: :stage_started, order_id: ^main, stage: :prep, consumed: [_ | _], done_at: d1}},
+             {@t0, %{type: :stage_started, order_id: ^main, stage: :prep, consumed: [_ | _], done_at: d1}},
              {t1, %{type: :stage_completed, order_id: ^main, stage: :prep}},
              {t1, %{type: :stage_started, order_id: ^main, stage: :finish, done_at: d2}},
              {t2, %{type: :stage_completed, order_id: ^main, stage: :finish, expires_at: expires}},
              {t2, %{type: :handover_started, stall_id: @stall, done_at: d3}}
            ] = kitchen
 
-    assert {d1, t1, d2, t2, d3} == {1 * @min, 1 * @min, 4 * @min, 4 * @min, 8 * @min}
-    assert expires == 4 * @min + state.catalog.recipes["bean_tacos"].holding_ms
+    assert {d1, t1, d2, t2, d3} == {@t0 + 1 * @min, @t0 + 1 * @min, @t0 + 4 * @min, @t0 + 4 * @min, @t0 + 8 * @min}
+    assert expires == @t0 + 4 * @min + state.catalog.recipes["bean_tacos"].holding_ms
     Oracle.assert_settled!(state, events)
 
     # Every new kitchen event survives the JSON codec.
@@ -96,7 +98,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
 
   test "two prep stations, one finisher and one counter serve four trays exactly as estimated" do
     w = stocked_world() |> simulated_visit("t1", "bean_tacos") |> simulated_visit("t2", "bean_tacos")
-    w = advance_hall(w, 2 * @min)
+    w = advance_hall(w, @t0 + 2 * @min)
     w = w |> simulated_visit("t3", "bean_tacos", "horchata") |> simulated_visit("t4", "bean_tacos")
     {accepted, _} = w
 
@@ -105,9 +107,9 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
 
     # Prep runs two at a time; the single finisher serialises t1, t2, t3's main and
     # drink, then t4; the counter hands over in ready order four minutes each.
-    assert estimates == Enum.map([8, 12, 16, 20], &(&1 * @min))
+    assert estimates == Enum.map([8, 12, 16, 20], &(@t0 + &1 * @min))
 
-    {state, events} = advance_hall(w, 30 * @min)
+    {state, events} = advance_hall(w, @t0 + 30 * @min)
     assert Enum.map(ids, &served_at(events, &1)) == Enum.map(estimates, &[&1])
 
     # The estimate the quote saw is the shared FIFO rule the dispatch followed.
@@ -123,9 +125,9 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     w = stocked_world(catalog: catalog) |> simulated_visit("d1", "bean_tacos", "horchata")
     {state, _} = w
     tray = state.trays[tray_id("visit-d1")]
-    assert tray.estimated_completion == 9 * @min
+    assert tray.estimated_completion == @t0 + 9 * @min
 
-    {state, events} = advance_hall(w, 9 * @min)
+    {state, events} = advance_hall(w, @t0 + 9 * @min)
     assert state.trays[tray.id].status == :cancelled
     [_main, drink] = tray.components
     assert state.orders[drink].cancel_reason == :ready_food_expired
@@ -137,9 +139,9 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     fresher = put_in(SliceCatalog.catalog(), [:recipes, "horchata", :holding_ms], 4 * @min + 1)
 
     {state, events} =
-      stocked_world(catalog: fresher) |> simulated_visit("d1", "bean_tacos", "horchata") |> advance_hall(9 * @min)
+      stocked_world(catalog: fresher) |> simulated_visit("d1", "bean_tacos", "horchata") |> advance_hall(@t0 + 9 * @min)
 
-    assert served_at(events, tray.id) == [9 * @min]
+    assert served_at(events, tray.id) == [@t0 + 9 * @min]
     Oracle.assert_settled!(state, events)
   end
 
@@ -231,7 +233,11 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
 
     {reopened, events} = advance_hall({cleaning, log}, @five)
     tail = Enum.drop(events, length(log))
-    assert [:clock_advanced, :hall_cleaning_ended, :handover_started] = Enum.map(tail, & &1.type)
+    # 05:00 is also a market clearing instant: reopening (class 5), clearing (7), then dispatch (9).
+    assert [:clock_advanced, :hall_cleaning_ended, :market_cleared, :handover_started] =
+             tail |> Enum.take(-4) |> Enum.map(& &1.type)
+
+    assert %{type: :clock_advanced, to: @five} = Enum.at(tail, -4)
     assert [@five] = for({t, %{type: :handover_started}} <- timeline(events), t >= @three, do: t)
     assert reopened.stalls[@stall].counter.done_at == @five + reopened.catalog.rules.handover_ms
   end
@@ -267,28 +273,28 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     [main_a, drink_a] = state.trays[tray_id("visit-a")].components
     [main_b] = state.trays[tray_id("visit-b")].components
 
-    w = advance_hall(w, 9 * @min)
+    w = advance_hall(w, @t0 + 9 * @min)
     {state, events} = w
 
     finishes = for {t, %{type: :stage_started, stage: :finish, order_id: o}} <- timeline(events), do: {o, t}
     # One finisher, FIFO by prep completion then acceptance: a's main, a's drink, then b's main.
-    assert finishes == [{main_a, 1 * @min}, {drink_a, 4 * @min}, {main_b, 5 * @min}]
-    assert served_at(events, tray_id("visit-a")) == [9 * @min]
+    assert finishes == [{main_a, @t0 + 1 * @min}, {drink_a, @t0 + 4 * @min}, {main_b, @t0 + 5 * @min}]
+    assert served_at(events, tray_id("visit-a")) == [@t0 + 9 * @min]
 
     vid = visit_id("visit-a")
     assert state.visits[vid].dessert == :offered
     # b's tray took the counter at 9 min; the dessert is ready at 12 but waits until 13.
-    handover_done = 13 * @min
+    handover_done = @t0 + 13 * @min
     assert %{item: {:tray, "T:visit-b"}, done_at: ^handover_done} = state.stalls[@stall].counter
 
     w = run!(w, {:accept_dessert, %{visit_id: vid}}, {:system, :demand}, "dessert")
     {state, _} = w
     dessert = state.orders[state.visits[vid].dessert_order]
-    assert dessert.estimated_completion == 17 * @min
+    assert dessert.estimated_completion == @t0 + 17 * @min
 
-    {state, events} = advance_hall(w, 20 * @min)
-    assert served_at(events, tray_id("visit-b")) == [13 * @min]
-    assert dessert_served_at(events, dessert.id) == [17 * @min]
+    {state, events} = advance_hall(w, @t0 + 20 * @min)
+    assert served_at(events, tray_id("visit-b")) == [@t0 + 13 * @min]
+    assert dessert_served_at(events, dessert.id) == [@t0 + 17 * @min]
     assert state.visits[vid].outcome.reason == :completed
     Oracle.assert_settled!(state, events)
   end
@@ -313,9 +319,9 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
       Enum.drop(log, -1) ++
         [
           old_accept,
-          %{type: :preparation_started, order_id: main, consumed: consumed, ready_not_before: 4 * @min},
-          %{type: :clock_advanced, to: 4 * @min},
-          %{type: :preparation_completed, order_id: main, expires_at: 24 * @min}
+          %{type: :preparation_started, order_id: main, consumed: consumed, ready_not_before: @t0 + 4 * @min},
+          %{type: :clock_advanced, to: @t0 + 4 * @min},
+          %{type: :preparation_completed, order_id: main, expires_at: @t0 + 24 * @min}
         ]
 
     started = Hall.replay(Enum.drop(history, -2))
@@ -330,7 +336,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     assert replayed.trays[tray_id("visit-d1")].estimated_completion == nil
     assert replayed.orders[main].prep_ms == state.catalog.recipes["bean_tacos"].prep_ms
     assert replayed.orders[main].status == :ready
-    assert replayed.orders[main].ready_expires_at == 24 * @min
+    assert replayed.orders[main].ready_expires_at == @t0 + 24 * @min
   end
 
   defp sim_payload(id),

@@ -47,10 +47,13 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
           rt,
           "buy-" <> product,
           alice,
-          {:purchase_stock, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
+          {:submit_purchase_request,
+           %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
         )
       end)
 
+    # The requests fill at the first market clearing (240 hall seconds, 10 s of service).
+    rt = run!(rt, "clear", {:system, :scheduler}, {:advance_clock, %{to_service_ms: 10_000}})
     rt = run!(rt, "open", alice, {:open_stall, %{stall_id: "s001"}})
 
     Enum.reduce(1..visits, rt, fn n, rt ->

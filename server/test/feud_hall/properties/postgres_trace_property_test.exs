@@ -4,8 +4,9 @@ defmodule FeudHall.Properties.PostgresTraceTest do
   on PostgreSQL, with authority restarts and injected commit failures.
 
   Each run generates trace actions (`FeudHall.HallTrace`), appends a closing
-  service (leave or avoid the cleaning window, restock, reopen the stall,
-  admit a simulated visit, run a service cycle) so trays are served, runs the trace against the pure hall, and then generates
+  service (leave or avoid the cleaning window, request stock and advance to
+  the market clearing that fills it, reopen the stall, admit a simulated
+  visit, run a service cycle) so trays are served, runs the trace against the pure hall, and then generates
   injection points for the recorded commands. It sends every recorded
   command, in order, through `CommandWorkflow` on an emptied database. An
   injection names a command by its index in the recorded list (generated
@@ -76,7 +77,8 @@ defmodule FeudHall.Properties.PostgresTraceTest do
 
   # Move clear of the cleaning window when service could not finish before it, restock bean
   # tacos' ingredients (cilantro and salsa spoil within a trace; indices into the sorted product
-  # list: black_beans_dried, cilantro, corn_tortilla, onion, salsa_roja), reopen the stall (a
+  # list: black_beans_dried, cilantro, corn_tortilla, onion, salsa_roja) and advance to the
+  # market clearing that fills them, reopen the stall (a
   # random action may have closed it), admit an unrestricted simulated diner for bean tacos, and
   # run one service cycle long enough to cook it.
   @closing [
@@ -86,6 +88,7 @@ defmodule FeudHall.Properties.PostgresTraceTest do
     {:purchase, 6, 600},
     {:purchase, 14, 300},
     {:purchase, 21, 600},
+    :clearing,
     {:stall, :open_stall},
     {:sim_visit, 0, nil, 0, 4_000},
     {:cycle, 20_000, false}

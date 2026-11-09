@@ -63,7 +63,11 @@ defmodule FeudHall.Application.DiagnosticsTest do
   test "player text and principal IDs never reach a record", %{sink: sink} do
     rt = open(diagnostics: {MemorySink, sink})
     {:accepted, _, _} = create(rt, "sentinel-secret-🌮")
-    big = {:purchase_stock, %{restaurant_id: "r1", product: "rice_long", qty: 900_000, max_price_per_kunit: 1_000}}
+
+    big =
+      {:submit_purchase_request,
+       %{restaurant_id: "r1", product: "rice_long", qty: 2_000_000, max_price_per_kunit: 1_000}}
+
     {:rejected, _, _} = CommandWorkflow.execute(rt, env("big", {:principal, "alice-secret-id"}, big))
     dump = inspect(MemorySink.records(sink), limit: :infinity)
     refute dump =~ "sentinel"
@@ -203,14 +207,19 @@ defmodule FeudHall.Application.DiagnosticsTest do
     {rt, ids} =
       Enum.reduce(1..28, {rt, ids}, fn i, {rt, ids} ->
         id = "buy-#{rem(i, 25)}"
-        qty = if rem(i, 7) == 0, do: 900_000, else: 10 + i
+        qty = if rem(i, 7) == 0, do: 2_000_000, else: 10 + i
 
         cmd =
-          {:purchase_stock, %{restaurant_id: "r1", product: "rice_long", qty: qty, max_price_per_kunit: 1_000}}
+          {:submit_purchase_request, %{restaurant_id: "r1", product: "rice_long", qty: qty, max_price_per_kunit: 1_000}}
 
         {_status, _receipt, rt} = CommandWorkflow.execute(rt, env(id, {:principal, "alice-secret-id"}, cmd))
         {rt, [id | ids]}
       end)
+
+    # The pending request fills at the next market clearing, changing balances and stock.
+    clearing = {:advance_clock, %{to_service_ms: div(rt.state.market.next_clear_at, 24)}}
+    {:accepted, _, rt} = CommandWorkflow.execute(rt, env("clear", {:system, :scheduler}, clearing))
+    ids = ["clear" | ids]
 
     receipts = ids |> Enum.uniq() |> Map.new(&{&1, InMemoryEventStore.receipt(rt.store, &1)})
 

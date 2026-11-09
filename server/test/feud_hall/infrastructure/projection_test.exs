@@ -60,7 +60,8 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
           rt,
           "buy-" <> product,
           alice,
-          {:purchase_stock, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
+          {:submit_purchase_request,
+           %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
         )
       end)
 
@@ -69,9 +70,12 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
         rt,
         "buy-r2-rice",
         bob,
-        {:purchase_stock, %{restaurant_id: "r2", product: "rice_long", qty: 50, max_price_per_kunit: 1_000_000_000}}
+        {:submit_purchase_request,
+         %{restaurant_id: "r2", product: "rice_long", qty: 50, max_price_per_kunit: 1_000_000_000}}
       )
 
+    # The requests fill at the first market clearing (240 hall seconds, 10 s of service).
+    rt = run!(rt, "clear", {:system, :scheduler}, {:advance_clock, %{to_service_ms: 10_000}})
     rt = run!(rt, "open", alice, {:open_stall, %{stall_id: "s001"}})
 
     Enum.reduce(1..4, rt, fn n, rt ->
@@ -193,8 +197,13 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
         rt,
         "buy-more",
         {:principal, "alice"},
-        {:purchase_stock, %{restaurant_id: "r1", product: "rice_long", qty: 10, max_price_per_kunit: 1_000_000_000}}
+        {:submit_purchase_request,
+         %{restaurant_id: "r1", product: "rice_long", qty: 10, max_price_per_kunit: 1_000_000_000}}
       )
+
+    clearing = div(rt.state.market.next_clear_at, 24)
+    rt = run!(rt, "clear-more", {:system, :scheduler}, {:advance_clock, %{to_service_ms: clearing}})
+    assert Enum.any?(rt.state.restaurants["r1"].batches, fn {id, _} -> String.ends_with?(id, "PR:buy-more") end)
 
     assert Enum.sort(balance_values(rt.store)) == expected_balances(rt.state)
   end
