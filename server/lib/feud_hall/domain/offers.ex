@@ -13,7 +13,7 @@ defmodule FeudHall.Domain.Offers do
   not pass it.
   """
 
-  alias FeudHall.Domain.{Clock, Dietary, Inventory, Substitution}
+  alias FeudHall.Domain.{Clock, Dietary, Inventory, Kitchen, Substitution}
 
   @doc """
   Quotes an initial main/optional-drink tray for a stall.
@@ -30,7 +30,7 @@ defmodule FeudHall.Domain.Offers do
          committed = committed + (main.carbs_mg || 0),
          {:ok, drink} <- maybe_drink(state, restaurant, drink_id, visit.requirement, committed, available),
          components = Enum.reject([main, drink], &is_nil/1),
-         {:ok, timing} <- timing(state, components) do
+         {:ok, timing} <- timing(state, stall.id, components) do
       {:ok,
        Map.merge(timing, %{
          stall_id: stall.id,
@@ -49,7 +49,7 @@ defmodule FeudHall.Domain.Offers do
          committed = visit.carbs_reserved + visit.carbs_served,
          {:ok, dessert} <-
            quote_course(state, restaurant, dessert_id, :dessert, visit.requirement, committed, available),
-         {:ok, timing} <- timing(state, [dessert]) do
+         {:ok, timing} <- timing(state, stall.id, [dessert]) do
       {:ok,
        Map.merge(timing, %{
          stall_id: stall.id,
@@ -95,10 +95,19 @@ defmodule FeudHall.Domain.Offers do
   @doc "Shared stall eligibility for new customer orders."
   def open_stall(state, stall_id) do
     case state.stalls[stall_id] do
-      nil -> {:error, :unknown_stall}
-      _ when state.access != :open -> {:error, :hall_cleaning}
-      %{mode: :open} = stall -> {:ok, stall, state.restaurants[stall.restaurant]}
-      _ -> {:error, :stall_not_accepting_orders}
+      nil ->
+        {:error, :unknown_stall}
+
+      _ when state.access != :open ->
+        {:error, :hall_cleaning}
+
+      %{mode: :open} = stall ->
+        if Kitchen.accepting?(state, stall_id),
+          do: {:ok, stall, state.restaurants[stall.restaurant]},
+          else: {:error, :queue_full}
+
+      _ ->
+        {:error, :stall_not_accepting_orders}
     end
   end
 
@@ -157,12 +166,11 @@ defmodule FeudHall.Domain.Offers do
     end
   end
 
-  # Components are prepared in parallel; the tray needs the slowest plus the
-  # counter selection/handover phases.
-  defp timing(state, components) do
+  # The expected completion comes from the stall's kitchen queue, so quotes,
+  # acceptance and diner choice all see the same wait.
+  defp timing(state, stall_id, components) do
     rules = state.catalog.rules
-    work = components |> Enum.map(&(&1.prep_ms + &1.finish_ms)) |> Enum.max()
-    earliest = state.now + work + rules.handover_ms
+    %{earliest_completion: earliest} = Kitchen.estimate(state, stall_id, components, state.now)
     cutoff = Clock.service_cutoff(state.now)
     deadline = min(state.now + rules.service_window_ms, cutoff)
 
