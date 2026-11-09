@@ -238,6 +238,30 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
     assert reopened.position == rt.position
   end
 
+  test "a connection lost while committing is an unknown outcome that resolves by the same ID" do
+    store = %{fresh_store() | repo: FeudHall.CommitDropRepo}
+
+    assert {:error, :unknown_outcome, store} = PostgresEventStore.append(store, request())
+
+    # The batch did commit: the head advanced and the receipt resolves by the original ID.
+    assert PostgresEventStore.head(store) == 1
+    assert {:ok, %{command_id: "a", position: 1}} = PostgresEventStore.receipt(store, "a")
+    assert {:ok, [%{position: 1, command_id: "a"}]} = PostgresEventStore.read_from(store, 0)
+  end
+
+  test "a connection lost before the transaction body finishes is a proven rollback" do
+    store = fresh_store()
+
+    lost =
+      PostgresEventStore.new(Repo, store.scope,
+        epoch: store.epoch,
+        hooks: %{before_commit: fn -> raise DBConnection.ConnectionError, "lost" end}
+      )
+
+    assert {:error, :unavailable, _} = PostgresEventStore.append(lost, request())
+    assert_nothing_written(store)
+  end
+
   @tag :capture_log
   test "a refused connection is reported as unavailable" do
     start_supervised!(FeudHall.UnreachableRepo)
