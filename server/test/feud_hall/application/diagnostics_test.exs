@@ -30,7 +30,7 @@ defmodule FeudHall.Application.DiagnosticsTest do
         env(
           id,
           {:principal, "alice-secret-id"},
-          {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: name, cuisine: "mexican"}}
+          {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: name, cuisine: "mexican"}}
         )
       )
 
@@ -106,7 +106,7 @@ defmodule FeudHall.Application.DiagnosticsTest do
   end
 
   defp create_cmd(name),
-    do: {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: name, cuisine: "mexican"}}
+    do: {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: name, cuisine: "mexican"}}
 
   test "recovery emits started, snapshot_skipped, completed", %{sink: sink} do
     rt = open()

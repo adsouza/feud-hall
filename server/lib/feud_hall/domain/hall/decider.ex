@@ -14,29 +14,19 @@ defmodule FeudHall.Domain.Hall.Decider do
   from staff coverage; they never bypass work time, freshness, or the gate.
   """
 
-  alias FeudHall.Domain.{Clock, Content, Dietary, Inventory, Money, Offers, Substitution}
+  alias FeudHall.Domain.{Clock, Content, Dietary, Inventory, Money, Offers, Random, Substitution}
   alias FeudHall.Domain.Hall.{Advance, Evolver, Settlement}
 
   @max_qty 1_000_000
   @max_price 1_000_000
 
-  def decide(nil, {:initialize_hall, %{hall_id: hall_id, catalog: catalog}}, %{actor: {:system, :admin}})
+  @max_seed 18_446_744_073_709_551_615
+
+  def decide(nil, {:initialize_hall, %{hall_id: hall_id, catalog: catalog} = p}, %{actor: {:system, :admin}})
       when is_binary(hall_id) do
     case Content.validate(catalog) do
-      :ok ->
-        {:ok,
-         [
-           %{
-             type: :hall_initialized,
-             hall_id: hall_id,
-             content_hash: Content.hash(catalog),
-             catalog: catalog,
-             visitor_fund: catalog.rules.visitor_fund
-           }
-         ]}
-
-      {:error, problems} ->
-        {:error, {:invalid_content, problems}}
+      :ok -> initialize_events(hall_id, catalog, Map.get(p, :seed, catalog.rules.seed))
+      {:error, problems} -> {:error, {:invalid_content, problems}}
     end
   end
 
@@ -59,6 +49,7 @@ defmodule FeudHall.Domain.Hall.Decider do
       not (id?(p[:restaurant_id]) and id?(p[:stall_id]) and name?(p[:name])) -> {:error, :invalid_payload}
       Map.has_key?(state.owners, {kind, owner}) -> {:error, :venture_already_active}
       Map.has_key?(state.restaurants, p.restaurant_id) -> {:error, :duplicate_restaurant}
+      not Map.has_key?(state.layout, p.stall_id) -> {:error, :unknown_slot}
       Map.has_key?(state.stalls, p.stall_id) -> {:error, :stall_taken}
       starter == nil -> {:error, :unknown_cuisine}
       true -> {:ok, create_restaurant_events(p, kind, owner, starter, catalog, ctx)}
@@ -421,6 +412,35 @@ defmodule FeudHall.Domain.Hall.Decider do
   end
 
   # -- lookups and guards -------------------------------------------------------
+
+  defp initialize_events(_hall_id, _catalog, seed) when not (is_integer(seed) and seed >= 0 and seed <= @max_seed),
+    do: {:error, :invalid_payload}
+
+  defp initialize_events(hall_id, catalog, seed) do
+    market = catalog.rules.market
+    floor_equivalents_millis = catalog.rules.demand.equivalent_floor_millis
+
+    # Opening stock is the per-equivalent target at the demand floor, within the replenishment cap.
+    stock =
+      Map.new(market.target_stock_per_equivalent, fn {product, per_equivalent} ->
+        {product, min(div(per_equivalent * floor_equivalents_millis, 1_000), market.replenish_cap[product])}
+      end)
+
+    {:ok,
+     [
+       %{
+         type: :hall_initialized,
+         hall_id: hall_id,
+         content_hash: Content.hash(catalog),
+         catalog: catalog,
+         visitor_fund: catalog.rules.visitor_fund,
+         layout: Map.new(catalog.layout, &{&1.slot_id, &1.tier}),
+         seed: seed,
+         market: %{stock: stock},
+         demand: %{rng: Random.new(Random.derive(seed, "demand"))}
+       }
+     ]}
+  end
 
   defp create_restaurant_events(p, owner_kind, owner, starter, catalog, _ctx) do
     [

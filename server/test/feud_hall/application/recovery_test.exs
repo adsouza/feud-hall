@@ -78,7 +78,7 @@ defmodule FeudHall.Application.RecoveryTest do
       {env(
          "create",
          @alice,
-         {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa", cuisine: "mexican"}}
+         {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Casa", cuisine: "mexican"}}
        ), nil},
       {env("buy-rice", @alice, purchase("rice_long", 100)), 1_000}
     ]

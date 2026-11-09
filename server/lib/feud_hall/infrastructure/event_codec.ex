@@ -41,7 +41,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
     operating_hours_ms hourly_weights segments profile_mix variety_weight variety_cap
     patience_service_ms drink_attach_permille dessert_appetite_permille price_weight quality_weight
     wait_weight leave_weight main_preference slot_id tier quiet standard busy prime price_permille
-    restock_days preferred_tier
+    restock_days preferred_tier stock requests by_key batch next_clear_at rng
   )a
 
   @by_name Map.new(@atoms, &{Atom.to_string(&1), &1})

@@ -6,6 +6,8 @@ defmodule FeudHall.Fixtures do
   alias FeudHall.Domain.{Clock, Hall, Offers}
   alias FeudHall.Domain.Content.SliceCatalog
 
+  @stall "s001"
+
   def ctx(actor, id), do: %{command_id: id, actor: actor}
   def owner(id \\ "alice"), do: {:principal, id}
 
@@ -81,11 +83,11 @@ defmodule FeudHall.Fixtures do
     [
       fixed.({:initialize_hall, %{hall_id: "hall-1", catalog: catalog}}, {:system, :admin}, "init"),
       fixed.(
-        {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa Alice", cuisine: "mexican"}},
+        {:create_restaurant, %{restaurant_id: "r1", stall_id: @stall, name: "Casa Alice", cuisine: "mexican"}},
         owner(),
         "create"
       )
-    ] ++ unlocks ++ purchases ++ [fixed.({:open_stall, %{stall_id: "s1"}}, owner(), "open")]
+    ] ++ unlocks ++ purchases ++ [fixed.({:open_stall, %{stall_id: @stall}}, owner(), "open")]
   end
 
   def default_stock do
@@ -129,7 +131,7 @@ defmodule FeudHall.Fixtures do
          source: :simulated,
          diner_id: id,
          budget: budget,
-         stall_id: "s1",
+         stall_id: @stall,
          main: main,
          drink: drink,
          profile_id: profile
@@ -144,12 +146,19 @@ defmodule FeudHall.Fixtures do
     {state, _} = world
     {:ok, requirement} = FeudHall.Domain.Dietary.requirement(state.catalog, profile)
     blank = %{requirement: requirement, carbs_reserved: 0, carbs_served: 0}
-    {:ok, quote} = Offers.quote_tray(state, "s1", main, drink, blank)
+    {:ok, quote} = Offers.quote_tray(state, @stall, main, drink, blank)
 
     run!(
       world,
       {:admit_visit,
-       %{source: :guest, stall_id: "s1", main: main, drink: drink, profile_id: profile, confirmed: Offers.terms(quote)}},
+       %{
+         source: :guest,
+         stall_id: @stall,
+         main: main,
+         drink: drink,
+         profile_id: profile,
+         confirmed: Offers.terms(quote)
+       }},
       {:principal, guest},
       id
     )

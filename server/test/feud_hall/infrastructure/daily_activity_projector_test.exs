@@ -26,7 +26,7 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
         rt,
         "create-r1",
         alice,
-        {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa Alice", cuisine: "mexican"}}
+        {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Casa Alice", cuisine: "mexican"}}
       )
 
     rt =
@@ -51,7 +51,7 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
         )
       end)
 
-    rt = run!(rt, "open", alice, {:open_stall, %{stall_id: "s1"}})
+    rt = run!(rt, "open", alice, {:open_stall, %{stall_id: "s001"}})
 
     Enum.reduce(1..visits, rt, fn n, rt ->
       run!(
@@ -63,7 +63,7 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
            source: :simulated,
            diner_id: "d#{n}",
            budget: 10_000,
-           stall_id: "s1",
+           stall_id: "s001",
            main: "chicken_tacos",
            drink: nil,
            profile_id: "unrestricted"
@@ -164,7 +164,7 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
          source: :simulated,
          diner_id: "dx",
          budget: 10_000,
-         stall_id: "s1",
+         stall_id: "s001",
          main: "chicken_tacos",
          drink: nil,
          profile_id: "unrestricted"
@@ -304,7 +304,7 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
          source: :simulated,
          diner_id: "dy",
          budget: 10_000,
-         stall_id: "s1",
+         stall_id: "s001",
          main: "chicken_tacos",
          drink: nil,
          profile_id: "unrestricted"

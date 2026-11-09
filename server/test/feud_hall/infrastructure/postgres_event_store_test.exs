@@ -183,7 +183,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
 
     # The stored payload references the catalog instead of repeating it.
     %{rows: payloads} = Repo.query!("select payload from events")
-    for [payload] <- payloads, do: refute(payload =~ "rice_long")
+    for [payload] <- payloads, do: refute(payload =~ "substitution_penalty_cap")
 
     assert {:ok, [%{events: [^first]}, %{events: [^second]}]} = PostgresEventStore.read_from(store, 0)
   end
@@ -283,7 +283,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
       CommandWorkflow.execute(rt, %{
         command_id: "create",
         actor: {:principal, "alice"},
-        command: {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: name, cuisine: "mexican"}}
+        command: {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: name, cuisine: "mexican"}}
       })
 
     assert {:ok, reopened} = CommandWorkflow.open(PostgresEventStore, rt.store)

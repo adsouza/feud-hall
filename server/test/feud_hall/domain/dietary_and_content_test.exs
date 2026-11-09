@@ -362,7 +362,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
          source: :simulated,
          diner_id: id,
          budget: 10_000,
-         stall_id: "s1",
+         stall_id: "s001",
          main: main,
          drink: drink,
          profile_id: profile

@@ -171,7 +171,7 @@ defmodule FeudHall.Infrastructure.PostgresAtomicityTest do
       init = {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}}
       {:accepted, _, rt} = Workflow.execute(rt, %{env("init", init) | actor: {:system, :admin}})
 
-      create = {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa", cuisine: "mexican"}}
+      create = {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Casa", cuisine: "mexican"}}
       {:accepted, _, rt} = Workflow.execute(rt, env("create", create))
       rt
     end

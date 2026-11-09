@@ -20,13 +20,18 @@ defmodule FeudHall.Domain.Hall.Evolver do
   holds after every event.
   """
 
-  alias FeudHall.Domain.Inventory
+  alias FeudHall.Domain.{Inventory, Random}
 
   @ledger %{cash: 0, raw: 0, wip: 0, cost_of_sales: 0, waste: 0, capex: 0, capital: 0, revenue: 0}
 
   def ledger_accounts, do: Map.keys(@ledger)
 
   def evolve(nil, %{type: :hall_initialized} = e) do
+    # Events recorded before the shared simulation carry no layout, seed, market, or demand.
+    seed = Map.get(e, :seed, 0)
+    market = Map.get(e, :market, %{})
+    demand = Map.get(e, :demand, %{rng: Random.new(Random.derive(seed, "demand"))})
+
     %{
       hall_id: e.hall_id,
       content_hash: e.content_hash,
@@ -38,6 +43,16 @@ defmodule FeudHall.Domain.Hall.Evolver do
       restaurants: %{},
       owners: %{},
       stalls: %{},
+      layout: Map.get(e, :layout, %{}),
+      market: %{
+        stock: Map.get(market, :stock, %{}),
+        requests: %{},
+        by_key: %{},
+        batch: 0,
+        next_clear_at: clear_interval(e.catalog)
+      },
+      demand: demand,
+      npcs: %{},
       visits: %{},
       trays: %{},
       orders: %{},
@@ -72,7 +87,12 @@ defmodule FeudHall.Domain.Hall.Evolver do
     state
     |> put_in([:restaurants, e.restaurant_id], restaurant)
     |> put_in([:owners, {Map.get(e, :owner_kind, :principal), e.owner}], e.restaurant_id)
-    |> put_in([:stalls, e.stall_id], %{id: e.stall_id, restaurant: e.restaurant_id, mode: :closed})
+    |> put_in([:stalls, e.stall_id], %{
+      id: e.stall_id,
+      restaurant: e.restaurant_id,
+      tier: Map.get(state.layout, e.stall_id),
+      mode: :closed
+    })
   end
 
   def evolve(state, %{type: :starter_grant_issued, restaurant_id: r, amount: a}),
@@ -406,6 +426,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
         else: acc ++ [a]
     end)
   end
+
+  defp clear_interval(catalog), do: get_in(catalog, [:rules, :market, :clear_every_hall_ms]) || 0
 
   defp post(state, rid, postings) do
     update_in(state, [:restaurants, rid, :ledger], fn ledger ->

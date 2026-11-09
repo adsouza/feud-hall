@@ -51,7 +51,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
         env(
           "create",
           {:principal, "alice"},
-          {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa", cuisine: "mexican"}}
+          {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Casa", cuisine: "mexican"}}
         )
       )
 
@@ -92,7 +92,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
         env(
           "npc:budget:1",
           {:npc, "budget"},
-          {:create_restaurant, %{restaurant_id: "r2", stall_id: "s2", name: "Budget", cuisine: "mexican"}}
+          {:create_restaurant, %{restaurant_id: "r2", stall_id: "s002", name: "Budget", cuisine: "mexican"}}
         )
       )
 

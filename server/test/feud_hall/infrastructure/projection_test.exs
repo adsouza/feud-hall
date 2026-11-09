@@ -30,7 +30,7 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
         rt,
         "create-r1",
         alice,
-        {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa Alice", cuisine: "mexican"}}
+        {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Casa Alice", cuisine: "mexican"}}
       )
 
     rt =
@@ -38,7 +38,7 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
         rt,
         "create-r2",
         bob,
-        {:create_restaurant, %{restaurant_id: "r2", stall_id: "s2", name: "Casa Bob", cuisine: "mexican"}}
+        {:create_restaurant, %{restaurant_id: "r2", stall_id: "s002", name: "Casa Bob", cuisine: "mexican"}}
       )
 
     rt =
@@ -72,7 +72,7 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
         {:purchase_stock, %{restaurant_id: "r2", product: "rice_long", qty: 50, max_price_per_kunit: 1_000_000_000}}
       )
 
-    rt = run!(rt, "open", alice, {:open_stall, %{stall_id: "s1"}})
+    rt = run!(rt, "open", alice, {:open_stall, %{stall_id: "s001"}})
 
     Enum.reduce(1..4, rt, fn n, rt ->
       run!(
@@ -84,7 +84,7 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
            source: :simulated,
            diner_id: "d#{n}",
            budget: 10_000,
-           stall_id: "s1",
+           stall_id: "s001",
            main: "chicken_tacos",
            drink: nil,
            profile_id: "unrestricted"

@@ -298,7 +298,7 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       w =
         run!(
           w,
-          {:create_restaurant, %{restaurant_id: "r2", stall_id: "s2", name: "Bob's", cuisine: "mexican"}},
+          {:create_restaurant, %{restaurant_id: "r2", stall_id: "s002", name: "Bob's", cuisine: "mexican"}},
           {:principal, "bob"},
           "bob"
         )
@@ -310,12 +310,12 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       assert {:error, :forbidden} =
                Hall.decide(state, {:set_menu_price, %{restaurant_id: "r1", recipe_id: "bean_tacos", price: 1}}, bob)
 
-      assert {:error, :forbidden} = Hall.decide(state, {:close_stall, %{stall_id: "s1"}}, bob)
+      assert {:error, :forbidden} = Hall.decide(state, {:close_stall, %{stall_id: "s001"}}, bob)
       # One non-terminated venture per owner.
       assert {:error, :venture_already_active} =
                Hall.decide(
                  state,
-                 {:create_restaurant, %{restaurant_id: "r3", stall_id: "s3", name: "Again", cuisine: "mexican"}},
+                 {:create_restaurant, %{restaurant_id: "r3", stall_id: "s003", name: "Again", cuisine: "mexican"}},
                  bob
                )
 
@@ -335,7 +335,7 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
          source: :simulated,
          diner_id: id,
          budget: 10_000,
-         stall_id: "s1",
+         stall_id: "s001",
          main: "bean_tacos",
          drink: drink,
          profile_id: "unrestricted"

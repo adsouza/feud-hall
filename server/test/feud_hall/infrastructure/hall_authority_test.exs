@@ -170,7 +170,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
       env(
         "create-sentinel",
         @alice,
-        {:create_restaurant, %{restaurant_id: "r9", stall_id: "s9", name: @sentinel, cuisine: "mexican"}}
+        {:create_restaurant, %{restaurant_id: "r9", stall_id: "s009", name: @sentinel, cuisine: "mexican"}}
       )
 
   defp grant(id), do: env(id, {:system, :visitor_fund}, {:grant_allowance, %{principal: "bob", amount: 100}})
@@ -395,7 +395,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
           env(
             "create",
             @alice,
-            {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: "Casa", cuisine: "mexican"}}
+            {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Casa", cuisine: "mexican"}}
           )
           |> Map.merge(%{observed_service_ms: 9_000_000, hall_ms: 9_000_000})
 

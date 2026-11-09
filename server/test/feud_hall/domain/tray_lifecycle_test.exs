@@ -84,19 +84,19 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     {state, _} = w
     {:ok, req} = Dietary.requirement(state.catalog, "unrestricted")
     blank = %{requirement: req, carbs_reserved: 0, carbs_served: 0}
-    {:ok, quote} = Offers.quote_tray(state, "s1", "bean_tacos", "horchata", blank)
+    {:ok, quote} = Offers.quote_tray(state, "s001", "bean_tacos", "horchata", blank)
     terms = Offers.terms(quote)
 
     w = run!(w, {:set_menu_price, %{restaurant_id: "r1", recipe_id: "horchata", price: 400}}, owner(), "raise")
     {state, _} = w
 
-    payload = %{source: :guest, stall_id: "s1", main: "bean_tacos", drink: "horchata", profile_id: "unrestricted"}
+    payload = %{source: :guest, stall_id: "s001", main: "bean_tacos", drink: "horchata", profile_id: "unrestricted"}
 
     assert {:error, :stale_terms} =
              Hall.decide(state, {:admit_visit, Map.put(payload, :confirmed, terms)}, ctx({:principal, "gina"}, "c1"))
 
     # A longer deadline than offered is also stale.
-    {:ok, fresh} = Offers.quote_tray(state, "s1", "bean_tacos", "horchata", blank)
+    {:ok, fresh} = Offers.quote_tray(state, "s001", "bean_tacos", "horchata", blank)
     longer = %{Offers.terms(fresh) | deadline: fresh.deadline + 1}
 
     assert {:error, :stale_terms} =
