@@ -228,6 +228,125 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
   end
 
+  describe "simulation content hardening" do
+    defp bad(path, value), do: put_in(SliceCatalog.catalog(), path, value)
+
+    defp has?(catalog, problem) do
+      assert {:error, problems} = Content.validate(catalog)
+      assert problem in problems
+    end
+
+    defp drop(path) do
+      {parent, [key]} = Enum.split(path, -1)
+
+      if parent == [],
+        do: Map.delete(SliceCatalog.catalog(), key),
+        else: update_in(SliceCatalog.catalog(), parent, &Map.delete(&1, key))
+    end
+
+    defp seg(key, value) do
+      [first | rest] = SliceCatalog.catalog().rules.demand.segments
+      [:rules, :demand, :segments] |> then(&bad(&1, [Map.put(first, key, value) | rest]))
+    end
+
+    defp seg_without(key) do
+      [first | rest] = SliceCatalog.catalog().rules.demand.segments
+      bad([:rules, :demand, :segments], [Map.delete(first, key) | rest])
+    end
+
+    test "the shipped fixed values are as designed" do
+      c = SliceCatalog.catalog()
+      assert c.rules.kitchen == %{prep_stations: 2, finish_stations: 1, queue_limit: 6}
+      m = c.rules.market
+      assert {m.clear_every_hall_ms, m.price_floor_permille, m.price_ceiling_permille} == {240_000, 500, 3_000}
+      assert c.rules.exposure_permille == %{quiet: 800, standard: 1_000, busy: 1_250, prime: 1_500}
+      d = c.rules.demand
+      assert [d.profile_mix["unrestricted"], d.profile_mix["vegetarian"], d.profile_mix["vegan"]] == [60, 20, 10]
+      assert [d.profile_mix["carb_conscious"], d.profile_mix["keto_style"]] == [7, 3]
+      assert length(d.hourly_weights) == 24
+      assert Enum.at(d.hourly_weights, 3) == 0 and Enum.at(d.hourly_weights, 4) == 0
+      assert Enum.sum(d.hourly_weights) > 0
+      assert d.arrivals_per_equivalent == 90 and d.equivalent_floor_millis == 3_000
+      assert d.operating_hours_ms == 79_200_000
+
+      for {id, target} <- m.target_stock_per_equivalent, do: assert(m.replenish_cap[id] >= target * 3)
+
+      assert Enum.map(c.layout, & &1.slot_id) == for(n <- 1..150, do: "s" <> String.pad_leading("#{n}", 3, "0"))
+    end
+
+    test "kitchen cases" do
+      has?(bad([:rules, :kitchen, :finish_stations], 0), {:kitchen, :bad_capacity})
+      has?(bad([:rules, :kitchen, :queue_limit], 0), {:kitchen, :bad_capacity})
+      has?(drop([:rules, :kitchen, :queue_limit]), {:kitchen, :bad_capacity})
+      has?(bad([:rules, :kitchen], :nope), {:kitchen, :bad_capacity})
+    end
+
+    test "slot tiers" do
+      layout = List.replace_at(SliceCatalog.catalog().layout, 4, %{slot_id: "s005", tier: :nowhere})
+      has?(bad([:layout], layout), {:layout, "s005", :bad_tier})
+    end
+
+    test "exposure" do
+      has?(drop([:rules, :exposure_permille, :prime]), {:exposure, :bad_exposure})
+      has?(bad([:rules, :exposure_permille, :quiet], 0), {:exposure, :bad_exposure})
+      has?(bad([:rules, :exposure_permille, :extra], 5), {:exposure, :bad_exposure})
+      has?(drop([:rules, :exposure_permille]), {:exposure, :bad_exposure})
+    end
+
+    test "segment weights" do
+      for key <- ~w(weight)a, v <- [0, -1, "1"], do: has?(seg(key, v), {:demand, "value", :bad_weights})
+
+      for key <- ~w(price_weight quality_weight wait_weight leave_weight)a,
+          v <- [-1, 1.5],
+          do: has?(seg(key, v), {:demand, "value", :bad_weights})
+
+      for key <- ~w(drink_attach_permille dessert_appetite_permille)a,
+          v <- [-1, 1001],
+          do: has?(seg(key, v), {:demand, "value", :bad_weights})
+
+      has?(seg_without(:wait_weight), {:demand, "value", :bad_weights})
+    end
+
+    test "segment main preference" do
+      for v <- [%{}, %{"ghost" => 1}, %{"bean_tacos" => -1}, %{"bean_tacos" => 0}, :x] do
+        has?(seg(:main_preference, v), {:demand, "value", :bad_main_preference})
+      end
+
+      has?(seg_without(:main_preference), {:demand, "value", :bad_main_preference})
+    end
+
+    test "profile mix" do
+      for v <- [%{"ghost" => 1}, %{"vegan" => -1}, %{"vegan" => 0}, %{}, :x] do
+        has?(bad([:rules, :demand, :profile_mix], v), {:demand, :bad_profile_mix})
+      end
+    end
+
+    test "hourly weights with zero total, and variety" do
+      has?(bad([:rules, :demand, :hourly_weights], List.duplicate(0, 24)), {:demand, :bad_hourly_weights})
+      has?(bad([:rules, :demand, :variety_weight], -1), {:demand, :bad_variety})
+      has?(bad([:rules, :demand, :variety_cap], 1.5), {:demand, :bad_variety})
+    end
+
+    test "malformed sections report instead of raising" do
+      has?(drop([:rules, :market, :target_stock_per_equivalent]), {:market, :malformed})
+      has?(bad([:rules, :market], nil), {:market, :malformed})
+      has?(drop([:rules, :demand, :segments]), {:demand, :malformed})
+      has?(bad([:rules, :demand], nil), {:demand, :malformed})
+      has?(bad([:rules, :demand, :segments], [:junk]), {:demand, :malformed})
+      has?(seg_without(:budget), {:demand, "value", :bad_range})
+      has?(bad([:layout], :nope), {:layout, :malformed})
+      has?(bad([:layout], [%{tier: :quiet}]), {:layout, :malformed})
+      has?(drop([:layout]), {:layout, :malformed})
+      has?(bad([:npc_profiles], [%{id: "budget"}]), {:npc, "budget", :bad_profile})
+      has?(bad([:npc_profiles], [:junk]), {:npc, nil, :bad_profile})
+      has?(drop([:rules, :seed]), {:seed, :bad_seed})
+      has?(bad([:rules, :seed], "7"), {:seed, :bad_seed})
+      has?(bad([:rules, :seed], -1), {:seed, :bad_seed})
+      has?(bad([:rules, :seed], 18_446_744_073_709_551_616), {:seed, :bad_seed})
+      assert :ok = Content.validate(bad([:rules, :seed], 18_446_744_073_709_551_615))
+    end
+  end
+
   defp bean_lines(catalog, sub_fun) do
     Enum.map(catalog.recipes["bean_tacos"].lines, fn
       %{line_id: "tortilla", substitute: s} = l -> %{l | substitute: sub_fun.(s)}

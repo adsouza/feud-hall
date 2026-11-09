@@ -48,39 +48,71 @@ defmodule FeudHall.Domain.Content do
   @tiers [:quiet, :standard, :busy, :prime]
   @policies [:prefer_substitute, :prefer_primary, :primary_only]
   @max_slots 150
+  @max_seed 18_446_744_073_709_551_615
+  @demand_keys ~w(arrivals_per_equivalent equivalent_floor_millis operating_hours_ms hourly_weights
+                  segments profile_mix variety_weight variety_cap)a
 
+  # Simulation sections are checked defensively: a missing key or wrong type is
+  # reported as a problem, never raised.
   defp simulation_problems(catalog) do
-    kitchen_problems(catalog.rules.kitchen) ++
-      market_problems(catalog, catalog.rules.market) ++
-      demand_problems(catalog.rules.demand) ++
-      layout_problems(catalog.layout) ++
-      Enum.flat_map(catalog.npc_profiles, &npc_problems/1)
+    rules = get(catalog, :rules)
+
+    seed_problems(get(rules, :seed)) ++
+      kitchen_problems(get(rules, :kitchen)) ++
+      exposure_problems(get(rules, :exposure_permille)) ++
+      market_problems(catalog, get(rules, :market)) ++
+      demand_problems(catalog, get(rules, :demand)) ++
+      layout_problems(get(catalog, :layout)) ++
+      npc_problems(get(catalog, :npc_profiles))
   end
 
+  defp get(map, key) when is_map(map), do: Map.get(map, key)
+  defp get(_, _), do: nil
+
   defp pos_int?(v), do: is_integer(v) and v > 0
+  defp nonneg_int?(v), do: is_integer(v) and v >= 0
+
+  defp seed_problems(seed),
+    do: if(is_integer(seed) and seed in 0..@max_seed//1, do: [], else: [{:seed, :bad_seed}])
 
   defp kitchen_problems(k) do
-    if Enum.all?([k.prep_stations, k.finish_stations, k.queue_limit], &pos_int?/1),
+    if Enum.all?([:prep_stations, :finish_stations, :queue_limit], &pos_int?(get(k, &1))),
       do: [],
       else: [{:kitchen, :bad_capacity}]
   end
 
-  defp market_problems(catalog, m) do
-    bounds_ok =
-      pos_int?(m.clear_every_hall_ms) and pos_int?(m.price_floor_permille) and
-        is_integer(m.price_ceiling_permille) and m.price_floor_permille <= m.price_ceiling_permille
+  defp exposure_problems(e) do
+    ok =
+      is_map(e) and Enum.sort(Map.keys(e)) == Enum.sort(@tiers) and Enum.all?(Map.values(e), &pos_int?/1)
 
-    per_product =
-      for id <- catalog.products |> Map.keys() |> Enum.sort(),
-          problem <- market_product_problems(m, id),
-          do: {:market, id, problem}
-
-    if(bounds_ok, do: [], else: [{:market, :bad_price_bounds}]) ++ per_product
+    if ok, do: [], else: [{:exposure, :bad_exposure}]
   end
 
-  defp market_product_problems(m, id) do
-    target = Map.get(m.target_stock_per_equivalent, id)
-    cap = Map.get(m.replenish_cap, id)
+  defp market_problems(catalog, m) do
+    targets = get(m, :target_stock_per_equivalent)
+    caps = get(m, :replenish_cap)
+
+    if is_map(targets) and is_map(caps) do
+      floor = get(m, :price_floor_permille)
+      ceiling = get(m, :price_ceiling_permille)
+
+      bounds_ok =
+        pos_int?(get(m, :clear_every_hall_ms)) and pos_int?(floor) and is_integer(ceiling) and floor <= ceiling
+
+      per_product =
+        for id <- catalog.products |> Map.keys() |> Enum.sort(),
+            problem <- market_product_problems(targets, caps, id),
+            do: {:market, id, problem}
+
+      if(bounds_ok, do: [], else: [{:market, :bad_price_bounds}]) ++ per_product
+    else
+      [{:market, :malformed}]
+    end
+  end
+
+  defp market_product_problems(targets, caps, id) do
+    target = Map.get(targets, id)
+    cap = Map.get(caps, id)
 
     cond do
       not pos_int?(target) -> [:missing_target]
@@ -89,40 +121,98 @@ defmodule FeudHall.Domain.Content do
     end
   end
 
-  defp demand_problems(d) do
-    w = d.hourly_weights
+  defp demand_problems(catalog, d) do
+    segments = get(d, :segments)
+
+    well_formed =
+      is_map(d) and Enum.all?(@demand_keys, &Map.has_key?(d, &1)) and
+        Enum.all?([:arrivals_per_equivalent, :equivalent_floor_millis, :operating_hours_ms], &pos_int?(d[&1])) and
+        is_list(segments) and segments != [] and Enum.all?(segments, &(is_map(&1) and Map.has_key?(&1, :id)))
+
+    if well_formed do
+      hourly_problems(d.hourly_weights) ++
+        variety_problems(d) ++
+        profile_mix_problems(catalog, d.profile_mix) ++
+        Enum.flat_map(segments, &segment_problems(catalog, &1))
+    else
+      [{:demand, :malformed}]
+    end
+  end
+
+  defp hourly_problems(w) do
+    ok =
+      is_list(w) and length(w) == 24 and Enum.all?(w, &nonneg_int?/1) and
+        Enum.at(w, 3) == 0 and Enum.at(w, 4) == 0 and Enum.sum(w) > 0
+
+    if ok, do: [], else: [{:demand, :bad_hourly_weights}]
+  end
+
+  defp variety_problems(d),
+    do: if(nonneg_int?(d.variety_weight) and nonneg_int?(d.variety_cap), do: [], else: [{:demand, :bad_variety}])
+
+  defp profile_mix_problems(catalog, mix) do
+    ok =
+      is_map(mix) and mix != %{} and Enum.all?(Map.keys(mix), &Map.has_key?(catalog.profiles, &1)) and
+        weights_ok?(Map.values(mix))
+
+    if ok, do: [], else: [{:demand, :bad_profile_mix}]
+  end
+
+  defp weights_ok?(values), do: Enum.all?(values, &nonneg_int?/1) and Enum.sum(values) > 0
+
+  defp segment_problems(catalog, s) do
+    id = s.id
+
+    ranges_ok = range?(get(s, :budget)) and range?(get(s, :patience_service_ms))
 
     weights_ok =
-      is_list(w) and length(w) == 24 and Enum.all?(w, &(is_integer(&1) and &1 >= 0)) and
-        Enum.at(w, 3) == 0 and Enum.at(w, 4) == 0
+      pos_int?(get(s, :weight)) and
+        Enum.all?([:price_weight, :quality_weight, :wait_weight, :leave_weight], &nonneg_int?(get(s, &1))) and
+        Enum.all?([:drink_attach_permille, :dessert_appetite_permille], fn k ->
+          v = get(s, k)
+          is_integer(v) and v in 0..1000
+        end)
 
-    if(weights_ok, do: [], else: [{:demand, :bad_hourly_weights}]) ++
-      for(s <- d.segments, not (range?(s.budget) and range?(s.patience_service_ms)), do: {:demand, s.id, :bad_range})
+    pref = get(s, :main_preference)
+
+    pref_ok =
+      is_map(pref) and pref != %{} and Enum.all?(Map.keys(pref), &Map.has_key?(catalog.recipes, &1)) and
+        weights_ok?(Map.values(pref))
+
+    for {false, problem} <- [{ranges_ok, :bad_range}, {weights_ok, :bad_weights}, {pref_ok, :bad_main_preference}],
+        do: {:demand, id, problem}
   end
 
   defp range?([lo, hi]), do: is_integer(lo) and is_integer(hi) and lo > 0 and lo <= hi
   defp range?(_), do: false
 
   defp layout_problems(layout) do
-    too_many = if length(layout) > @max_slots, do: [{:layout, :too_many_slots}], else: []
+    if is_list(layout) and Enum.all?(layout, &(is_map(&1) and is_binary(get(&1, :slot_id)) and Map.has_key?(&1, :tier))) do
+      too_many = if length(layout) > @max_slots, do: [{:layout, :too_many_slots}], else: []
 
-    duplicates =
-      layout
-      |> Enum.map(& &1.slot_id)
-      |> Enum.frequencies()
-      |> Enum.filter(fn {_, n} -> n > 1 end)
-      |> Enum.map(fn {id, _} -> {:layout, id, :duplicate} end)
-      |> Enum.sort()
+      duplicates =
+        layout
+        |> Enum.map(& &1.slot_id)
+        |> Enum.frequencies()
+        |> Enum.filter(fn {_, n} -> n > 1 end)
+        |> Enum.map(fn {id, _} -> {:layout, id, :duplicate} end)
+        |> Enum.sort()
 
-    too_many ++ duplicates
+      too_many ++ duplicates ++ for(slot <- layout, slot.tier not in @tiers, do: {:layout, slot.slot_id, :bad_tier})
+    else
+      [{:layout, :malformed}]
+    end
   end
 
-  defp npc_problems(p) do
-    ok =
-      pos_int?(p.price_permille) and p.policy in @policies and pos_int?(p.restock_days) and
-        p.preferred_tier in @tiers
+  defp npc_problems(profiles) when is_list(profiles), do: Enum.flat_map(profiles, &npc_profile_problems/1)
+  defp npc_problems(_), do: [{:npc, nil, :bad_profile}]
 
-    if ok, do: [], else: [{:npc, p.id, :bad_profile}]
+  defp npc_profile_problems(p) do
+    ok =
+      pos_int?(get(p, :price_permille)) and get(p, :policy) in @policies and pos_int?(get(p, :restock_days)) and
+        get(p, :preferred_tier) in @tiers
+
+    if ok, do: [], else: [{:npc, get(p, :id), :bad_profile}]
   end
 
   defp product_problems(p) do
