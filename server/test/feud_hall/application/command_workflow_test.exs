@@ -9,7 +9,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   defp env(id, actor, command), do: %{command_id: id, actor: actor, command: command}
 
   defp runtime do
-    rt = Workflow.open(InMemoryEventStore, InMemoryEventStore.new())
+    {:ok, rt} = Workflow.open(InMemoryEventStore, InMemoryEventStore.new())
 
     {:accepted, _, rt} =
       Workflow.execute(
@@ -95,18 +95,74 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   test "a stale expected position conflicts instead of appending a competing batch" do
     rt = runtime()
     store = rt.store
-    receipt = %{fingerprint: "x", outcome: :accepted}
 
-    assert {:ok, store2, _} =
-             InMemoryEventStore.append(store, rt.position, "a", [%{type: :clock_advanced, to: 24}], receipt)
+    request = fn store, id, to ->
+      %{
+        command_id: id,
+        expected_position: rt.position,
+        expected_versions: rt.versions,
+        hall_stream: "hall:h1",
+        events: [%{type: :clock_advanced, to: to}],
+        control_events: [],
+        receipt: %{fingerprint: "x", outcome: :accepted},
+        outbox: [],
+        projection_rows: [],
+        context: %{actor: {:system, :scheduler}, correlation_id: id, content_hash: nil, hall_ms: to}
+      }
+      |> then(&InMemoryEventStore.append(store, &1))
+    end
+
+    assert {:ok, store2, _} = request.(store, "a", 24)
 
     # A second writer that read the old head must not append.
-    assert {:error, :conflict, _} =
-             InMemoryEventStore.append(store2, rt.position, "b", [%{type: :clock_advanced, to: 48}], receipt)
+    assert {:error, :conflict, _} = request.(store2, "b", 48)
 
     # A workflow holding the stale head reports the conflict without evolving.
     stale = %{rt | store: store2}
     assert {:error, :conflict} = Workflow.execute(stale, env("buy-9", {:principal, "alice"}, purchase(1)))
+  end
+
+  test "a fenced append stops the runtime" do
+    rt = runtime()
+    armed = %{rt | store: InMemoryEventStore.fail_next(rt.store, :fenced)}
+
+    assert {:error, :fenced, fenced} = Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(100)))
+    assert fenced.mode == :fenced
+    assert fenced.state == rt.state
+    assert InMemoryEventStore.receipt(fenced.store, "buy-1") == :none
+
+    # The injected failure was one-shot, so only the runtime's mode refuses further work.
+    assert {:error, :fenced} = Workflow.execute(fenced, env("buy-1", {:principal, "alice"}, purchase(100)))
+    assert {:error, :fenced} = Workflow.execute(fenced, env("buy-2", {:principal, "alice"}, purchase(5)), 60_000)
+    assert {:error, :fenced} = Workflow.resolve(fenced, "buy-1")
+  end
+
+  test "an accepted command commits its projection rows and stream versions with the batch" do
+    rt = runtime()
+    assert rt.versions.hall == length(Enum.flat_map(elem(InMemoryEventStore.read_from(rt.store, 0), 1), & &1.events))
+
+    {:accepted, receipt, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
+    ledger = rt.state.restaurants["r1"].ledger
+
+    assert %{restaurant_id: "r1", account: :cash, amount: ledger.cash, position: receipt.position} in InMemoryEventStore.projection(
+             rt.store,
+             :balances
+           )
+
+    assert [%{restaurant_id: "r1", product: "rice_long", on_hand: 100, reserved: 0}] =
+             InMemoryEventStore.projection(rt.store, :stock)
+
+    assert InMemoryEventStore.stream_versions(rt.store, "hall:h1") == rt.versions
+    assert {:ok, [_ | _] = batches} = InMemoryEventStore.read_from(rt.store, 0)
+    assert List.last(batches).hall_ms == rt.state.now
+  end
+
+  test "a rejected initialization against an empty store records only its receipt" do
+    {:ok, rt} = Workflow.open(InMemoryEventStore, InMemoryEventStore.new())
+    {:rejected, _receipt, rt} = Workflow.execute(rt, env("buy-0", {:principal, "alice"}, purchase(1)))
+    assert rt.state == nil
+    assert rt.position == 0
+    assert rt.versions == %{hall: 0, control: 0}
   end
 
   test "due clock work commits as its own batch before the command is decided" do
@@ -121,7 +177,10 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   test "the store replays to the same head the workflow holds" do
     rt = runtime()
     {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(10)), 1_000)
-    assert Workflow.open(InMemoryEventStore, rt.store).state == rt.state
+    assert {:ok, reopened} = Workflow.open(InMemoryEventStore, rt.store)
+    assert reopened.state == rt.state
+    assert reopened.versions == rt.versions
+    assert reopened.position == rt.position
   end
 
   describe "codec and snapshots" do
@@ -129,7 +188,9 @@ defmodule FeudHall.Application.CommandWorkflowTest do
       rt = runtime()
       {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(10)), 1_000)
 
-      for batch <- InMemoryEventStore.read_from(rt.store, 0), event <- batch.events do
+      {:ok, batches} = InMemoryEventStore.read_from(rt.store, 0)
+
+      for batch <- batches, event <- batch.events do
         assert {:ok, ^event} = event |> EventCodec.encode!() |> EventCodec.decode()
       end
     end

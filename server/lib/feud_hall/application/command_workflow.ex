@@ -8,17 +8,22 @@ defmodule FeudHall.Application.CommandWorkflow do
        actor, command kind, and canonical payload: an identical retry returns
        the original receipt, changed content under the same ID is a conflict;
     3. independently due clock advancement, committed as its own batch;
-    4. the pure domain decision against the caught-up head;
-    5. atomic append of the batch with its receipt at the expected position,
-       and only then evolution of the in-memory head.
+    4. the pure domain decision against the caught-up head, evolved into a
+       candidate state from which the synchronous projection rows are derived;
+    5. atomic append of the batch, its receipt, and those rows at the expected
+       position and stream versions, and only then adoption of the candidate
+       as the in-memory head.
 
   A rejected command records a rejection receipt and no domain events. A lost
   append response puts the runtime into `:recovery_required`; it accepts no
   new economic commands until `resolve/2` has looked up that same command ID.
+  A fenced append (another owner holds the hall's authority) puts the runtime
+  into `:fenced`; it refuses all later commands and never becomes ready again.
   Authentication happens before this workflow: `actor` is the server-resolved
   principal or system capability, never a client-supplied ID.
   """
 
+  alias FeudHall.Application.Projections.Balances
   alias FeudHall.Domain.{Clock, Hall}
 
   @commands ~w(initialize_hall advance_clock create_restaurant open_stall close_stall unlock_recipe
@@ -26,13 +31,35 @@ defmodule FeudHall.Application.CommandWorkflow do
                admit_visit cancel_tray start_preparation complete_preparation serve_tray accept_dessert
                decline_dessert cancel_dessert serve_dessert)a
 
-  defstruct store_mod: nil, store: nil, state: nil, position: 0, mode: :ready, pending: nil
+  defstruct store_mod: nil,
+            store: nil,
+            state: nil,
+            control: nil,
+            position: 0,
+            versions: %{hall: 0, control: 0},
+            epoch: nil,
+            mode: :ready,
+            pending: nil,
+            diagnostics: nil
 
-  @doc "Opens a runtime by replaying every committed batch from the store."
-  def open(store_mod, store) do
-    batches = store_mod.read_from(store, 0)
-    state = batches |> Enum.flat_map(& &1.events) |> Hall.replay(nil)
-    %__MODULE__{store_mod: store_mod, store: store, state: state, position: store_mod.head(store)}
+  @doc """
+  Opens a runtime by replaying every committed batch from the store. A batch
+  that cannot be decoded stops the open with the store's error.
+  """
+  def open(store_mod, store, opts \\ []) do
+    with {:ok, batches} <- store_mod.read_from(store, 0) do
+      state = batches |> Enum.flat_map(& &1.events) |> Hall.replay(nil)
+
+      {:ok,
+       %__MODULE__{
+         store_mod: store_mod,
+         store: store,
+         state: state,
+         position: store_mod.head(store),
+         versions: store_mod.stream_versions(store, hall_stream(state)),
+         diagnostics: Keyword.get(opts, :diagnostics)
+       }}
+    end
   end
 
   @doc """
@@ -42,6 +69,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   """
   def execute(runtime, envelope, observed_service_ms \\ nil)
 
+  def execute(%{mode: :fenced}, _envelope, _observed), do: {:error, :fenced}
   def execute(%{mode: :recovery_required}, _envelope, _observed), do: {:error, :recovery_required}
 
   def execute(runtime, envelope, observed_service_ms) do
@@ -53,6 +81,7 @@ defmodule FeudHall.Application.CommandWorkflow do
     else
       {:replayed, receipt} -> {:replayed, receipt, runtime}
       {:error, _reason} = error -> error
+      {:error, :fenced, _runtime} = fenced -> fenced
       {:uncertain, _id, _runtime} = uncertain -> uncertain
     end
   end
@@ -61,12 +90,14 @@ defmodule FeudHall.Application.CommandWorkflow do
   Resolves an uncertain command by its original ID. A found receipt means it
   committed: the head is rebuilt from the store. No receipt means it did not.
   """
-  def resolve(runtime, command_id) do
-    reopened = open(runtime.store_mod, runtime.store)
+  def resolve(%{mode: :fenced}, _command_id), do: {:error, :fenced}
 
-    case runtime.store_mod.receipt(runtime.store, command_id) do
-      {:ok, receipt} -> {:committed, receipt, reopened}
-      :none -> {:not_committed, reopened}
+  def resolve(runtime, command_id) do
+    with {:ok, reopened} <- open(runtime.store_mod, runtime.store, diagnostics: runtime.diagnostics) do
+      case runtime.store_mod.receipt(runtime.store, command_id) do
+        {:ok, receipt} -> {:committed, receipt, reopened}
+        :none -> {:not_committed, reopened}
+      end
     end
   end
 
@@ -139,9 +170,19 @@ defmodule FeudHall.Application.CommandWorkflow do
         {:error, reason} -> {[], Map.merge(receipt, %{outcome: {:rejected, reason}, event_count: 0})}
       end
 
-    case runtime.store_mod.append(runtime.store, runtime.position, envelope.command_id, events, receipt) do
+    candidate = Hall.replay(events, runtime.state)
+    request = append_request(runtime, envelope, events, receipt, candidate)
+
+    case runtime.store_mod.append(runtime.store, request) do
       {:ok, store, position} ->
-        runtime = %{runtime | store: store, position: position, state: Hall.replay(events, runtime.state)}
+        runtime = %{
+          runtime
+          | store: store,
+            position: position,
+            state: candidate,
+            versions: %{runtime.versions | hall: runtime.versions.hall + length(events)}
+        }
+
         receipt = Map.put(receipt, :position, position)
         status = if receipt.outcome == :accepted, do: :accepted, else: :rejected
         {status, receipt, runtime}
@@ -150,8 +191,34 @@ defmodule FeudHall.Application.CommandWorkflow do
         {:uncertain, envelope.command_id,
          %{runtime | store: store, mode: :recovery_required, pending: envelope.command_id}}
 
+      {:error, :fenced, store} ->
+        {:error, :fenced, %{runtime | store: store, mode: :fenced}}
+
       {:error, reason, _store} ->
         {:error, reason}
     end
   end
+
+  defp append_request(runtime, envelope, events, receipt, candidate) do
+    %{
+      command_id: envelope.command_id,
+      expected_position: runtime.position,
+      expected_versions: runtime.versions,
+      hall_stream: hall_stream(runtime.state || candidate),
+      events: events,
+      control_events: [],
+      receipt: receipt,
+      outbox: [],
+      projection_rows: Balances.changes(runtime.state, candidate, runtime.position + 1),
+      context: %{
+        actor: envelope.actor,
+        correlation_id: envelope.command_id,
+        content_hash: candidate && candidate.content_hash,
+        hall_ms: candidate && candidate.now
+      }
+    }
+  end
+
+  defp hall_stream(nil), do: nil
+  defp hall_stream(state), do: "hall:" <> state.hall_id
 end
