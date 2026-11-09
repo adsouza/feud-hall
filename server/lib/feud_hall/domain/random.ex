@@ -33,10 +33,14 @@ defmodule FeudHall.Domain.Random do
   @doc """
   Draws an unbiased integer in `0..n-1`.
 
-  Draws at or above the largest multiple of `n` not exceeding 2^64 are
+  `n` may be at most 2^64 (larger values raise `ArgumentError`, as they would
+  otherwise never terminate). Draws at or above the largest multiple of `n` not exceeding 2^64 are
   rejected and redrawn, so every residue is equally likely.
   """
   @spec uniform(state(), pos_integer()) :: {non_neg_integer(), state()}
+  def uniform(_state, n) when is_integer(n) and n > @two_64,
+    do: raise(ArgumentError, "n must not exceed 2^64")
+
   def uniform(state, n) when is_integer(n) and n > 0 do
     limit = @two_64 - rem(@two_64, n)
     draw_below(state, n, limit)

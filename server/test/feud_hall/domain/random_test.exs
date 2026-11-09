@@ -3,7 +3,14 @@ defmodule FeudHall.Domain.RandomTest do
 
   alias FeudHall.Domain.Random
 
+  import Bitwise
+
   @max_u64 0xFFFFFFFFFFFFFFFF
+
+  defp redraw(state, limit) do
+    {value, state} = Random.next(state)
+    if value < limit, do: {value, state}, else: redraw(state, limit)
+  end
 
   defp draws(state, count, fun) do
     {values, _state} =
@@ -15,6 +22,15 @@ defmodule FeudHall.Domain.RandomTest do
   describe "next/1" do
     test "matches the reference splitmix64 first output for seed 0" do
       assert {16_294_208_416_658_607_535, _state} = Random.new(0) |> Random.next()
+    end
+
+    test "matches the reference splitmix64 outputs 2 and 3 for seed 0" do
+      {_, s1} = Random.new(0) |> Random.next()
+      {second, s2} = Random.next(s1)
+      {third, _} = Random.next(s2)
+
+      assert second == 7_960_286_522_194_355_700
+      assert third == 487_617_019_471_545_679
     end
 
     test "state and outputs stay within 64 bits" do
@@ -70,6 +86,39 @@ defmodule FeudHall.Domain.RandomTest do
       assert Enum.all?(values, &(&1 in 0..(n - 1)))
     end
 
+    test "rejects biased draws instead of taking the plain remainder" do
+      n = 0x8000000000000001
+      # rem(2^64, n) = 2^63 - 1, so draws at or above 2^63 + 1 are rejected.
+      limit = 0x8000000000000001
+
+      state =
+        Enum.find(0..10_000, fn s ->
+          {raw, _} = Random.next(s)
+          raw >= limit
+        end)
+
+      assert state
+      {first, after_one} = Random.next(state)
+      assert first >= limit
+
+      {value, final} = Random.uniform(state, n)
+      {accepted, expected_final} = redraw(after_one, limit)
+
+      assert value == rem(accepted, n)
+      assert final == expected_final
+      assert final != after_one
+      assert value != rem(first, n)
+    end
+
+    test "accepts n = 2^64 and returns the raw draw" do
+      {raw, expected_state} = Random.next(Random.new(6))
+      assert {^raw, ^expected_state} = Random.uniform(Random.new(6), 1 <<< 64)
+    end
+
+    test "raises for n above 2^64 instead of looping forever" do
+      assert_raise ArgumentError, fn -> Random.uniform(Random.new(1), (1 <<< 64) + 1) end
+    end
+
     test "rejects non-positive n" do
       assert_raise FunctionClauseError, fn -> Random.uniform(Random.new(1), 0) end
     end
@@ -79,6 +128,10 @@ defmodule FeudHall.Domain.RandomTest do
     test "is inclusive on both ends" do
       values = Random.new(3) |> draws(500, &Random.range(&1, -2, 2))
       assert Enum.sort(Enum.uniq(values)) == [-2, -1, 0, 1, 2]
+    end
+
+    test "raises for a span above 2^64" do
+      assert_raise ArgumentError, fn -> Random.range(Random.new(1), 0, 1 <<< 64) end
     end
 
     test "lo = hi returns lo" do
@@ -108,8 +161,20 @@ defmodule FeudHall.Domain.RandomTest do
       assert Enum.uniq(values) == [:y]
     end
 
+    test "raises for a total above 2^64" do
+      assert_raise ArgumentError, fn ->
+        Random.weighted(Random.new(1), a: 1 <<< 64, b: 1)
+      end
+    end
+
+    test "rejects negative and non-integer weights" do
+      assert_raise FunctionClauseError, fn -> Random.weighted(Random.new(1), a: -1, b: 3) end
+      assert_raise FunctionClauseError, fn -> Random.weighted(Random.new(1), a: 1.5, b: 3) end
+    end
+
     test "rejects an empty list and a zero total" do
-      assert_raise FunctionClauseError, fn -> Random.weighted(Random.new(1), []) end
+      empty = Enum.filter([a: 1], fn _ -> false end)
+      assert_raise FunctionClauseError, fn -> Random.weighted(Random.new(1), empty) end
       assert_raise ArgumentError, fn -> Random.weighted(Random.new(1), a: 0, b: 0) end
     end
   end
