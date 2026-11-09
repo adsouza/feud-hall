@@ -375,18 +375,27 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   # --- reads ----------------------------------------------------------------
 
   @impl true
-  def read_from(store, after_position) do
-    repo = store.repo
+  def read_from(store, after_position), do: read_after(store.repo, after_position, nil)
 
+  @doc """
+  Reads at most `limit` batches (all when `nil`) after `after_position`, in position order, decoded
+  like `read_from/2`. Lets an asynchronous consumer page through the log without loading it whole.
+  """
+  @spec read_after(module(), non_neg_integer(), pos_integer() | nil) :: {:ok, [map()]} | {:error, term()}
+  def read_after(repo, after_position, limit) do
     %{rows: batches} =
-      repo.query!("select position, command_id, hall_ms from batches where position > $1 order by position", [
-        after_position
-      ])
+      repo.query!(
+        "select position, command_id, hall_ms from batches where position > $1 order by position limit $2",
+        [after_position, limit]
+      )
+
+    upper = batches |> List.last() |> then(&(&1 && hd(&1)))
 
     %{rows: event_rows} =
       repo.query!(
-        "select position, stream, payload from events where position > $1 order by position, batch_order",
-        [after_position]
+        "select position, stream, payload from events where position > $1 and position <= $2 " <>
+          "order by position, batch_order",
+        [after_position, upper || after_position]
       )
 
     events_by_position = Enum.group_by(event_rows, &hd/1, &tl/1)
