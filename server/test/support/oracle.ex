@@ -241,8 +241,9 @@ defmodule FeudHall.Oracle do
     |> failures()
   end
 
-  # Market conservation, replayed from the facts alone: the opening stock, less
-  # every fill in order (never driving a product below zero), is the market's
+  # Market conservation, replayed from the facts alone: the opening stock, plus
+  # every midnight replenishment, less every fill in order (never driving a
+  # product below zero), is the market's
   # stock now. Pending requests are those submitted and neither replaced,
   # cancelled, nor settled by a later clearing; each clearing settles exactly
   # the requests pending at it, and fill + unfilled = requested for each.
@@ -259,6 +260,10 @@ defmodule FeudHall.Oracle do
 
           %{type: :purchase_request_cancelled, request_id: id} ->
             {stock, Map.delete(pending, id), problems}
+
+          %{type: :day_closed, replenishment: added} ->
+            stock = Enum.reduce(added, stock, fn {product, qty}, s -> Map.update(s, product, qty, &(&1 + qty)) end)
+            {stock, pending, problems}
 
           %{type: :market_cleared, fills: fills, unfilled: unfilled} ->
             stock = Enum.reduce(fills, stock, fn f, s -> Map.update(s, f.product, -f.qty, &(&1 - f.qty)) end)

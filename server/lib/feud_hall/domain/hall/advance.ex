@@ -14,7 +14,9 @@ defmodule FeudHall.Domain.Hall.Advance do
        instant, after same-timestamp service, so service exactly at the
        deadline wins);
     5. the 05:00 reopening of customer access;
-    6. the day boundary (reserved);
+    6. the day boundary at each 00:00: `day_closed` fixes the next day's scale,
+       replenishes the market and publishes the summary (so a same-instant
+       clearing sees the replenished stock);
     7. market clearing every `clear_every_hall_ms`, cleaning included: one
        `market_cleared` batch that settles every pending purchase request;
     8. arrivals (reserved);
@@ -29,7 +31,7 @@ defmodule FeudHall.Domain.Hall.Advance do
   batch commits.
   """
 
-  alias FeudHall.Domain.{Clock, Inventory, Kitchen, Market}
+  alias FeudHall.Domain.{Clock, Demand, Inventory, Kitchen, Market}
   alias FeudHall.Domain.Hall.{Evolver, Settlement}
 
   @doc "Returns the events that advance `state` to hall time `target`."
@@ -38,7 +40,7 @@ defmodule FeudHall.Domain.Hall.Advance do
   @doc """
   The boundary classes in same-timestamp order: `{class, due_fun}` where
   `due_fun.(state)` lists `{at, entity_id, ref}`. Later work plugs in its own
-  class (6 day boundary, 8 arrivals) here.
+  class (8 arrivals) here.
   """
   def classes do
     [
@@ -47,6 +49,7 @@ defmodule FeudHall.Domain.Hall.Advance do
       {3, &kitchen_completions/1},
       {4, &deadlines/1},
       {5, &reopening/1},
+      {6, &day_boundary/1},
       {7, &market_clearing/1},
       {9, &dispatch/1}
     ]
@@ -55,17 +58,22 @@ defmodule FeudHall.Domain.Hall.Advance do
   defp loop(state, target, acc) do
     case next_due(state, target) do
       nil ->
-        tail = if target > state.now, do: [%{type: :clock_advanced, to: target}], else: []
+        tail = if target > state.now, do: [clock_advanced(state, target)], else: []
         acc ++ tail
 
       {at, _class, _id, ref} ->
-        tick = if at > state.now, do: [%{type: :clock_advanced, to: at}], else: []
+        tick = if at > state.now, do: [clock_advanced(state, at)], else: []
         state = Enum.reduce(tick, state, &Evolver.evolve(&2, &1))
         events = handle(state, ref)
         state = Enum.reduce(events, state, &Evolver.evolve(&2, &1))
         loop(state, target, acc ++ tick ++ events)
     end
   end
+
+  # Who operated over the interval is decided from the state it starts in and
+  # recorded; the evolver only reads it. Every state change inside a day is a
+  # boundary or a command, so the list is constant between them.
+  defp clock_advanced(state, to), do: %{type: :clock_advanced, to: to, operating: Demand.operating(state)}
 
   defp next_due(state, target) do
     classes()
@@ -124,6 +132,12 @@ defmodule FeudHall.Domain.Hall.Advance do
     do: [{Clock.cleaning_end_of(Clock.day_of(now)), "cleaning", {:cleaning_end}}]
 
   defp reopening(_state), do: []
+
+  # Class 6: each midnight, once. Halls recorded without demand rules have none.
+  defp day_boundary(%{demand: %{next_day_at: at}, catalog: %{rules: %{demand: %{operating_hours_ms: _}}}}),
+    do: [{at, "day", {:day_close}}]
+
+  defp day_boundary(_state), do: []
 
   # Class 7: every `clear_every_hall_ms`, cleaning included, whether or not
   # requests are pending. Halls recorded without market rules never clear.
@@ -217,6 +231,8 @@ defmodule FeudHall.Domain.Hall.Advance do
       {:dessert, oid} -> Settlement.serve_dessert(state, state.orders[oid])
     end
   end
+
+  defp handle(state, {:day_close}), do: [Demand.close_day(state)]
 
   defp handle(state, {:market_clear}), do: [Market.clear(state)]
 

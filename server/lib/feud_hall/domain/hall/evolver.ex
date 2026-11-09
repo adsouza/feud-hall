@@ -24,7 +24,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
   holds after every event.
   """
 
-  alias FeudHall.Domain.{Inventory, Market, Random}
+  alias FeudHall.Domain.{Demand, Inventory, Market, Random}
 
   @ledger %{cash: 0, raw: 0, wip: 0, cost_of_sales: 0, waste: 0, capex: 0, capital: 0, revenue: 0}
 
@@ -34,7 +34,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
     # Events recorded before the shared simulation carry no layout, seed, market, or demand.
     seed = Map.get(e, :seed, 0)
     market = Map.get(e, :market, %{})
-    demand = Map.get(e, :demand, %{rng: Random.new(Random.derive(seed, "demand"))})
+    demand = Demand.new(e.catalog, Map.get(e, :demand, %{rng: Random.new(Random.derive(seed, "demand"))}))
 
     %{
       hall_id: e.hall_id,
@@ -66,7 +66,17 @@ defmodule FeudHall.Domain.Hall.Evolver do
     }
   end
 
-  def evolve(state, %{type: :clock_advanced, to: to}) when to >= state.now, do: %{state | now: to}
+  # `operating` is the list recorded for the interval; events written before it
+  # existed observe nothing.
+  def evolve(state, %{type: :clock_advanced, to: to} = e) when to >= state.now do
+    state = update_in(state, [:demand], &Demand.observe(&1, Map.get(e, :operating, []), to - state.now))
+    %{state | now: to}
+  end
+
+  def evolve(state, %{type: :day_closed} = e) do
+    state = Map.update!(state, :demand, &Demand.close(&1, e))
+    update_in(state, [:market, :stock], &add_stock(&1, e.replenishment))
+  end
 
   def evolve(state, %{type: :hall_resumed, recovery_id: id}), do: %{state | last_recovery_id: id}
 
@@ -199,6 +209,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
     state = put_in(state, [:visits, e.visit_id], visit)
     state = update_in(state, [:stats, :arrivals], &(&1 + 1))
+    state = update_in(state, [:demand], &Demand.count_admitted/1)
 
     if e.source == :guest,
       do: put_in(state, [:active_visits, e.principal], e.visit_id),
@@ -287,6 +298,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
     state
     |> put_in([:trays, e.tray_id, :status], :served)
+    |> update_in([:demand], &Demand.count_tray_served/1)
     |> release_counter(tray.stall, {:tray, e.tray_id})
   end
 
@@ -355,6 +367,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
       if Map.get(active, visit.principal) == e.visit_id, do: Map.delete(active, visit.principal), else: active
     end)
     |> update_in([:stats, :finalized_visits], &(&1 + 1))
+    |> update_in([:demand], &Demand.count_finalized(&1, e))
   end
 
   # -- helpers -------------------------------------------------------------
@@ -530,6 +543,9 @@ defmodule FeudHall.Domain.Hall.Evolver do
         else: acc ++ [a]
     end)
   end
+
+  defp add_stock(stock, additions),
+    do: Enum.reduce(additions, stock, fn {product, qty}, acc -> Map.update(acc, product, qty, &(&1 + qty)) end)
 
   defp clear_interval(catalog), do: get_in(catalog, [:rules, :market, :clear_every_hall_ms]) || 0
 

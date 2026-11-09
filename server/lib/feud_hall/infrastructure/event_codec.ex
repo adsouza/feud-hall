@@ -45,6 +45,8 @@ defmodule FeudHall.Infrastructure.EventCodec do
     stage_started stage_completed handover_started stage prep finish done_at item tray estimated_completion
     purchase_requested purchase_request_cancelled market_cleared request_id max_price_per_kunit replaces
     prices fills unfilled price_above_limit insufficient_cash insufficient_storage stock_exhausted
+    day_closed operating equivalents_millis scale_millis replenishment summary arrivals admitted left
+    trays_served menu_prices_median
   )a
 
   @by_name Map.new(@atoms, &{Atom.to_string(&1), &1})

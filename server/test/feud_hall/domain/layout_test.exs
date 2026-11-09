@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.LayoutTest do
   use ExUnit.Case, async: true
 
-  alias FeudHall.Domain.{Hall, Random}
+  alias FeudHall.Domain.{Clock, Hall, Random}
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Infrastructure.EventCodec
 
@@ -35,8 +35,17 @@ defmodule FeudHall.Domain.LayoutTest do
     assert event.seed == rules.seed
     assert state.layout == event.layout
     assert state.npcs == %{}
-    assert state.demand == %{rng: Random.new(Random.derive(rules.seed, "demand"))}
-    assert event.demand == state.demand
+    # The event records only the PRNG; the forecast fields start from defaults at the floor scale.
+    assert event.demand == %{rng: Random.new(Random.derive(rules.seed, "demand"))}
+
+    assert state.demand == %{
+             rng: event.demand.rng,
+             observed_ms: %{},
+             supply_scale_millis: rules.demand.equivalent_floor_millis,
+             today: %{arrivals: 0, admitted: 0, left: %{}, trays_served: 0},
+             summaries: [],
+             next_day_at: Clock.day()
+           }
 
     # Stock starts at the per-equivalent target times the three-equivalent floor.
     assert event.market.stock["corn_tortilla"] == 1_200
