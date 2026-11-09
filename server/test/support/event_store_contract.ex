@@ -110,6 +110,22 @@ defmodule FeudHall.EventStoreContract do
           assert {:ok, %{position: 1, fingerprint: "fp-a"}} = @contract_adapter.receipt(store, "a")
         end
 
+        test "contract: a stale position alone conflicts even when every stream version is current" do
+          store = contract_append!(contract_fresh(), "a")
+
+          # Another hall stream, untouched by "a", with no control events: its versions are current.
+          request = contract_request(store, "b", hall_stream: "hall:contract-other", expected_position: 0)
+          assert request.expected_versions == %{hall: 0, control: 0}
+          assert request.expected_versions == @contract_adapter.stream_versions(store, "hall:contract-other")
+
+          assert {:error, :conflict, store} = @contract_adapter.append(store, request)
+          assert @contract_adapter.head(store) == 1
+          assert @contract_adapter.receipt(store, "b") == :none
+
+          # Only the position was stale: the same request at the current head commits.
+          assert {:ok, _, 2} = @contract_adapter.append(store, %{request | expected_position: 1})
+        end
+
         test "contract: read_from returns complete batches in position order after the given position" do
           store =
             contract_fresh()
