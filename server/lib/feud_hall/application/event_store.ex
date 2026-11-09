@@ -83,7 +83,13 @@ defmodule FeudHall.Application.EventStore do
   @callback stream_versions(store, hall_stream :: String.t() | nil) :: versions() | {:error, :unavailable}
   @callback read_from(store, after_position :: non_neg_integer()) ::
               {:ok, [batch]} | {:error, {:undecodable, pos_integer(), term()} | :unavailable}
-  @callback receipt(store, command_id :: String.t()) :: {:ok, receipt} | :none | {:error, :unavailable}
+  @doc """
+  The receipt recorded under `command_id`. A durable adapter returns
+  `{:error, {:undecodable_receipt, command_id}}` for a stored receipt it cannot
+  decode (never raising), and `{:error, :unavailable}` as for `head/1`.
+  """
+  @callback receipt(store, command_id :: String.t()) ::
+              {:ok, receipt} | :none | {:error, :unavailable | {:undecodable_receipt, String.t()}}
   @callback append(store, append_request) ::
               {:ok, store, non_neg_integer()}
               | {:error, :conflict | :fenced | :unavailable | :invalid_request, store}
@@ -111,14 +117,19 @@ defmodule FeudHall.Application.EventStore do
   @doc "Stored snapshots, newest first (by position, then id)."
   @callback snapshots(store) :: [snapshot()] | {:error, :unavailable}
   @callback projection(store, :balances | :stock) :: [map()]
-  @doc "Committed outbox intents in insertion order."
-  @callback outbox(store) :: [
-              %{
-                dedupe_key: String.t(),
-                command_id: String.t(),
-                position: non_neg_integer(),
-                kind: atom(),
-                payload: map()
-              }
-            ]
+  @doc """
+  Committed outbox intents in insertion order; `{:error, {:undecodable_outbox,
+  dedupe_key}}` for the first stored intent a durable adapter cannot decode.
+  """
+  @callback outbox(store) ::
+              [
+                %{
+                  dedupe_key: String.t(),
+                  command_id: String.t(),
+                  position: non_neg_integer(),
+                  kind: atom(),
+                  payload: map()
+                }
+              ]
+              | {:error, {:undecodable_outbox, String.t()}}
 end

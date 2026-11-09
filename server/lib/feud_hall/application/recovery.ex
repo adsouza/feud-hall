@@ -42,7 +42,8 @@ defmodule FeudHall.Application.Recovery do
     6. Execute `{:start_availability, %{epoch_id: "<owner>:<epoch>"}}` with
        command ID `"start:<owner>:<epoch>"`.
 
-  Every step before 5 only reads, so a failure there appends nothing. A
+  Step 1 writes only the scope's authority row; steps 2 to 4 only read, so a
+  failure before step 5 appends nothing to the log. A
   failure is `{:error, reason, store}`, where `store` is the handle as it stands
   after the last successful step: the input store if acquisition did not
   happen, otherwise the handle holding the acquired epoch (and, once appends

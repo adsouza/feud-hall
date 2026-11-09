@@ -32,6 +32,12 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   found}`) stop reading at that batch's position.
   Receipts are stored as Base64 external term format and decoded with
   `[:safe]`, so they round-trip as the exact Elixir terms that were written.
+  A stored term that cannot be decoded (one naming an atom this build does not
+  define, as a newer release could write) is an error, never a raise:
+  `receipt/2` returns `{:error, {:undecodable_receipt, command_id}}`,
+  `outbox/1` `{:error, {:undecodable_outbox, dedupe_key}}`, and content stops
+  reading as `{:undecodable_content, ref}`. `FeudHall.App` loads every
+  application module at start-up, so atoms this build does define are found.
 
   The `:lock_timeout_ms` option bounds how long an append waits for any of
   those locks (`set local lock_timeout` at the start of its transaction, so the
@@ -94,6 +100,15 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
       hooks: Map.merge(@default_hooks, Map.new(Keyword.get(opts, :hooks, %{})))
     }
   end
+
+  @doc """
+  Whether a PostgreSQL error code (as Postgrex names it, e.g. `:admin_shutdown`)
+  means storage is unavailable (a lock timeout, cancellation, or shutdown) rather
+  than a defect. The adapter reports those as `:unavailable`; callers that shield
+  raised driver errors use the same set.
+  """
+  @spec unavailable_code?(term()) :: boolean()
+  def unavailable_code?(code), do: code in @unavailable_codes
 
   @doc "Arms a one-shot failure for the next append."
   def fail_next(store, :before_commit),
@@ -394,7 +409,20 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   end
 
   defp encode_term(term), do: term |> :erlang.term_to_binary() |> Base.encode64()
-  defp decode_term(text), do: text |> Base.decode64!() |> :erlang.binary_to_term([:safe])
+
+  defp decode_term(text) do
+    case Base.decode64(text) do
+      {:ok, binary} -> safe_term(binary)
+      :error -> :error
+    end
+  end
+
+  # `[:safe]` never creates atoms: a term naming one this build does not define is refused.
+  defp safe_term(binary) do
+    {:ok, :erlang.binary_to_term(binary, [:safe])}
+  rescue
+    ArgumentError -> :error
+  end
 
   # --- reads ----------------------------------------------------------------
 
@@ -490,11 +518,12 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   defp fetch_content(repo, ref, content) do
     case repo.query!("select body from content where content_hash = $1", [ref]) do
       %{rows: [[body]]} ->
-        if content_hash(body) == ref do
-          catalog = :erlang.binary_to_term(body, [:safe])
+        with true <- content_hash(body) == ref || {:error, {:corrupt_content, ref}},
+             {:ok, catalog} <- safe_term(body) do
           {:ok, catalog, Map.put(content, ref, catalog)}
         else
-          {:error, {:corrupt_content, ref}}
+          {:error, _} = error -> error
+          :error -> {:error, {:undecodable_content, ref}}
         end
 
       %{rows: []} ->
@@ -507,9 +536,17 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     sql = "select body, position from receipts where command_id = $1"
 
     case attempt(fn -> store.repo.query!(sql, [command_id]) end) do
-      {:ok, %{rows: [[body, position]]}} -> {:ok, body |> decode_term() |> Map.put(:position, position)}
-      {:ok, %{rows: []}} -> :none
-      {:error, _} = error -> error
+      {:ok, %{rows: [[body, position]]}} ->
+        case decode_term(body) do
+          {:ok, %{} = receipt} -> {:ok, Map.put(receipt, :position, position)}
+          _undecodable -> {:error, {:undecodable_receipt, command_id}}
+        end
+
+      {:ok, %{rows: []}} ->
+        :none
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -542,15 +579,20 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     %{rows: rows} =
       store.repo.query!("select dedupe_key, command_id, position, kind, payload from outbox order by id")
 
-    Enum.map(rows, fn [dedupe_key, command_id, position, kind, payload] ->
-      %{
-        dedupe_key: dedupe_key,
-        command_id: command_id,
-        position: position,
-        kind: Map.fetch!(@outbox_kinds, kind),
-        payload: decode_term(payload)
-      }
+    rows
+    |> Enum.reduce_while([], fn [dedupe_key, command_id, position, kind, payload], acc ->
+      with {:ok, kind} <- Map.fetch(@outbox_kinds, kind),
+           {:ok, payload} <- decode_term(payload) do
+        intent = %{dedupe_key: dedupe_key, command_id: command_id, position: position, kind: kind, payload: payload}
+        {:cont, [intent | acc]}
+      else
+        :error -> {:halt, {:error, {:undecodable_outbox, dedupe_key}}}
+      end
     end)
+    |> case do
+      {:error, _} = error -> error
+      intents -> Enum.reverse(intents)
+    end
   end
 
   @doc """

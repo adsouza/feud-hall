@@ -8,6 +8,32 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   alias FeudHall.Domain.{Control, Money}
   alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore, PostgresEventStore, Snapshot}
 
+  defmodule SecondAppend do
+    @moduledoc "Wraps the in-memory store so that only the second append from now fails with `fault`."
+    alias FeudHall.Infrastructure.InMemoryEventStore, as: Inner
+
+    defstruct [:inner, :fault, appends: 0]
+
+    def wrap(inner, fault), do: %__MODULE__{inner: inner, fault: fault}
+
+    def append(%{appends: 1} = s, request) do
+      {:error, reason, inner} = Inner.append(Inner.fail_next(s.inner, s.fault), request)
+      {:error, reason, %{s | inner: inner, appends: 2}}
+    end
+
+    def append(s, request) do
+      case Inner.append(s.inner, request) do
+        {:ok, inner, position} -> {:ok, %{s | inner: inner, appends: s.appends + 1}, position}
+        {:error, reason, inner} -> {:error, reason, %{s | inner: inner, appends: s.appends + 1}}
+      end
+    end
+
+    def read_from(s, after_position), do: Inner.read_from(s.inner, after_position)
+    def receipt(s, id), do: Inner.receipt(s.inner, id)
+    def head(s), do: Inner.head(s.inner)
+    def stream_versions(s, stream), do: Inner.stream_versions(s.inner, stream)
+  end
+
   defp env(id, actor, command), do: %{command_id: id, actor: actor, command: command}
 
   defp runtime(store_mod \\ InMemoryEventStore, store \\ InMemoryEventStore.new()) do
@@ -254,7 +280,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     assert fenced.mode == :fenced
     assert fenced.position == rt.position
     assert fenced.versions == rt.versions
-    assert InMemoryEventStore.receipt(fenced.store, "adv:buy-1") == :none
+    assert InMemoryEventStore.receipt(fenced.store, "adv:60000") == :none
   end
 
   test "an accepted command commits its projection rows and stream versions with the batch" do
@@ -289,9 +315,59 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     rt = runtime()
     head = rt.position
     {:accepted, receipt, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(10)), 60_000)
-    assert {:ok, %{kind: :advance_clock}} = InMemoryEventStore.receipt(rt.store, "adv:buy-1")
+    assert {:ok, %{kind: :advance_clock}} = InMemoryEventStore.receipt(rt.store, "adv:60000")
     assert receipt.position == head + 2
     assert rt.state.now == 60_000 * 24
+  end
+
+  test "a catch-up is keyed by its target, so commands observed at one instant share it" do
+    rt = runtime()
+    {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(10)), 60_000)
+    head = rt.position
+
+    # The hall is already at 60,000 ms of service: nothing is due, so no second catch-up is appended.
+    {:accepted, receipt, rt} = Workflow.execute(rt, env("buy-2", {:principal, "alice"}, purchase(10)), 60_000)
+    assert receipt.position == head + 1
+    assert {:ok, batches} = InMemoryEventStore.read_from(rt.store, 0)
+    assert Enum.count(batches, &String.starts_with?(&1.command_id, "adv:")) == 1
+  end
+
+  test "a catch-up whose reply was lost is resolved inside the workflow, and the command still runs" do
+    rt = runtime()
+    head = rt.position
+    armed = %{rt | store: InMemoryEventStore.fail_next(rt.store, :lost_reply)}
+
+    # The lost reply belongs to the catch-up batch: the caller never sees its internal ID.
+    assert {:accepted, receipt, rt} = Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(10)), 60_000)
+    assert rt.mode == :ready
+    assert receipt.position == head + 2
+    assert rt.state.now == 60_000 * 24
+    assert {:ok, %{kind: :advance_clock, position: catch_up}} = InMemoryEventStore.receipt(rt.store, "adv:60000")
+    assert catch_up == head + 1
+
+    # A retry of the same ID, observed later, returns the original receipt and appends nothing.
+    assert {:replayed, ^receipt, again} =
+             Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(10)), 90_000)
+
+    assert again.position == rt.position
+  end
+
+  test "a catch-up that committed before its command failed lets the same ID retry later" do
+    rt = runtime()
+    store = SecondAppend.wrap(rt.store, :unavailable)
+    rt = %{rt | store_mod: SecondAppend, store: store}
+
+    # The catch-up committed; the command's own append was refused, so it is not recorded.
+    assert {:error, :unavailable, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(10)), 60_000)
+    assert rt.mode == :ready
+    assert rt.state.now == 60_000 * 24
+    assert SecondAppend.receipt(rt.store, "buy-1") == :none
+
+    # Retried with the same ID at a later instant, the command commits after a new catch-up.
+    assert {:accepted, receipt, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(10)), 61_000)
+    assert rt.state.now == 61_000 * 24
+    assert {:ok, %{position: catch_up}} = SecondAppend.receipt(rt.store, "adv:61000")
+    assert receipt.position == catch_up + 1
   end
 
   test "a runtime built from a recovered state continues from that head with its epoch" do

@@ -20,6 +20,12 @@ defmodule FeudHall.Infrastructure.Postgres.DailyActivityProjector do
   @name "daily_activity"
   @batch_size 200
 
+  @doc """
+  Applies every batch after the checkpoint, in position order, and returns `{:ok, checkpoint}`: the
+  checkpoint stored when it finished, which is behind the last position read when a batch was
+  skipped (a concurrent rebuild reset it, say). `{:error, :unavailable}` when storage cannot be
+  reached.
+  """
   @spec catch_up(module(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
   def catch_up(repo, opts \\ []) do
     repo.query!("insert into projector_checkpoints (name, position) values ($1, 0) on conflict do nothing", [@name])
@@ -28,10 +34,11 @@ defmodule FeudHall.Infrastructure.Postgres.DailyActivityProjector do
     DBConnection.ConnectionError -> {:error, :unavailable}
   end
 
+  # `position` is the last position read, which a skipped batch leaves ahead of the checkpoint.
   defp advance(repo, position, opts) do
     case PostgresEventStore.read_after(repo, position, Keyword.get(opts, :batch_size, @batch_size)) do
       {:ok, []} ->
-        {:ok, position}
+        {:ok, checkpoint(repo)}
 
       {:ok, batches} ->
         Enum.each(batches, &apply_batch(repo, &1, opts))

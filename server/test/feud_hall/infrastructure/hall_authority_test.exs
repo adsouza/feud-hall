@@ -9,6 +9,8 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
 
   @scope "hall:test"
   @alice {:principal, "alice"}
+  # Player text that must never reach status output or crash reports.
+  @sentinel "Sentinel Bistro 7f3a"
 
   defmodule FaultyStore do
     @moduledoc """
@@ -20,7 +22,11 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     it), `:head_unavailable_after_acquire` (likewise for `head/1`, the first read after acquiring),
     and `{:lost_acquire_reply, once}` (the next acquisition commits but reports `:unavailable`, as a
     reply lost after the database committed would; `once` is an `:atomics` flag, since a lost reply
-    hands back no store to disarm). Other faults go to the wrapped adapter.
+    hands back no store to disarm). `{:nth_append, n, fault}` arms the wrapped adapter's `fault` for
+    the `n`-th append from now; `:lost_reply_then_unreadable` makes the next append commit with a
+    lost reply and then makes log and snapshot reads unavailable until `:clear`;
+    `{:raise_on_append, exception}` raises `exception` from the next append. Other faults go to the
+    wrapped adapter.
     """
     defstruct [:mod, :inner, fault: nil]
 
@@ -30,6 +36,10 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
 
     def fail_next(s, fault) when fault in @own, do: %{s | fault: fault}
     def fail_next(s, {:lost_acquire_reply, _once} = fault), do: %{s | fault: fault}
+    def fail_next(s, {:nth_append, n, _inner_fault} = fault) when n >= 1, do: %{s | fault: fault}
+    def fail_next(s, {:raise_on_append, _exception} = fault), do: %{s | fault: fault}
+    def fail_next(s, :lost_reply_then_unreadable), do: %{s | fault: :lost_reply_then_unreadable}
+    def fail_next(s, :clear), do: %{s | fault: nil}
     def fail_next(s, fault), do: %{s | inner: s.mod.fail_next(s.inner, fault)}
 
     def head(%{fault: :head_unavailable}), do: {:error, :unavailable}
@@ -45,7 +55,22 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     def read_from(%{fault: :undecodable}, _after), do: {:error, {:undecodable, 1, :injected}}
     def read_from(s, after_position), do: s.mod.read_from(s.inner, after_position)
 
-    def append(s, request) do
+    def append(%{fault: {:raise_on_append, exception}}, _request), do: raise(exception)
+
+    def append(%{fault: {:nth_append, 1, inner_fault}} = s, request),
+      do: append(%{s | fault: nil, inner: s.mod.fail_next(s.inner, inner_fault)}, request)
+
+    def append(%{fault: {:nth_append, n, inner_fault}} = s, request),
+      do: append_inner(%{s | fault: {:nth_append, n - 1, inner_fault}}, request)
+
+    def append(%{fault: :lost_reply_then_unreadable} = s, request) do
+      {:error, :unknown_outcome, inner} = s.mod.append(s.mod.fail_next(s.inner, :lost_reply), request)
+      {:error, :unknown_outcome, %{s | inner: inner, fault: :reads_unavailable}}
+    end
+
+    def append(s, request), do: append_inner(s, request)
+
+    defp append_inner(s, request) do
       case s.mod.append(s.inner, request) do
         {:ok, inner, position} -> {:ok, %{s | inner: inner}, position}
         {:error, reason, inner} -> {:error, reason, %{s | inner: inner}}
@@ -128,7 +153,8 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         Keyword.delete(opts, :store)
       )
 
-    start_supervised!(Supervisor.child_spec({HallAuthority, opts}, id: make_ref()))
+    {restart, opts} = Keyword.pop(opts, :restart, :transient)
+    start_supervised!(Supervisor.child_spec({HallAuthority, opts}, id: make_ref(), restart: restart))
   end
 
   defp env(id, actor, command), do: %{command_id: id, actor: actor, command: command}
@@ -138,6 +164,18 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     assert {:accepted, _receipt} = HallAuthority.execute(pid, init)
     pid
   end
+
+  defp create_sentinel,
+    do:
+      env(
+        "create-sentinel",
+        @alice,
+        {:create_restaurant, %{restaurant_id: "r9", stall_id: "s9", name: @sentinel, cuisine: "mexican"}}
+      )
+
+  defp grant(id), do: env(id, {:system, :visitor_fund}, {:grant_allowance, %{principal: "bob", amount: 100}})
+
+  defp command_ids(pid), do: pid |> batches() |> Enum.map(& &1.command_id)
 
   defp tick_after(ctx, pid, ms) do
     ManualClock.advance(ctx.clock, ms)
@@ -289,6 +327,65 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         assert state.hall.now == 2_000 * Clock.ratio()
       end
 
+      test "a command whose catch-up reply was lost commits, and same-ID retries replay it", ctx do
+        pid = ctx |> start_authority() |> initialize()
+        ManualClock.advance(ctx.clock, 500)
+
+        # The lost reply belongs to the catch-up batch, which the workflow resolves itself.
+        assert :ok = HallAuthority.inject_fault(pid, :lost_reply)
+        assert {:accepted, receipt} = HallAuthority.execute(pid, grant("grant-1"))
+        assert HallAuthority.state(pid).mode == :ready
+        assert HallAuthority.state(pid).hall.now == 500 * Clock.ratio()
+
+        for _ <- 1..3 do
+          ManualClock.advance(ctx.clock, 300)
+          assert {:replayed, ^receipt} = HallAuthority.execute(pid, grant("grant-1"))
+        end
+
+        ManualClock.advance(ctx.clock, 300)
+        assert {:accepted, _} = HallAuthority.execute(pid, grant("grant-2"))
+        assert Enum.filter(command_ids(pid), &String.starts_with?(&1, "adv:")) == ["adv:500", "adv:1700"]
+      end
+
+      test "a catch-up that committed before its command's append failed does not block a retry", ctx do
+        pid = ctx |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
+        ManualClock.advance(ctx.clock, 500)
+
+        assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :unavailable})
+        assert {:error, :unavailable} = HallAuthority.execute(pid, grant("grant-1"))
+        assert HallAuthority.state(pid).hall.now == 500 * Clock.ratio()
+
+        # The same ID, observed later, catches up to its own target and commits.
+        ManualClock.advance(ctx.clock, 300)
+        assert {:accepted, _} = HallAuthority.execute(pid, grant("grant-1"))
+        assert HallAuthority.state(pid).hall.now == 800 * Clock.ratio()
+        assert Enum.take(command_ids(pid), -3) == ["adv:500", "adv:800", "grant-1"]
+
+        # A lost reply on the command's own append is reported under the caller's own ID.
+        ManualClock.advance(ctx.clock, 300)
+        assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :lost_reply})
+        assert {:uncertain, "grant-2"} = HallAuthority.execute(pid, grant("grant-2"))
+        ManualClock.advance(ctx.clock, 300)
+        assert {:replayed, %{outcome: :accepted}} = HallAuthority.execute(pid, grant("grant-2"))
+      end
+
+      test "a lost catch-up reply that cannot be resolved reports the command unavailable", ctx do
+        pid = ctx |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
+        ManualClock.advance(ctx.clock, 500)
+
+        assert :ok = HallAuthority.inject_fault(pid, :lost_reply_then_unreadable)
+        assert {:error, :unavailable} = HallAuthority.execute(pid, grant("grant-1"))
+        assert HallAuthority.state(pid).mode == :recovery_required
+        assert [%{fields: %{error_class: :unavailable}}] = records(ctx, :storage_failure)
+
+        # Once the store is readable, the pending catch-up is resolved before the retry runs.
+        assert :ok = HallAuthority.inject_fault(pid, :clear)
+        ManualClock.advance(ctx.clock, 300)
+        assert {:accepted, _} = HallAuthority.execute(pid, grant("grant-1"))
+        assert HallAuthority.state(pid).hall.now == 800 * Clock.ratio()
+        assert Enum.take(command_ids(pid), -3) == ["adv:500", "adv:800", "grant-1"]
+      end
+
       test "execute/2 ignores any caller clock and stamps the authority's own", ctx do
         pid = ctx |> start_authority() |> initialize()
         assert :ok = tick_after(ctx, pid, 1_000)
@@ -308,7 +405,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         assert state.hall.now == 1_700 * Clock.ratio()
         assert state.service_ms == 1_700
         assert Map.has_key?(state.hall.restaurants, "r1")
-        assert pid |> batches() |> Enum.any?(&(&1.command_id == "adv:create"))
+        assert "adv:1700" in command_ids(pid)
 
         # The command's advance moved the anchor: the next tick charges only the time after it.
         assert :ok = tick_after(ctx, pid, 300)
@@ -490,6 +587,75 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         assert [%{fields: %{error_class: :undecodable}}] = records(ctx, :recovery_failed)
       end
 
+      test "status shows scalar authority fields, never the hall, the store, or player text", ctx do
+        pid = ctx |> start_authority() |> initialize()
+        assert {:accepted, _} = HallAuthority.execute(pid, create_sentinel())
+        %{position: position, epoch: epoch} = HallAuthority.state(pid)
+
+        status = pid |> :sys.get_status() |> inspect(limit: :infinity, printable_limit: :infinity)
+        refute status =~ @sentinel
+        # Neither the catalog nor the store handle appears.
+        refute status =~ "rice_long"
+        refute status =~ "Store"
+        assert status =~ "position: #{position}"
+        assert status =~ "epoch: #{epoch}"
+        assert status =~ "mode: :ready"
+      end
+
+      test "a raised driver error with an unavailable code freezes the clocks", ctx do
+        pid = ctx |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
+        assert :ok = tick_after(ctx, pid, 1_000)
+        before = HallAuthority.state(pid)
+
+        error = Postgrex.Error.exception(postgres: %{code: "57P01", severity: "FATAL", message: "injected shutdown"})
+        assert error.postgres.code == :admin_shutdown
+        assert :ok = HallAuthority.inject_fault(pid, {:raise_on_append, error})
+        assert {:error, :unavailable} = tick_after(ctx, pid, 1_000)
+
+        frozen = HallAuthority.state(pid)
+
+        assert {frozen.hall.now, frozen.position, frozen.service_ms} ==
+                 {before.hall.now, before.position, before.service_ms}
+
+        assert [%{fields: %{error_class: :unavailable}}] = records(ctx, :storage_failure)
+
+        # The next tick charges the whole frozen interval once the store accepts appends again.
+        assert :ok = HallAuthority.inject_fault(pid, :clear)
+        assert :ok = tick_after(ctx, pid, 1_000)
+        assert HallAuthority.state(pid).hall.now == before.hall.now + 2_000 * Clock.ratio()
+      end
+
+      test "any other raised driver error is not swallowed, and its crash report omits player text", ctx do
+        pid =
+          ctx
+          |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter)), restart: :temporary)
+          |> initialize()
+
+        assert {:accepted, _} = HallAuthority.execute(pid, create_sentinel())
+        ref = Process.monitor(pid)
+
+        error = Postgrex.Error.exception(postgres: %{code: "42P01", severity: "ERROR", message: "injected bug"})
+        assert error.postgres.code == :undefined_table
+        assert :ok = HallAuthority.inject_fault(pid, {:raise_on_append, error})
+
+        # Crash reports include the process state only at debug level.
+        level = Logger.level()
+        Logger.configure(level: :debug)
+        on_exit(fn -> Logger.configure(level: level) end)
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            assert {{%Postgrex.Error{}, _stack}, _call} = catch_exit(tick_after(ctx, pid, 1_000))
+            assert_receive {:DOWN, ^ref, :process, ^pid, {%Postgrex.Error{postgres: %{code: :undefined_table}}, _}}
+          end)
+
+        assert log =~ "injected bug"
+        refute log =~ @sentinel
+        refute log =~ "rice_long"
+        assert log =~ "State: %{"
+        assert log =~ "position:"
+      end
+
       test "a fenced append stops the authority with {:shutdown, :fenced}", ctx do
         pid = ctx |> start_authority() |> initialize()
         epoch = HallAuthority.state(pid).epoch
@@ -551,6 +717,24 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
       assert state.epoch == b_epoch
       assert state.hall.now == 1_000 * Clock.ratio()
       assert %{rows: [[^b_epoch]]} = Repo.query!("select epoch from authority where scope = $1", [@scope])
+    end
+  end
+
+  describe "postgres stored terms" do
+    @describetag adapter: :postgres
+
+    test "a retry whose stored receipt cannot be decoded is an error reply, not a crash", ctx do
+      pid = ctx |> start_authority() |> initialize()
+
+      # A receipt naming an atom this build does not define (as a newer release could write).
+      name = "feud_hall_never_defined_" <> Integer.to_string(System.unique_integer([:positive]))
+      body = Base.encode64(<<131, 119, byte_size(name), name::binary>>)
+      Repo.query!("update receipts set body = $1 where command_id = 'init'", [body])
+
+      init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+      assert {:error, {:undecodable_receipt, "init"}} = HallAuthority.execute(pid, init)
+      assert Process.alive?(pid)
+      assert :ok = tick_after(ctx, pid, 1_000)
     end
   end
 

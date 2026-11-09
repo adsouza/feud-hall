@@ -44,14 +44,21 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   `execute/2` applies the same gap rule, then stamps `observed_service_ms` from
   the authority's own clock (never from the caller: only `command_id`, `actor`,
   and `command` are taken from the envelope), so due clock work is committed in
-  its own batch before the command is decided. `lateness_ms` in diagnostics is
+  its own catch-up batch before the command is decided. The catch-up's command
+  ID is `CommandWorkflow.catch_up_id/1` of its target (`"adv:<service_ms>"`),
+  so a retry of the caller's command observed later catches up to its own
+  target, and a lost catch-up reply is resolved inside the workflow: the
+  caller only ever sees its own command ID as uncertain. `lateness_ms` in diagnostics is
   the elapsed time beyond the nominal one-second wake-up.
 
   ## Failures
 
   Calls into the store, the workflow, and recovery are shielded: a raised
-  `DBConnection.ConnectionError`, `Postgrex.Error`, or
-  `DBConnection.TransactionError` is `{:error, :unavailable}` (Ruling R20).
+  `DBConnection.ConnectionError` or `DBConnection.TransactionError`, or a
+  `Postgrex.Error` whose code `PostgresEventStore.unavailable_code?/1` accepts,
+  is `{:error, :unavailable}` (Ruling R31, narrowing R20). Any other raised
+  `Postgrex.Error` is a defect, not an outage: it propagates and the process
+  exits.
   Unavailable storage, an append conflict, or a lost reply emits
   `:storage_failure` and keeps the anchor; a lost reply is resolved by its
   command ID before the next tick or command. A fenced append emits `:fenced`
@@ -157,6 +164,51 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   def inject_fault(pid, fault), do: GenServer.call(pid, {:inject_fault, fault}, @call_timeout)
 
   # --- server ------------------------------------------------------------------
+
+  @doc """
+  Status and crash-report formatting (`:sys.get_status/1`, terminate reports):
+  only scalar authority fields (scope, owner, epoch, mode, position, service
+  time, anchor) appear, never the hall, control state, store, or runtime, which
+  hold player-entered text and private business state. A request in the last
+  message is reduced to its tag, the debug log is dropped, and stack frames keep
+  their arity but not their arguments.
+  """
+  @impl true
+  def format_status(status) do
+    status
+    |> Map.replace_lazy(:state, &summary/1)
+    |> Map.replace_lazy(:message, &redact_message/1)
+    |> Map.replace_lazy(:log, fn _log -> [] end)
+    |> Map.replace_lazy(:reason, &redact_reason/1)
+  end
+
+  defp summary(%__MODULE__{runtime: rt} = s) do
+    %{
+      scope: s.scope,
+      owner: s.owner,
+      epoch: s.held_epoch,
+      mode: rt && rt.mode,
+      position: rt && rt.position,
+      service_ms: s.service_ms,
+      anchor: s.anchor
+    }
+  end
+
+  defp summary(_other), do: :redacted
+
+  defp redact_message({:"$gen_call", from, request}), do: {:"$gen_call", from, request_tag(request)}
+  defp redact_message(message) when is_atom(message), do: message
+  defp redact_message(_message), do: :redacted
+
+  defp request_tag(request) when is_atom(request), do: request
+  defp request_tag(request) when is_tuple(request) and is_atom(elem(request, 0)), do: elem(request, 0)
+  defp request_tag(_request), do: :redacted
+
+  defp redact_reason({error, stack}) when is_list(stack), do: {error, Enum.map(stack, &redact_frame/1)}
+  defp redact_reason(reason), do: reason
+
+  defp redact_frame({mod, fun, args, location}) when is_list(args), do: {mod, fun, length(args), location}
+  defp redact_frame(frame), do: frame
 
   @impl true
   def init(opts) do
@@ -517,10 +569,20 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     Diagnostics.emit(s.diagnostics, name, Map.merge(%{epoch: epoch, scope: s.scope}, fields))
   end
 
-  # Ruling R20: driver-level failures raised from the store are storage unavailability; nothing else is rescued.
+  # Ruling R31 (narrowing R20): connection and transaction failures raised from the store, and
+  # PostgreSQL errors with an unavailable code, are storage unavailability; anything else propagates.
   defp shielded(fun, unavailable) do
     fun.()
   rescue
-    _error in [DBConnection.ConnectionError, Postgrex.Error, DBConnection.TransactionError] -> unavailable
+    _error in [DBConnection.ConnectionError, DBConnection.TransactionError] ->
+      unavailable
+
+    error in Postgrex.Error ->
+      if PostgresEventStore.unavailable_code?(postgres_code(error)),
+        do: unavailable,
+        else: reraise(error, __STACKTRACE__)
   end
+
+  defp postgres_code(%Postgrex.Error{postgres: %{code: code}}), do: code
+  defp postgres_code(_error), do: nil
 end

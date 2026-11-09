@@ -7,7 +7,8 @@ defmodule FeudHall.Application.CommandWorkflow do
     2. original-receipt lookup by command ID, bound to a fingerprint of the
        actor, command kind, and canonical payload: an identical retry returns
        the original receipt, changed content under the same ID is a conflict;
-    3. independently due clock advancement, committed as its own batch;
+    3. independently due clock advancement, committed as its own batch (the
+       catch-up, see `execute/3`);
     4. the pure domain decision against the caught-up head, evolved into a
        candidate state from which the synchronous projection rows are derived;
     5. atomic append of the batch, its receipt, and those rows at the expected
@@ -92,8 +93,25 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   @doc """
   Executes a command envelope `%{command_id:, actor:, command: {kind, payload}}`.
-  When `observed_service_ms` is given, due clock work up to that instant is
-  committed first as a separate scheduler batch.
+
+  When `observed_service_ms` is given and lies past the hall's clock, due clock
+  work up to that instant is committed first as a separate catch-up batch:
+  `{:advance_clock, %{to_service_ms: observed_service_ms}}` from
+  `{:system, :scheduler}` under `catch_up_id/1` of that target. The ID is a pure
+  function of the target, so it is bound to exactly one request; it is looked
+  up before appending, so a catch-up that already committed is never appended
+  twice, and a retry of the caller's command observed later catches up to its
+  own, later target. A command already recorded under its ID returns its
+  receipt before any catch-up.
+
+  The catch-up's ID never reaches the caller. If its append reply is lost, the
+  workflow resolves it at once (as `resolve/2` would) and continues with the
+  caller's command against the head it finds. If that resolution cannot read
+  the store, the caller's command (which was never appended) fails with the
+  store's error, and the runtime stays `:recovery_required` with the catch-up
+  as `pending` until `resolve/2` settles it. A catch-up that did not commit
+  fails the command as `:unavailable`; either way the caller may retry the
+  same command ID.
   """
   def execute(runtime, envelope, observed_service_ms \\ nil)
 
@@ -127,13 +145,12 @@ defmodule FeudHall.Application.CommandWorkflow do
     with :ok <- validate(envelope),
          fingerprint = fingerprint(envelope),
          :new <- lookup(runtime, envelope.command_id, fingerprint),
-         {:ok, runtime} <- maybe_advance(runtime, envelope.command_id, observed_service_ms) do
+         {:ok, runtime} <- maybe_advance(runtime, observed_service_ms) do
       decide_and_append(runtime, envelope, fingerprint)
     else
       {:replayed, receipt} -> {:replayed, receipt, runtime}
       {:error, reason} -> {:error, reason, runtime}
       {:error, _reason, _runtime} = failed -> failed
-      {:uncertain, _id, _runtime} = uncertain -> uncertain
     end
   end
 
@@ -225,29 +242,55 @@ defmodule FeudHall.Application.CommandWorkflow do
       :none -> :new
       {:ok, %{fingerprint: ^fingerprint} = receipt} -> {:replayed, receipt}
       {:ok, _other} -> {:error, :command_id_conflict}
-      {:error, :unavailable} = unavailable -> unavailable
+      {:error, _reason} = error -> error
     end
   end
 
-  defp maybe_advance(runtime, _id, nil), do: {:ok, runtime}
+  @doc "The command ID of the catch-up advance to `target_service_ms`: a pure function of the target."
+  @spec catch_up_id(non_neg_integer()) :: String.t()
+  def catch_up_id(target_service_ms) when is_integer(target_service_ms), do: "adv:#{target_service_ms}"
 
-  defp maybe_advance(%{state: nil} = runtime, _id, _observed), do: {:ok, runtime}
+  defp maybe_advance(runtime, nil), do: {:ok, runtime}
 
-  defp maybe_advance(runtime, command_id, observed) do
+  defp maybe_advance(%{state: nil} = runtime, _observed), do: {:ok, runtime}
+
+  defp maybe_advance(runtime, observed) do
     if Clock.hall_at_service(observed) > runtime.state.now do
       envelope = %{
-        command_id: "adv:" <> command_id,
+        command_id: catch_up_id(observed),
         actor: {:system, :scheduler},
         command: {:advance_clock, %{to_service_ms: observed}}
       }
 
-      case decide_and_append(runtime, envelope, fingerprint(envelope)) do
-        {:accepted, _receipt, runtime} -> {:ok, runtime}
-        {:rejected, _receipt, runtime} -> {:ok, runtime}
-        other -> other
+      fingerprint = fingerprint(envelope)
+
+      case lookup(runtime, envelope.command_id, fingerprint) do
+        :new -> catch_up(runtime, envelope, fingerprint)
+        # Already committed (and adopted with the head that holds it): nothing is due twice.
+        {:replayed, _receipt} -> {:ok, runtime}
+        {:error, reason} -> {:error, reason, runtime}
       end
     else
       {:ok, runtime}
+    end
+  end
+
+  defp catch_up(runtime, envelope, fingerprint) do
+    case decide_and_append(runtime, envelope, fingerprint) do
+      {status, _receipt, runtime} when status in [:accepted, :rejected] -> {:ok, runtime}
+      {:uncertain, id, stuck} -> settle_catch_up(stuck, id)
+      {:error, _reason, _runtime} = failed -> failed
+    end
+  end
+
+  # A lost catch-up reply is settled here, never handed to the caller: committed, the command
+  # continues against the head that holds it; not committed, the command fails before it was
+  # appended. An unreadable store leaves the runtime awaiting resolution of the catch-up.
+  defp settle_catch_up(stuck, id) do
+    case resolve(stuck, id) do
+      {:committed, _receipt, reopened} -> {:ok, reopened}
+      {:not_committed, reopened} -> {:error, :unavailable, reopened}
+      {:error, _reason, _runtime} = failed -> failed
     end
   end
 

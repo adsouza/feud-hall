@@ -117,6 +117,29 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
     assert Enum.sum(for [_, _, v, _] <- activity(), do: v) == 4
   end
 
+  test "catch_up returns the checkpoint it stored, not the last position it read" do
+    rt = world(2)
+    head = Store.head(rt.store)
+    assert head > 2
+
+    # Inside the first applied batch's transaction the checkpoint is rewound, as a rebuild resetting
+    # it would: every later batch then finds the checkpoint behind it and is skipped.
+    Process.put(:rewound, false)
+
+    rewind = fn ->
+      unless Process.get(:rewound) do
+        Repo.query!("update projector_checkpoints set position = 0 where name = 'daily_activity'")
+        Process.put(:rewound, true)
+      end
+    end
+
+    assert {:ok, 0} = Projector.catch_up(Repo, before_checkpoint: rewind)
+    assert checkpoint() == [[0]]
+
+    # The next run starts from the stored checkpoint and reaches the head.
+    assert {:ok, ^head} = Projector.catch_up(Repo)
+  end
+
   test "running catch_up twice changes nothing" do
     world(2)
     assert {:ok, head} = Projector.catch_up(Repo)

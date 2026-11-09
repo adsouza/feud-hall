@@ -204,6 +204,51 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
     assert {:error, {:undecodable, 1, {:unknown_atom, "launch_missiles"}}} = PostgresEventStore.read_from(store, 0)
   end
 
+  # An external term naming an atom no module defines: built from bytes (SMALL_ATOM_UTF8_EXT), so
+  # the atom itself is never created and `binary_to_term/2` with `[:safe]` refuses it.
+  defp unknown_atom_term do
+    name = "feud_hall_never_defined_" <> Integer.to_string(System.unique_integer([:positive]))
+    <<131, 119, byte_size(name), name::binary>>
+  end
+
+  test "a receipt naming an atom this build does not define is an error, not a raise" do
+    store = fresh_store()
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request())
+    Repo.query!("update receipts set body = $1 where command_id = 'a'", [Base.encode64(unknown_atom_term())])
+
+    assert PostgresEventStore.receipt(store, "a") == {:error, {:undecodable_receipt, "a"}}
+
+    # The workflow reports it for a retry of that ID instead of crashing its caller.
+    # The receipt lookup comes before any decision, so the head's state does not matter here.
+    head = %{hall: nil, control: nil, position: 1, versions: PostgresEventStore.stream_versions(store, nil)}
+    {:ok, rt} = CommandWorkflow.from_state(PostgresEventStore, store, head)
+    envelope = %{command_id: "a", actor: {:system, :scheduler}, command: {:advance_clock, %{to_service_ms: 1}}}
+    assert {:error, {:undecodable_receipt, "a"}, _rt} = CommandWorkflow.execute(rt, envelope)
+  end
+
+  test "an outbox payload naming an atom this build does not define is an error, not a raise" do
+    store = fresh_store()
+    outbox = [%{dedupe_key: "mail:1", kind: :test_notice, payload: %{to: "alice"}}]
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request(outbox: outbox))
+    Repo.query!("update outbox set payload = $1", [Base.encode64(unknown_atom_term())])
+
+    assert PostgresEventStore.outbox(store) == {:error, {:undecodable_outbox, "mail:1"}}
+  end
+
+  test "content naming an atom this build does not define blocks reading with its position" do
+    store = fresh_store()
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request(events: [initialized_event("h1")]))
+    %{rows: [[old_ref]]} = Repo.query!("select content_hash from content")
+
+    # A body whose hash still matches its reference, so only decoding can refuse it.
+    body = unknown_atom_term()
+    new_ref = :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
+    Repo.query!("update content set content_hash = $1, body = $2", [new_ref, body])
+    Repo.query!("update events set payload = replace(payload, $1, $2)", [old_ref, new_ref])
+
+    assert {:error, {:undecodable, 1, {:undecodable_content, ^new_ref}}} = PostgresEventStore.read_from(store, 0)
+  end
+
   test "a 10,000-event batch commits in one transaction" do
     store = fresh_store()
     events = for i <- 1..10_000, do: %{type: :clock_advanced, to: i * 24}

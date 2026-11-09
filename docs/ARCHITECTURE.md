@@ -1017,10 +1017,32 @@ Implementation decisions within the contracts above:
   (hall only) is rejected as incompatible. Recovery uses only verified
   snapshots, skips one beyond the store head, and falls back to older ones or
   genesis. Snapshots never justify skipping history that fails to replay.
-- **Unavailable storage.** Connection errors surface as `{:error, :unavailable}`
-  from every port call. The authority freezes its clocks at the last committed
-  boundary and, after more than five unobserved seconds, recovers instead of
-  charging the gap.
+- **Unavailable storage.** On PostgreSQL, connection errors (and lock timeouts,
+  cancellations, and shutdowns) surface as `{:error, :unavailable}` from
+  `head/1`, `stream_versions/2`, `read_from/2`, `receipt/2`, `append/2`,
+  `acquire_authority`, `save_snapshot/3`, `snapshots/1`, `prune_snapshots/2`,
+  and `rebuild_projections/1`. `projection/2`, `outbox/1`, and
+  `mark_snapshot_verified/2` raise instead; the authority's shield turns a
+  raised connection or transaction error, or a `Postgrex.Error` with one of
+  those unavailable codes, into `:unavailable`, and lets any other raised
+  error stop the process. The authority freezes its clocks at the last
+  committed boundary and, after more than five unobserved seconds, recovers
+  instead of charging the gap.
+- **Clock catch-up identity.** A command executed with an observed service
+  instant past the hall's clock first commits a catch-up advance whose command
+  ID is `"adv:<target_service_ms>"`, a pure function of its target. A retry of
+  the caller's command observed later catches up to its own target, a catch-up
+  already recorded is not appended again, and a lost catch-up reply is
+  resolved inside the workflow: the caller only ever sees its own command ID.
+- **Stored terms.** Receipts, outbox payloads, content, and snapshots are
+  external terms decoded with `[:safe]`, which never creates atoms. The
+  application loads all of its modules at start-up so atoms this build defines
+  exist in a fresh VM; a stored term that still cannot be decoded is an error
+  value (`{:undecodable_receipt, id}`, `{:undecodable_outbox, key}`,
+  `{:undecodable_content, ref}`, or an incompatible snapshot), never a raise.
+- **Authority status.** `HallAuthority` formats its status and crash reports
+  with scalar fields only (scope, owner, epoch, mode, position, service time):
+  never the hall, its store, or player-entered text.
 
 Not yet implemented, and therefore not qualified:
 
