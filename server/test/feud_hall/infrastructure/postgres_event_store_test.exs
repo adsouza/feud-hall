@@ -1,0 +1,249 @@
+defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
+  use FeudHall.PostgresCase
+
+  alias FeudHall.Application.CommandWorkflow
+  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.Domain.Hall
+  alias FeudHall.Infrastructure.PostgresEventStore
+
+  use FeudHall.EventStoreContract, adapter: PostgresEventStore, fresh: &FeudHall.PostgresCase.fresh_store/0
+
+  import FeudHall.PostgresCase, only: [fresh_store: 0]
+
+  # A request against an empty store; callers override the expectations once the store has history.
+  defp request(overrides \\ []) do
+    id = Keyword.get(overrides, :command_id, "a")
+    events = Keyword.get(overrides, :events, [%{type: :clock_advanced, to: 24}])
+
+    Map.merge(
+      %{
+        command_id: id,
+        expected_position: 0,
+        expected_versions: %{hall: 0, control: 0},
+        hall_stream: "hall:h1",
+        events: events,
+        control_events: [],
+        receipt: %{command_id: id, fingerprint: "fp-" <> id, kind: :advance_clock, outcome: :accepted},
+        outbox: [],
+        projection_rows: [],
+        context: %{actor: {:system, :scheduler}, correlation_id: "corr-" <> id, content_hash: nil, hall_ms: 24}
+      },
+      Map.new(Keyword.drop(overrides, [:command_id, :events]))
+    )
+  end
+
+  defp next_request(store, overrides) do
+    hall_stream = Keyword.get(overrides, :hall_stream, "hall:h1")
+
+    request(
+      [
+        expected_position: PostgresEventStore.head(store),
+        expected_versions: PostgresEventStore.stream_versions(store, hall_stream)
+      ] ++ overrides
+    )
+  end
+
+  defp count(table), do: Repo.query!("select count(*) from #{table}").rows |> hd() |> hd()
+
+  defp assert_nothing_written(store) do
+    assert PostgresEventStore.head(store) == 0
+    assert PostgresEventStore.receipt(store, "a") == :none
+    assert PostgresEventStore.stream_versions(store, "hall:h1") == %{hall: 0, control: 0}
+    assert count("batches") == 0
+    assert count("events") == 0
+    assert count("receipts") == 0
+  end
+
+  defp initialized_event(hall_id) do
+    {:ok, [event]} =
+      Hall.decide(nil, {:initialize_hall, %{hall_id: hall_id, catalog: SliceCatalog.catalog()}}, %{
+        command_id: "init-" <> hall_id,
+        actor: {:system, :admin}
+      })
+
+    event
+  end
+
+  describe "failure injection" do
+    test "before-commit, unavailable, and fenced failures write nothing and are one-shot" do
+      for {mode, reason} <- [before_commit: :unavailable, unavailable: :unavailable, fenced: :fenced] do
+        store = PostgresEventStore.fail_next(fresh_store(), mode)
+        assert {:error, ^reason, store} = PostgresEventStore.append(store, request())
+        assert_nothing_written(store)
+
+        assert {:ok, _, 1} = PostgresEventStore.append(store, request())
+        FeudHall.PostgresCase.reset!()
+      end
+    end
+
+    test "a lost reply commits the batch but reports an unknown outcome" do
+      store = PostgresEventStore.fail_next(fresh_store(), :lost_reply)
+      assert {:error, :unknown_outcome, store} = PostgresEventStore.append(store, request())
+      assert PostgresEventStore.head(store) == 1
+      assert {:ok, %{position: 1}} = PostgresEventStore.receipt(store, "a")
+
+      # The injection was one-shot.
+      assert {:ok, _, 2} = PostgresEventStore.append(store, next_request(store, command_id: "b"))
+    end
+  end
+
+  describe "authority" do
+    test "each acquisition returns a higher epoch and fences the previous holder" do
+      old = fresh_store()
+      assert old.epoch == 1
+      assert {:ok, new, 2} = PostgresEventStore.acquire_authority(old, "hall:test", "node-b")
+      assert %{scope: "hall:test", owner: "node-b", epoch: 2} = new
+
+      assert {:error, :fenced, _} = PostgresEventStore.append(old, request())
+      assert_nothing_written(old)
+      assert {:ok, _, 1} = PostgresEventStore.append(new, request())
+    end
+
+    test "a store that never acquired authority is fenced" do
+      store = PostgresEventStore.new(Repo, "hall:test")
+      assert {:error, :fenced, _} = PostgresEventStore.append(store, request())
+      assert_nothing_written(store)
+    end
+
+    test "authority is per scope" do
+      store = fresh_store()
+      assert {:ok, other, 1} = PostgresEventStore.acquire_authority(store, "hall:other", "node-b")
+      assert {:ok, store, 1} = PostgresEventStore.append(store, request())
+      assert {:ok, _, 2} = PostgresEventStore.append(other, next_request(store, command_id: "b"))
+    end
+  end
+
+  test "event envelopes record their stream, version, actor, causation, and correlation" do
+    store = fresh_store()
+
+    assert {:ok, _, 1} =
+             PostgresEventStore.append(
+               store,
+               request(
+                 events: [%{type: :clock_advanced, to: 24}, %{type: :clock_advanced, to: 48}],
+                 control_events: [%{type: :availability_started, epoch_id: "e1"}],
+                 context: %{actor: {:principal, "alice"}, correlation_id: "corr-a", content_hash: "abc", hall_ms: 48}
+               )
+             )
+
+    assert %{rows: rows} =
+             Repo.query!("""
+             select event_id, position, batch_order, stream, stream_version, type, schema, actor,
+                    causation_id, correlation_id, content_hash, hall_ms
+             from events order by batch_order
+             """)
+
+    assert rows == [
+             ["1:0", 1, 0, "hall:h1", 1, "clock_advanced", 1, "principal:alice", "a", "corr-a", "abc", 48],
+             ["1:1", 1, 1, "hall:h1", 2, "clock_advanced", 1, "principal:alice", "a", "corr-a", "abc", 48],
+             ["1:2", 1, 2, "control", 1, "availability_started", 1, "principal:alice", "a", "corr-a", "abc", 48]
+           ]
+
+    assert %{rows: [[1, "a", 48]]} = Repo.query!("select position, command_id, hall_ms from batches")
+  end
+
+  test "outbox intents commit with their batch position and command" do
+    store = fresh_store()
+    outbox = [%{dedupe_key: "mail:1", kind: :notify, payload: %{to: "alice"}}]
+    assert {:ok, _, 1} = PostgresEventStore.append(store, request(outbox: outbox))
+
+    assert %{rows: [["mail:1", "a", 1, "notify"]]} =
+             Repo.query!("select dedupe_key, command_id, position, kind from outbox")
+  end
+
+  test "content is stored once by hash and rehydrated on read" do
+    first = initialized_event("h1")
+    second = initialized_event("h2")
+    assert first.catalog == second.catalog
+
+    store = fresh_store()
+    {:ok, other, _} = PostgresEventStore.acquire_authority(store, "hall:other", "node-b")
+
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request(events: [first]))
+
+    assert {:ok, _, 2} =
+             PostgresEventStore.append(
+               other,
+               next_request(store, command_id: "b", hall_stream: "hall:h2", events: [second])
+             )
+
+    assert count("content") == 1
+    assert %{rows: [[content_hash]]} = Repo.query!("select content_hash from content")
+    assert content_hash == first.content_hash
+
+    # The stored payload references the catalog instead of repeating it.
+    %{rows: payloads} = Repo.query!("select payload from events")
+    for [payload] <- payloads, do: refute(payload =~ "rice_long")
+
+    assert {:ok, [%{events: [^first]}, %{events: [^second]}]} = PostgresEventStore.read_from(store, 0)
+  end
+
+  test "missing content blocks reading with its position" do
+    store = fresh_store()
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request(events: [initialized_event("h1")]))
+    Repo.query!("delete from content")
+
+    assert {:error, {:undecodable, 1, {:missing_content, _hash}}} = PostgresEventStore.read_from(store, 0)
+  end
+
+  test "an unknown stored event type blocks reading with its position" do
+    store = fresh_store()
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request())
+    Repo.query!("update events set payload = $1", [~s({"v":1,"e":{"type":{"$a":"launch_missiles"}}})])
+
+    assert {:error, {:undecodable, 1, {:unknown_atom, "launch_missiles"}}} = PostgresEventStore.read_from(store, 0)
+  end
+
+  test "a 10,000-event batch commits in one transaction" do
+    store = fresh_store()
+    events = for i <- 1..10_000, do: %{type: :clock_advanced, to: i * 24}
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request(events: events))
+    assert {:ok, [%{events: read}]} = PostgresEventStore.read_from(store, 0)
+    assert length(read) == 10_000
+    assert read == events
+    assert PostgresEventStore.stream_versions(store, "hall:h1") == %{hall: 10_000, control: 0}
+  end
+
+  test "player text with NUL, emoji, and quotes round-trips exactly through the store" do
+    name = "Casa \u0000 \"Ñ\" 🌮 'x' \\ $1"
+    event = %{type: :restaurant_created, restaurant_id: "r1", owner: "alice", name: name}
+
+    store = fresh_store()
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request(events: [event]))
+    assert {:ok, [%{events: [^event]}]} = PostgresEventStore.read_from(store, 0)
+  end
+
+  test "a restaurant name with emoji and quotes round-trips through the workflow" do
+    name = "Casa \"Ñ\" 🌮 'x'"
+    {:ok, rt} = CommandWorkflow.open(PostgresEventStore, fresh_store())
+
+    {:accepted, _, rt} =
+      CommandWorkflow.execute(rt, %{
+        command_id: "init",
+        actor: {:system, :admin},
+        command: {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}}
+      })
+
+    {:accepted, _, rt} =
+      CommandWorkflow.execute(rt, %{
+        command_id: "create",
+        actor: {:principal, "alice"},
+        command: {:create_restaurant, %{restaurant_id: "r1", stall_id: "s1", name: name, cuisine: "mexican"}}
+      })
+
+    assert {:ok, reopened} = CommandWorkflow.open(PostgresEventStore, rt.store)
+    assert reopened.state.restaurants["r1"].name == name
+    assert reopened.state == rt.state
+    assert reopened.versions == rt.versions
+    assert reopened.position == rt.position
+  end
+
+  @tag :capture_log
+  test "a refused connection is reported as unavailable" do
+    start_supervised!(FeudHall.UnreachableRepo)
+    unreachable = PostgresEventStore.new(FeudHall.UnreachableRepo, "hall:test", epoch: 1)
+
+    assert {:error, :unavailable, ^unreachable} = PostgresEventStore.append(unreachable, request())
+    assert {:error, :unavailable} = PostgresEventStore.acquire_authority(unreachable, "hall:test", "node-a")
+  end
+end

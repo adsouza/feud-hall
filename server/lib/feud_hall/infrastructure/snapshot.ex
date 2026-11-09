@@ -11,6 +11,9 @@ defmodule FeudHall.Infrastructure.Snapshot do
   # Bump when the shape of evolved state changes.
   @evolution_version 1
 
+  @doc "The evolved-state shape version this module writes and accepts."
+  def evolution_version, do: @evolution_version
+
   def take(state, position) do
     body = :erlang.term_to_binary(%{position: position, evolution: @evolution_version, state: state}, [:deterministic])
     <<checksum(body)::binary, body::binary>>

@@ -1,0 +1,519 @@
+defmodule FeudHall.Infrastructure.PostgresEventStore do
+  @moduledoc """
+  PostgreSQL implementation of `FeudHall.Application.EventStore` (port v2).
+
+  The store value is a handle (repo, authority scope, owner, epoch, and
+  one-shot test hooks); the log itself lives in the database, so every read
+  sees the committed state and `append/2` returns the same handle with its
+  hooks cleared.
+
+  One append is one transaction that takes its locks in a fixed order:
+
+    1. the `append_head` row (`for update`), compared with `expected_position`;
+    2. the scope's `authority` row (`for share`), compared with the handle's
+       epoch, so a writer whose authority was taken over is fenced;
+    3. the hall stream's and then the `control` stream's `stream_heads` rows
+       (`for update`), compared with `expected_versions`.
+
+  It then writes the batch row, its events (in chunks well under PostgreSQL's
+  bind-parameter limit), content, projection rows, outbox intents, and the
+  receipt, and advances the heads. A request without events writes only its
+  receipt at the unchanged head.
+
+  Events are stored as `EventCodec` JSON text, so player text (including NUL)
+  stays escaped. A `:hall_initialized` event's catalog is stored once in
+  `content`, keyed by its SHA-256 identity (the same value as
+  `FeudHall.Domain.Content.hash/1`), and the stored payload carries
+  `catalog_ref` instead; `read_from/2` rehydrates it. Missing or corrupt
+  content and undecodable payloads stop reading at that batch's position.
+  Receipts are stored as Base64 external term format and decoded with
+  `[:safe]`, so they round-trip as the exact Elixir terms that were written.
+
+  Connection failures and lock timeouts are `:unavailable`. A connection
+  failure after the transaction body finished (while committing) cannot prove
+  a rollback, so it is reported as `:unknown_outcome`.
+
+  `fail_next/2` arms a one-shot injected failure for the next append:
+  `:before_commit` aborts the transaction just before commit (`:unavailable`),
+  `:unavailable` and `:fenced` refuse without touching the database, and
+  `:lost_reply` commits but reports `:unknown_outcome`.
+  """
+
+  @behaviour FeudHall.Application.EventStore
+
+  alias FeudHall.Domain.Hall.Evolver
+  alias FeudHall.Infrastructure.{EventCodec, Snapshot}
+
+  @control "control"
+  @chunk 1_000
+  @timeout 60_000
+  @default_hooks %{before_commit: nil, lost_reply: false, refuse: nil}
+  @unavailable_codes [:lock_not_available, :query_canceled, :admin_shutdown, :crash_shutdown, :cannot_connect_now]
+  @accounts Map.new(Evolver.ledger_accounts(), &{Atom.to_string(&1), &1})
+
+  @enforce_keys [:repo, :scope]
+  defstruct repo: nil, scope: nil, owner: nil, epoch: nil, hooks: @default_hooks
+
+  @type t :: %__MODULE__{
+          repo: module(),
+          scope: String.t(),
+          owner: String.t() | nil,
+          epoch: pos_integer() | nil,
+          hooks: %{before_commit: (-> any()) | nil, lost_reply: boolean(), refuse: nil | :fenced | :unavailable}
+        }
+
+  @doc "A handle for `scope` on `repo`. Options: `:owner`, `:epoch`, `:hooks`."
+  def new(repo, scope, opts \\ []) when is_atom(repo) and is_binary(scope) do
+    %__MODULE__{
+      repo: repo,
+      scope: scope,
+      owner: Keyword.get(opts, :owner),
+      epoch: Keyword.get(opts, :epoch),
+      hooks: Map.merge(@default_hooks, Map.new(Keyword.get(opts, :hooks, %{})))
+    }
+  end
+
+  @doc "Arms a one-shot failure for the next append."
+  def fail_next(store, :before_commit),
+    do: put_hook(store, :before_commit, fn -> raise DBConnection.ConnectionError, "injected failure before commit" end)
+
+  def fail_next(store, :lost_reply), do: put_hook(store, :lost_reply, true)
+  def fail_next(store, mode) when mode in [:fenced, :unavailable], do: put_hook(store, :refuse, mode)
+
+  defp put_hook(store, key, value), do: %{store | hooks: Map.put(store.hooks, key, value)}
+  defp clear_hooks(store), do: %{store | hooks: @default_hooks}
+
+  @impl true
+  def head(store) do
+    %{rows: [[position]]} = store.repo.query!("select position from append_head where id = 1")
+    position
+  end
+
+  @impl true
+  def stream_versions(store, hall_stream) do
+    %{rows: rows} =
+      store.repo.query!("select stream, version from stream_heads where stream = any($1)", [
+        Enum.reject([hall_stream, @control], &is_nil/1)
+      ])
+
+    versions = Map.new(rows, fn [stream, version] -> {stream, version} end)
+    %{hall: if(hall_stream, do: Map.get(versions, hall_stream, 0), else: 0), control: Map.get(versions, @control, 0)}
+  end
+
+  # --- append ---------------------------------------------------------------
+
+  @impl true
+  def append(%{hooks: %{refuse: mode}} = store, _request) when mode != nil, do: {:error, mode, clear_hooks(store)}
+  def append(%{epoch: nil} = store, _request), do: {:error, :fenced, clear_hooks(store)}
+
+  def append(store, request) do
+    hooks = store.hooks
+    store = clear_hooks(store)
+
+    case transact(store, request, hooks) do
+      {:ok, position} -> if hooks.lost_reply, do: {:error, :unknown_outcome, store}, else: {:ok, store, position}
+      {:error, reason} -> {:error, reason, store}
+    end
+  end
+
+  # Runs the append transaction and classifies failures. `committing` is set once
+  # the transaction body has finished, so a connection error after it (during
+  # COMMIT) is an unknown outcome rather than a proven rollback.
+  defp transact(store, request, hooks) do
+    committing = make_ref()
+
+    try do
+      store.repo.transaction(fn -> write(store, request, hooks, committing) end, timeout: @timeout)
+    rescue
+      DBConnection.ConnectionError ->
+        if Process.get(committing), do: {:error, :unknown_outcome}, else: {:error, :unavailable}
+
+      error in Postgrex.Error ->
+        classify(error, __STACKTRACE__)
+    else
+      {:ok, position} -> {:ok, position}
+      {:error, reason} when reason in [:conflict, :fenced] -> {:error, reason}
+      {:error, :rollback} -> {:error, :unavailable}
+    after
+      Process.delete(committing)
+    end
+  end
+
+  defp classify(%Postgrex.Error{postgres: %{code: code}}, _stack) when code in @unavailable_codes,
+    do: {:error, :unavailable}
+
+  defp classify(%Postgrex.Error{postgres: %{code: :unique_violation, table: table}}, _stack)
+       when table in ["receipts", "batches"],
+       do: {:error, :conflict}
+
+  defp classify(error, stack), do: reraise(error, stack)
+
+  defp write(store, request, hooks, committing) do
+    repo = store.repo
+    position = lock_head(repo)
+    if position != request.expected_position, do: repo.rollback(:conflict)
+    if authority_epoch(repo, store.scope) != store.epoch, do: repo.rollback(:fenced)
+    versions = lock_streams(repo, request.hall_stream)
+    if versions != request.expected_versions, do: repo.rollback(:conflict)
+    if receipt_exists?(repo, request.command_id), do: repo.rollback(:conflict)
+
+    %{events: events, control_events: control_events} = request
+    batch? = events != [] or control_events != []
+    position = if batch?, do: position + 1, else: position
+
+    if batch? do
+      insert_batch(repo, request, position, versions)
+      repo.query!("update append_head set position = $1 where id = 1", [position])
+      advance_stream(repo, request.hall_stream, versions.hall + length(events), events)
+      advance_stream(repo, @control, versions.control + length(control_events), control_events)
+    end
+
+    apply_projection_rows(repo, request.projection_rows, position)
+    insert_outbox(repo, request, position)
+    insert_receipt(repo, request, position)
+
+    if hooks.before_commit, do: hooks.before_commit.()
+    Process.put(committing, true)
+    position
+  end
+
+  defp lock_head(repo) do
+    %{rows: [[position]]} = repo.query!("select position from append_head where id = 1 for update")
+    position
+  end
+
+  defp authority_epoch(repo, scope) do
+    case repo.query!("select epoch from authority where scope = $1 for share", [scope]) do
+      %{rows: [[epoch]]} -> epoch
+      %{rows: []} -> nil
+    end
+  end
+
+  # Hall stream first, then control: the fixed lock order every writer uses.
+  defp lock_streams(repo, hall_stream) do
+    %{hall: if(hall_stream, do: lock_stream(repo, hall_stream), else: 0), control: lock_stream(repo, @control)}
+  end
+
+  defp lock_stream(repo, stream) do
+    repo.query!("insert into stream_heads (stream, version) values ($1, 0) on conflict do nothing", [stream])
+    %{rows: [[version]]} = repo.query!("select version from stream_heads where stream = $1 for update", [stream])
+    version
+  end
+
+  defp advance_stream(_repo, _stream, _version, []), do: :ok
+
+  defp advance_stream(repo, stream, version, _events),
+    do: repo.query!("update stream_heads set version = $2 where stream = $1", [stream, version])
+
+  defp receipt_exists?(repo, command_id),
+    do: repo.query!("select 1 from receipts where command_id = $1", [command_id]).num_rows > 0
+
+  defp insert_batch(repo, request, position, versions) do
+    %{command_id: command_id, context: context} = request
+
+    repo.query!("insert into batches (position, command_id, hall_ms) values ($1, $2, $3)", [
+      position,
+      command_id,
+      context.hall_ms
+    ])
+
+    envelope = %{
+      position: position,
+      actor: actor_label(context.actor),
+      causation_id: command_id,
+      correlation_id: context.correlation_id,
+      content_hash: context.content_hash,
+      hall_ms: context.hall_ms
+    }
+
+    hall = Enum.with_index(request.events, &{&1, request.hall_stream, versions.hall + &2 + 1})
+    control = Enum.with_index(request.control_events, &{&1, @control, versions.control + &2 + 1})
+
+    (hall ++ control)
+    |> Enum.with_index()
+    |> Enum.map(fn {{event, stream, version}, order} -> event_row(repo, event, stream, version, order, envelope) end)
+    |> Enum.chunk_every(@chunk)
+    |> Enum.each(&repo.insert_all("events", &1))
+  end
+
+  defp event_row(repo, event, stream, version, order, envelope) do
+    Map.merge(envelope, %{
+      event_id: "#{envelope.position}:#{order}",
+      batch_order: order,
+      stream: stream,
+      stream_version: version,
+      type: Atom.to_string(event.type),
+      schema: EventCodec.schema(),
+      payload: EventCodec.encode!(stored_payload(repo, event))
+    })
+  end
+
+  # The catalog is stored once per content identity; the event references it.
+  defp stored_payload(repo, %{type: :hall_initialized, catalog: catalog} = event) do
+    body = :erlang.term_to_binary(catalog, [:deterministic])
+    ref = content_hash(body)
+
+    repo.query!("insert into content (content_hash, body) values ($1, $2) on conflict do nothing", [ref, body])
+    event |> Map.delete(:catalog) |> Map.put(:catalog_ref, ref)
+  end
+
+  defp stored_payload(_repo, event), do: event
+
+  defp content_hash(body), do: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
+
+  defp actor_label({kind, id}) when kind in [:principal, :system], do: "#{kind}:#{id}"
+  defp actor_label(other), do: inspect(other)
+
+  # Rows apply in order (later rows for the same key win), so they are folded
+  # to one final operation per key before the bulk upserts and deletes.
+  defp apply_projection_rows(_repo, [], _position), do: :ok
+
+  defp apply_projection_rows(repo, rows, position) do
+    final =
+      Enum.reduce(rows, %{}, fn
+        {:balance, r, account, amount}, acc ->
+          Map.put(acc, {:balance, r, account}, %{
+            restaurant_id: r,
+            account: Atom.to_string(account),
+            amount: amount,
+            position: position
+          })
+
+        {:stock, r, product, on_hand, reserved}, acc ->
+          Map.put(acc, {:stock, r, product}, %{
+            restaurant_id: r,
+            product: product,
+            on_hand: on_hand,
+            reserved: reserved,
+            position: position
+          })
+
+        {:delete_stock, r, product}, acc ->
+          Map.put(acc, {:stock, r, product}, :delete)
+      end)
+
+    {deletes, upserts} = Enum.split_with(final, fn {_key, value} -> value == :delete end)
+    {balances, stock} = Enum.split_with(upserts, fn {{table, _, _}, _} -> table == :balance end)
+
+    for {{:stock, r, product}, :delete} <- deletes do
+      repo.query!("delete from restaurant_stock where restaurant_id = $1 and product = $2", [r, product])
+    end
+
+    upsert(repo, "restaurant_balances", Enum.map(balances, &elem(&1, 1)), [:amount, :position], [
+      :restaurant_id,
+      :account
+    ])
+
+    upsert(repo, "restaurant_stock", Enum.map(stock, &elem(&1, 1)), [:on_hand, :reserved, :position], [
+      :restaurant_id,
+      :product
+    ])
+  end
+
+  defp upsert(repo, table, rows, fields, target) do
+    rows
+    |> Enum.chunk_every(@chunk)
+    |> Enum.each(&repo.insert_all(table, &1, on_conflict: {:replace, fields}, conflict_target: target))
+  end
+
+  # Outbox payloads are opaque external terms until the outbox defines its own codec.
+  defp insert_outbox(_repo, %{outbox: []}, _position), do: :ok
+
+  defp insert_outbox(repo, request, position) do
+    rows =
+      Enum.map(request.outbox, fn intent ->
+        %{
+          dedupe_key: intent.dedupe_key,
+          command_id: request.command_id,
+          position: position,
+          kind: Atom.to_string(intent.kind),
+          payload: encode_term(intent.payload)
+        }
+      end)
+
+    rows
+    |> Enum.chunk_every(@chunk)
+    |> Enum.each(&repo.insert_all("outbox", &1, on_conflict: :nothing, conflict_target: [:dedupe_key]))
+  end
+
+  defp insert_receipt(repo, request, position) do
+    %{command_id: command_id, receipt: receipt} = request
+
+    repo.query!("insert into receipts (command_id, fingerprint, body, position) values ($1, $2, $3, $4)", [
+      command_id,
+      Map.fetch!(receipt, :fingerprint),
+      encode_term(receipt),
+      position
+    ])
+  end
+
+  defp encode_term(term), do: term |> :erlang.term_to_binary() |> Base.encode64()
+  defp decode_term(text), do: text |> Base.decode64!() |> :erlang.binary_to_term([:safe])
+
+  # --- reads ----------------------------------------------------------------
+
+  @impl true
+  def read_from(store, after_position) do
+    repo = store.repo
+
+    %{rows: batches} =
+      repo.query!("select position, command_id, hall_ms from batches where position > $1 order by position", [
+        after_position
+      ])
+
+    %{rows: event_rows} =
+      repo.query!(
+        "select position, stream, payload from events where position > $1 order by position, batch_order",
+        [after_position]
+      )
+
+    events_by_position = Enum.group_by(event_rows, &hd/1, &tl/1)
+
+    batches
+    |> Enum.reduce_while({[], %{}}, fn [position, command_id, hall_ms], {acc, content} ->
+      case decode_batch(repo, Map.get(events_by_position, position, []), content) do
+        {:ok, events, control_events, content} ->
+          batch = %{
+            position: position,
+            command_id: command_id,
+            hall_ms: hall_ms,
+            events: events,
+            control_events: control_events
+          }
+
+          {:cont, {[batch | acc], content}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:undecodable, position, reason}}}
+      end
+    end)
+    |> case do
+      {:error, _} = error -> error
+      {batches, _content} -> {:ok, Enum.reverse(batches)}
+    end
+  end
+
+  defp decode_batch(repo, rows, content) do
+    Enum.reduce_while(rows, {:ok, [], [], content}, fn [stream, payload], {:ok, hall, control, content} ->
+      with {:ok, event} <- EventCodec.decode(payload),
+           {:ok, event, content} <- rehydrate(repo, event, content) do
+        if stream == @control,
+          do: {:cont, {:ok, hall, [event | control], content}},
+          else: {:cont, {:ok, [event | hall], control, content}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, hall, control, content} -> {:ok, Enum.reverse(hall), Enum.reverse(control), content}
+      error -> error
+    end
+  end
+
+  defp rehydrate(repo, %{catalog_ref: ref} = event, content) do
+    with {:ok, catalog, content} <- fetch_content(repo, ref, content) do
+      {:ok, event |> Map.delete(:catalog_ref) |> Map.put(:catalog, catalog), content}
+    end
+  end
+
+  defp rehydrate(_repo, event, content), do: {:ok, event, content}
+
+  defp fetch_content(_repo, ref, %{} = content) when is_map_key(content, ref),
+    do: {:ok, Map.fetch!(content, ref), content}
+
+  defp fetch_content(repo, ref, content) do
+    case repo.query!("select body from content where content_hash = $1", [ref]) do
+      %{rows: [[body]]} ->
+        if content_hash(body) == ref do
+          catalog = :erlang.binary_to_term(body, [:safe])
+          {:ok, catalog, Map.put(content, ref, catalog)}
+        else
+          {:error, {:corrupt_content, ref}}
+        end
+
+      %{rows: []} ->
+        {:error, {:missing_content, ref}}
+    end
+  end
+
+  @impl true
+  def receipt(store, command_id) do
+    case store.repo.query!("select body, position from receipts where command_id = $1", [command_id]) do
+      %{rows: [[body, position]]} -> {:ok, body |> decode_term() |> Map.put(:position, position)}
+      %{rows: []} -> :none
+    end
+  end
+
+  @impl true
+  def projection(store, :balances) do
+    %{rows: rows} = store.repo.query!("select restaurant_id, account, amount, position from restaurant_balances")
+
+    rows
+    |> Enum.map(fn [r, account, amount, position] ->
+      %{restaurant_id: r, account: Map.fetch!(@accounts, account), amount: amount, position: position}
+    end)
+    |> Enum.sort_by(&{&1.restaurant_id, &1.account})
+  end
+
+  def projection(store, :stock) do
+    %{rows: rows} =
+      store.repo.query!("select restaurant_id, product, on_hand, reserved, position from restaurant_stock")
+
+    rows
+    |> Enum.map(fn [r, product, on_hand, reserved, position] ->
+      %{restaurant_id: r, product: product, on_hand: on_hand, reserved: reserved, position: position}
+    end)
+    |> Enum.sort_by(&{&1.restaurant_id, &1.product})
+  end
+
+  # --- authority and snapshots -------------------------------------------
+
+  @impl true
+  def acquire_authority(store, scope, owner) do
+    sql = """
+    insert into authority (scope, owner, epoch) values ($1, $2, 1)
+    on conflict (scope) do update set owner = excluded.owner, epoch = authority.epoch + 1
+    returning epoch
+    """
+
+    with {:ok, %{rows: [[epoch]]}} <- attempt(fn -> store.repo.query!(sql, [scope, owner]) end) do
+      {:ok, %{store | scope: scope, owner: owner, epoch: epoch}, epoch}
+    end
+  end
+
+  @impl true
+  def save_snapshot(store, position, body) when is_binary(body) do
+    sql = "insert into snapshots (position, evolution, body) values ($1, $2, $3) returning id"
+
+    with {:ok, %{rows: [[id]]}} <-
+           attempt(fn -> store.repo.query!(sql, [position, Snapshot.evolution_version(), body]) end) do
+      {:ok, store, id}
+    end
+  end
+
+  @impl true
+  def mark_snapshot_verified(store, id) when is_integer(id) do
+    case store.repo.query!("update snapshots set verified = true where id = $1", [id]) do
+      %{num_rows: 1} -> {:ok, store}
+      %{num_rows: 0} -> {:error, :unknown_snapshot}
+    end
+  end
+
+  def mark_snapshot_verified(_store, _id), do: {:error, :unknown_snapshot}
+
+  @impl true
+  def snapshots(store) do
+    %{rows: rows} = store.repo.query!("select id, position, body, verified from snapshots order by id desc")
+
+    Enum.map(rows, fn [id, position, body, verified] ->
+      %{id: id, position: position, body: body, verified: verified}
+    end)
+  end
+
+  defp attempt(fun) do
+    {:ok, fun.()}
+  rescue
+    DBConnection.ConnectionError -> {:error, :unavailable}
+    error in Postgrex.Error -> classify(error, __STACKTRACE__)
+  end
+end

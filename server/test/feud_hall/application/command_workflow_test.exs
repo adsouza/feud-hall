@@ -1,15 +1,16 @@
 defmodule FeudHall.Application.CommandWorkflowTest do
-  use ExUnit.Case, async: true
+  # Not async: the "on PostgreSQL" cases share the test database.
+  use ExUnit.Case, async: false
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.{Control, Money}
-  alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore, Snapshot}
+  alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore, PostgresEventStore, Snapshot}
 
   defp env(id, actor, command), do: %{command_id: id, actor: actor, command: command}
 
-  defp runtime do
-    {:ok, rt} = Workflow.open(InMemoryEventStore, InMemoryEventStore.new())
+  defp runtime(store_mod \\ InMemoryEventStore, store \\ InMemoryEventStore.new()) do
+    {:ok, rt} = Workflow.open(store_mod, store)
 
     {:accepted, _, rt} =
       Workflow.execute(
@@ -256,6 +257,91 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     assert reopened.state == rt.state
     assert reopened.versions == rt.versions
     assert reopened.position == rt.position
+  end
+
+  describe "on PostgreSQL" do
+    setup do
+      FeudHall.PostgresCase.reset!()
+    end
+
+    defp pg_runtime, do: runtime(PostgresEventStore, FeudHall.PostgresCase.fresh_store())
+
+    test "an identical retry returns the stored receipt; changed content conflicts" do
+      rt = pg_runtime()
+      {:accepted, receipt, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
+      cash = rt.state.restaurants["r1"].ledger.cash
+
+      assert {:ok, ^receipt} = PostgresEventStore.receipt(rt.store, "buy-1")
+      assert {:replayed, ^receipt, rt2} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
+      assert rt2.state.restaurants["r1"].ledger.cash == cash
+      assert rt2.position == rt.position
+      assert PostgresEventStore.head(rt.store) == rt.position
+
+      assert {:error, :command_id_conflict} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(101)))
+    end
+
+    test "a rejection keeps its stored receipt and appends no batch" do
+      rt = pg_runtime()
+      head = rt.position
+      {:rejected, receipt, rt} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(900_000)))
+      assert receipt.outcome == {:rejected, :insufficient_storage}
+      assert PostgresEventStore.head(rt.store) == head
+      assert {:replayed, ^receipt, _} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(900_000)))
+    end
+
+    test "a failure before commit leaves nothing; retrying the same ID then succeeds once" do
+      rt = pg_runtime()
+      failing = %{rt | store: PostgresEventStore.fail_next(rt.store, :before_commit)}
+      assert {:error, :unavailable} = Workflow.execute(failing, env("buy-1", {:principal, "alice"}, purchase(100)))
+      assert PostgresEventStore.receipt(rt.store, "buy-1") == :none
+      assert PostgresEventStore.head(rt.store) == rt.position
+
+      {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
+      assert map_size(rt.state.restaurants["r1"].batches) == 1
+    end
+
+    test "a lost reply is uncertain, blocks new commands, and resolves by the same ID" do
+      rt = pg_runtime()
+      armed = %{rt | store: PostgresEventStore.fail_next(rt.store, :lost_reply)}
+      {:uncertain, "buy-1", stuck} = Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(100)))
+      assert stuck.state.restaurants["r1"].batches == %{}
+      assert {:error, :recovery_required} = Workflow.execute(stuck, env("buy-2", {:principal, "alice"}, purchase(5)))
+
+      assert {:committed, receipt, recovered} = Workflow.resolve(stuck, "buy-1")
+      assert receipt.outcome == :accepted
+      assert map_size(recovered.state.restaurants["r1"].batches) == 1
+      assert {:replayed, _, _} = Workflow.execute(recovered, env("buy-1", {:principal, "alice"}, purchase(100)))
+    end
+
+    test "the store replays to the head and projections the in-memory workflow reaches" do
+      commands = [
+        {env("buy-1", {:principal, "alice"}, purchase(10)), 1_000},
+        {env("start:e1", {:system, :authority}, {:start_availability, %{epoch_id: "e1"}}), nil},
+        {env("buy-2", {:principal, "alice"}, purchase(20)), 2_000}
+      ]
+
+      run = fn rt ->
+        Enum.reduce(commands, rt, fn {envelope, observed}, rt ->
+          {:accepted, _, rt} = Workflow.execute(rt, envelope, observed)
+          rt
+        end)
+      end
+
+      pg = run.(pg_runtime())
+      memory = run.(runtime())
+
+      assert {:ok, reopened} = Workflow.open(PostgresEventStore, pg.store)
+      assert reopened.state == memory.state
+      assert reopened.control == memory.control
+      assert reopened.versions == memory.versions
+      assert reopened.position == memory.position
+      assert PostgresEventStore.read_from(pg.store, 0) == InMemoryEventStore.read_from(memory.store, 0)
+
+      assert PostgresEventStore.projection(pg.store, :balances) ==
+               InMemoryEventStore.projection(memory.store, :balances)
+
+      assert PostgresEventStore.projection(pg.store, :stock) == InMemoryEventStore.projection(memory.store, :stock)
+    end
   end
 
   describe "codec and snapshots" do

@@ -10,3 +10,16 @@ config :feud_hall, FeudHall.Infrastructure.Repo,
   parameters: [lock_timeout: "2000"]
 
 config :logger, level: :warning
+
+# A repo nothing listens for (port 1), started only by the refused-connection test. One
+# connection, a short connect timeout, and a slow reconnect backoff keep it quick and quiet.
+config :feud_hall, FeudHall.UnreachableRepo,
+  database: "feud_hall_unreachable",
+  hostname: "localhost",
+  port: 1,
+  pool_size: 1,
+  connect_timeout: 100,
+  queue_target: 20,
+  queue_interval: 50,
+  backoff_min: 5_000,
+  backoff_max: 5_000
