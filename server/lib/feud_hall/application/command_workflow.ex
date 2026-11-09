@@ -103,19 +103,21 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   def execute(runtime, envelope, observed_service_ms) do
     started = if runtime.diagnostics, do: System.monotonic_time(:microsecond)
-    attempted = Map.merge(envelope_fields(envelope), %{attempt: 1, epoch: runtime.epoch})
+
+    attempted =
+      if runtime.diagnostics,
+        do: Diagnostics.guard(fn -> Map.merge(envelope_fields(envelope), %{attempt: 1, epoch: runtime.epoch}) end, %{}),
+        else: %{}
+
     Diagnostics.emit(runtime.diagnostics, :command_attempted, attempted)
 
     result = run(runtime, envelope, observed_service_ms)
 
-    if runtime.diagnostics do
-      fields =
-        attempted
-        |> Map.put(:duration_us, System.monotonic_time(:microsecond) - started)
-        |> Map.merge(outcome_fields(result))
-
-      Diagnostics.emit(runtime.diagnostics, :command_outcome, fields)
-    end
+    Diagnostics.emit_lazy(runtime.diagnostics, :command_outcome, fn ->
+      attempted
+      |> Map.put(:duration_us, System.monotonic_time(:microsecond) - started)
+      |> Map.merge(outcome_fields(result))
+    end)
 
     result
   end
@@ -140,8 +142,13 @@ defmodule FeudHall.Application.CommandWorkflow do
   end
 
   # Identifiers only: never the payload, player text, or the principal's ID.
+  # `kind` is unvalidated client input until the workflow's own validation: only known names are recorded.
   defp envelope_fields(%{command_id: id, actor: actor, command: {kind, _}}),
-    do: %{command_id: id, kind: kind, actor_kind: Diagnostics.actor_kind(actor)}
+    do: %{
+      command_id: id,
+      kind: if(kind in @commands or kind in @control_commands, do: kind, else: :unknown),
+      actor_kind: Diagnostics.actor_kind(actor)
+    }
 
   defp envelope_fields(_), do: %{}
 
@@ -161,6 +168,8 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   defp outcome_fields({:error, reason, runtime}),
     do: %{outcome: :rejected, reason: Diagnostics.reason(reason), position: runtime.position}
+
+  defp outcome_fields(_unexpected), do: %{}
 
   defp receipt_fields(outcome, receipt, runtime) do
     %{

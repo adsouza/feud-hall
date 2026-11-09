@@ -153,6 +153,31 @@ defmodule FeudHall.Application.DiagnosticsTest do
     assert {:accepted, _, _} = create(rt, "Casa")
   end
 
+  test "field-building failures and malformed configs never reach the workflow", %{sink: sink} do
+    assert :ok = Diagnostics.emit_lazy({MemorySink, sink}, :x, fn -> raise "builder bug" end)
+    assert :ok = Diagnostics.emit_lazy({MemorySink, sink}, :x, fn -> throw(:oops) end)
+    assert :ok = Diagnostics.emit(:not_a_config, :x, %{})
+    assert :ok = Diagnostics.emit_lazy({1, 2, 3}, :x, fn -> %{} end)
+    assert MemorySink.records(sink) == []
+
+    for bogus <- [:not_a_config, {1, 2, 3}, {NoSuchModule, nil}] do
+      rt = open(diagnostics: bogus)
+      assert {:accepted, _, _} = create(rt, "Casa")
+    end
+
+    # A malformed envelope is still rejected by the workflow, not crashed by diagnostics.
+    rt = open(diagnostics: {MemorySink, sink})
+    assert {:error, :malformed_envelope, _} = CommandWorkflow.execute(rt, %{command_id: 7})
+  end
+
+  test "unvalidated command kinds are recorded as :unknown", %{sink: sink} do
+    rt = open(diagnostics: {MemorySink, sink})
+    {:error, :unknown_command, _} = CommandWorkflow.execute(rt, env("evil", {:principal, "a"}, {:"drop table", %{}}))
+    records = MemorySink.records(sink)
+    assert Enum.all?(Enum.filter(records, &(&1.fields[:command_id] == "evil")), &(&1.fields.kind == :unknown))
+    refute inspect(records) =~ "drop table"
+  end
+
   defp workload(diag) do
     rt = open(diagnostics: diag)
     {:accepted, _, rt} = create(rt, "Casa")

@@ -44,6 +44,34 @@ defmodule FeudHall.Application.Diagnostics do
     _, _ -> :ok
   end
 
+  # A malformed configuration disables emission rather than failing the caller.
+  def emit(_malformed, _name, _fields), do: :ok
+
+  @doc """
+  Like `emit/3`, but builds the fields in `fun` inside the same isolation:
+  a raising builder or a malformed config drops the record, nothing more.
+  """
+  @spec emit_lazy(config(), atom(), (-> map())) :: :ok
+  def emit_lazy(nil, _name, _fun), do: :ok
+
+  def emit_lazy(config, name, fun) do
+    emit(config, name, fun.())
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  @doc "Runs `fun`, returning `default` if it raises; for field building that feeds later records."
+  @spec guard((-> term()), term()) :: term()
+  def guard(fun, default) do
+    fun.()
+  rescue
+    _ -> default
+  catch
+    _, _ -> default
+  end
+
   @doc "Reduces an error term to a short atom: structured detail may carry data, so only its tag survives."
   @spec reason(term()) :: atom()
   def reason(reason) when is_atom(reason), do: reason
