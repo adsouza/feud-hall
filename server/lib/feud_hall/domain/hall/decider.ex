@@ -14,8 +14,8 @@ defmodule FeudHall.Domain.Hall.Decider do
   from staff coverage; they never bypass work time, freshness, or the gate.
   """
 
-  alias FeudHall.Domain.{Clock, Content, Dietary, Inventory, Money, Offers, Random, Substitution}
-  alias FeudHall.Domain.Hall.{Advance, Evolver, Settlement}
+  alias FeudHall.Domain.{Clock, Content, Inventory, Money, Random, Substitution}
+  alias FeudHall.Domain.Hall.{Admission, Advance, Evolver, Settlement}
 
   @max_qty 1_000_000
   @max_price 1_000_000
@@ -253,48 +253,22 @@ defmodule FeudHall.Domain.Hall.Decider do
   # -- visits -----------------------------------------------------------------
 
   defp admit_visit(state, p, ctx) do
-    with {:ok, source, principal, budget} <- visit_source(p, ctx),
-         :ok <- ensure(id?(p[:stall_id]) and id?(p[:main]), :invalid_payload),
-         :ok <- ensure(p[:drink] == nil or id?(p[:drink]), :invalid_payload),
-         :ok <- ensure(not Map.has_key?(state.active_visits, principal), :visit_already_active),
-         {:ok, requirement} <- Dietary.requirement(state.catalog, p[:profile_id]),
-         blank = %{requirement: requirement, carbs_reserved: 0, carbs_served: 0},
-         {:ok, quote} <- Offers.quote_tray(state, p.stall_id, p.main, p[:drink], blank),
-         {:ok, deadline} <- bind_deadline(source, quote, p),
-         {:ok, funding} <- fund(state, source, principal, budget, quote) do
-      visit_id = "V:" <> ctx.command_id
-      tray_id = "T:" <> ctx.command_id
-
-      admitted = %{
-        type: :visit_admitted,
-        visit_id: visit_id,
-        source: source,
-        principal: principal,
-        restaurant_id: quote.restaurant_id,
-        stall_id: quote.stall_id,
-        requirement: requirement,
-        budget: budget
-      }
-
-      batches = state.restaurants[quote.restaurant_id].batches
-
-      case reserve_components(batches, quote.components, funding, state.now, ctx.command_id) do
-        {:ok, components} ->
-          accepted = %{
-            type: :tray_accepted,
-            tray_id: tray_id,
-            visit_id: visit_id,
-            restaurant_id: quote.restaurant_id,
-            stall_id: quote.stall_id,
-            deadline: deadline,
-            components: components
-          }
-
-          {:ok, [admitted, accepted]}
-
-        {:error, _} = error ->
-          error
-      end
+    with {:ok, source, principal, budget} <- visit_source(p, ctx) do
+      Admission.admit(
+        state,
+        %{
+          source: source,
+          principal: principal,
+          budget: budget,
+          stall_id: p[:stall_id],
+          main: p[:main],
+          drink: p[:drink],
+          profile_id: p[:profile_id],
+          confirmed: p[:confirmed],
+          deadline_cap: nil
+        },
+        ctx.command_id
+      )
     end
   end
 
@@ -306,110 +280,13 @@ defmodule FeudHall.Domain.Hall.Decider do
 
   defp visit_source(_p, _ctx), do: {:error, :forbidden}
 
-  defp bind_deadline(:guest, quote, p), do: Offers.check_confirmation(quote, p[:confirmed])
-  defp bind_deadline(:simulated, quote, _p), do: {:ok, quote.deadline}
-
-  # Guest courses reserve exact wallet slices (allowance before earned credit);
-  # simulated courses must fit the visit's pinned budget.
-  defp fund(state, :guest, principal, _budget, quote) do
-    slices =
-      state.wallets
-      |> Map.get(principal, %{slices: %{}})
-      |> Map.get(:slices)
-      |> Enum.map(fn {id, s} -> {id, s.source, s.amount - s.reserved} end)
-      |> Enum.filter(fn {_, _, free} -> free > 0 end)
-      |> Enum.sort_by(fn {id, source, _} -> {if(source == :allowance, do: 0, else: 1), id} end)
-
-    Enum.reduce_while(quote.components, {:ok, [], slices}, fn c, {:ok, acc, pool} ->
-      case take(pool, c.price, []) do
-        {:ok, used, pool} -> {:cont, {:ok, acc ++ [used], pool}}
-        :error -> {:halt, {:error, :insufficient_funds}}
-      end
-    end)
-    |> case do
-      {:ok, per_component, _} -> {:ok, per_component}
-      error -> error
-    end
-  end
-
-  defp fund(_state, :simulated, _principal, budget, quote) do
-    if quote.total <= budget,
-      do: {:ok, Enum.map(quote.components, fn _ -> [] end)},
-      else: {:error, :over_budget}
-  end
-
-  defp take(pool, 0, used), do: {:ok, Enum.reverse(used), pool}
-  defp take([], _need, _used), do: :error
-
-  defp take([{id, source, free} | rest], need, used) do
-    amount = min(free, need)
-    pool = if free > amount, do: [{id, source, free - amount} | rest], else: rest
-    take(pool, need - amount, [%{slice_id: id, amount: amount} | used])
-  end
-
-  defp reserve_components(batches, components, funding, now, command_id) do
-    components
-    |> Enum.zip(funding)
-    |> Enum.reduce_while({:ok, [], batches}, fn {c, slices}, {:ok, acc, batches} ->
-      case reserve_lines(batches, c.lines, now) do
-        {:ok, claims} ->
-          order =
-            c
-            |> Map.take([:kind, :recipe_id, :recipe_version, :price, :lines, :penalty, :quality, :carbs_mg])
-            |> Map.merge(%{order_id: "O:#{command_id}:#{c.kind}", reservations: claims, funding: slices})
-
-          {:cont, {:ok, acc ++ [order], Inventory.adjust_reserved(batches, claims, 1)}}
-
-        error ->
-          {:halt, error}
-      end
-    end)
-    |> case do
-      {:ok, orders, _} -> {:ok, orders}
-      error -> error
-    end
-  end
-
-  # Reserve consolidated demand per product so one order holds at most one
-  # claim per batch.
-  defp reserve_lines(batches, lines, now) do
-    lines
-    |> Substitution.demand()
-    |> Enum.sort()
-    |> Enum.reduce_while({:ok, [], batches}, fn {product, qty}, {:ok, acc, batches} ->
-      case Inventory.plan_reservation(batches, product, qty, now) do
-        {:ok, claims} -> {:cont, {:ok, acc ++ claims, Inventory.adjust_reserved(batches, claims, 1)}}
-        error -> {:halt, error}
-      end
-    end)
-    |> case do
-      {:ok, claims, _} -> {:ok, claims}
-      error -> error
-    end
-  end
-
   defp accept_dessert(state, %{visit_id: v} = p, ctx) do
-    with {:ok, visit} <- diner_visit(state, v, ctx),
-         :ok <- ensure(visit.dessert == :offered, :no_dessert_offer),
-         :ok <- ensure(state.now < visit.dessert_offer_deadline, :dessert_offer_expired),
-         {:ok, quote} <- Offers.quote_dessert(state, visit),
-         {:ok, deadline} <- bind_deadline(visit.source, quote, p),
-         {:ok, funding} <- fund_dessert(state, visit, quote),
-         batches = state.restaurants[visit.restaurant].batches,
-         {:ok, [order]} <- reserve_components(batches, quote.components, funding, state.now, ctx.command_id) do
-      {:ok, [%{type: :dessert_accepted, visit_id: v, deadline: deadline, order: order}]}
+    with {:ok, visit} <- diner_visit(state, v, ctx) do
+      Admission.accept_dessert(state, visit, p[:confirmed], ctx.command_id)
     end
   end
 
   defp accept_dessert(_state, _p, _ctx), do: {:error, :invalid_payload}
-
-  defp fund_dessert(state, %{source: :guest} = visit, quote), do: fund(state, :guest, visit.principal, nil, quote)
-
-  defp fund_dessert(_state, %{source: :simulated} = visit, quote) do
-    if visit.budget_committed + quote.total <= visit.budget,
-      do: {:ok, [[]]},
-      else: {:error, :over_budget}
-  end
 
   # -- lookups and guards -------------------------------------------------------
 
