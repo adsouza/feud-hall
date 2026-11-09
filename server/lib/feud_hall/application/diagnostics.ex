@@ -88,7 +88,7 @@ defmodule FeudHall.Application.Diagnostics do
   defp severity(:command_outcome, %{outcome: outcome}) when outcome in [:unavailable, :commit_unknown], do: :error
   defp severity(:command_outcome, %{outcome: outcome}) when outcome in [:conflict, :fenced], do: :warning
   defp severity(:snapshot_skipped, _), do: :warning
-  defp severity(:storage_failure, _), do: :error
+  defp severity(name, _) when name in [:storage_failure, :snapshot_failed], do: :error
   defp severity(name, _) when name in [:fenced, :scheduler_gap, :tick_late], do: :warning
   defp severity(name, _) when name in @errors, do: :error
   defp severity(_, _), do: :info

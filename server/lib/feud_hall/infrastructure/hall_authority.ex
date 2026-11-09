@@ -56,11 +56,14 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   `:storage_failure` and keeps the anchor; a lost reply is resolved by its
   command ID before the next tick or command. A fenced append emits `:fenced`
   and stops the process with `{:shutdown, :fenced}`: another owner holds the
-  hall. A recovery that fails for any reason other than storage availability
-  (corrupt or missing history, invariant violations) stops the process.
-  Rerunning recovery after a gap acquires a new epoch unconditionally, so an
-  authority that wakes after a long pause takes the hall back from any
-  successor, which is then fenced on its next append.
+  hall. Recovery after a gap re-acquires authority only from the epoch this
+  authority still holds (`expected_epoch:`): if a successor took the hall
+  while it was paused, recovery is fenced and the authority stops with
+  `{:shutdown, :fenced}`, leaving the successor in charge. A recovery that
+  fails for any reason other than storage availability or fencing (corrupt or
+  missing history, invariant violations) stops the process with
+  `{:shutdown, {:recovery_failed, reason}}`: restarting cannot repair history.
+  At start-up, recovery acquires authority unconditionally.
 
   ## Snapshots
 
@@ -70,9 +73,14 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   snapshot of `%{hall:, control:}` at the committed position, saves it, reads it
   back, compares it with the live state, marks it verified, and prunes to the
   two newest verified ones, emitting `:snapshot_taken`. On PostgreSQL it then
-  emits `:projection_backlog` (head minus the daily-activity checkpoint). A
-  failed save or check emits `:storage_failure`, verifies nothing, and never
-  stops the authority.
+  emits `:projection_backlog` (head minus the daily-activity checkpoint).
+
+  A failed attempt verifies nothing, never stops the authority, and resets the
+  baseline exactly like a success, so the next attempt waits a full threshold
+  instead of retrying on every commit. Unreachable storage (including a raised
+  driver error) emits `:storage_failure`; a body that does not load back, does
+  not match the live head, or cannot be marked verified emits
+  `:snapshot_failed`.
   """
 
   use GenServer, restart: :transient
@@ -154,7 +162,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
       snapshot_every_service_ms: Keyword.get(opts, :snapshot_every_service_ms, 300_000)
     }
 
-    case recover(s, Keyword.fetch!(opts, :store)) do
+    case recover(s, Keyword.fetch!(opts, :store), nil) do
       {:ok, s} ->
         schedule(s)
         {:ok, s}
@@ -208,7 +216,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   defp reply({:ok, value, s}, to_reply), do: {:reply, to_reply.(value), s}
   defp reply({:error, reason, s}, _to_reply), do: {:reply, {:error, reason}, s}
   defp reply({:fenced, s}, _to_reply), do: {:stop, {:shutdown, :fenced}, {:error, :fenced}, fenced(s)}
-  defp reply({:stop, reason, s}, _to_reply), do: {:stop, reason, {:error, reason}, s}
+  defp reply({:stop, {:shutdown, reason} = stop, s}, _to_reply), do: {:stop, stop, {:error, reason}, s}
 
   defp tick_reply({status, _receipt}) when status in [:accepted, :replayed], do: :ok
   defp tick_reply({:rejected, %{outcome: {:rejected, reason}}}), do: {:error, {:rejected, reason}}
@@ -254,7 +262,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     elapsed = now - s.anchor
 
     if elapsed > s.max_gap_ms do
-      case recover(s, s.runtime.store) do
+      case recover(s, s.runtime.store, s.runtime.epoch) do
         {:ok, s} ->
           emit(s, :scheduler_gap, %{lateness_ms: elapsed - @nominal_ms, position: s.runtime.position})
           {:recovered, s}
@@ -340,8 +348,14 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   # --- recovery ----------------------------------------------------------------
 
-  defp recover(s, store) do
-    opts = [scope: s.scope, decode_snapshot: &Snapshot.load/1, diagnostics: s.diagnostics]
+  # `expected_epoch` is nil at start-up and the held epoch when re-recovering after a gap.
+  defp recover(s, store, expected_epoch) do
+    opts = [
+      scope: s.scope,
+      expected_epoch: expected_epoch,
+      decode_snapshot: &Snapshot.load/1,
+      diagnostics: s.diagnostics
+    ]
 
     case shielded(fn -> Recovery.recover(s.store_mod, store, s.owner, opts) end, {:error, :unavailable}) do
       {:ok, runtime, report} ->
@@ -360,7 +374,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   defp recovery_error(s, {:uncertain, _id}), do: {:error, :unknown_outcome, storage_failure(s, :unknown_outcome)}
   defp recovery_error(s, :fenced), do: {:fenced, s}
-  defp recovery_error(s, reason), do: {:stop, {:recovery_failed, reason}, s}
+  defp recovery_error(s, reason), do: {:stop, {:shutdown, {:recovery_failed, reason}}, s}
 
   # --- snapshots ---------------------------------------------------------------
 
@@ -398,12 +412,21 @@ defmodule FeudHall.Infrastructure.HallAuthority do
             s
 
           {:error, reason} ->
-            storage_failure(s, reason)
+            snapshot_failure(s, reason)
         end
 
       {:error, reason} ->
-        storage_failure(s, reason)
+        snapshot_failure(s, reason)
     end
+  end
+
+  # A failed attempt counts as an attempt: the baseline moves so the next one waits a full threshold.
+  defp snapshot_failure(s, :unavailable), do: s |> snapshot_baseline() |> storage_failure(:unavailable)
+
+  defp snapshot_failure(s, reason) do
+    s = snapshot_baseline(s)
+    emit(s, :snapshot_failed, %{error_class: Diagnostics.reason(reason), position: s.runtime.position})
+    s
   end
 
   # Reads the saved body back, checks it decodes to the live head, then marks it verified and prunes.

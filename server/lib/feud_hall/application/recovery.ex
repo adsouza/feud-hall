@@ -5,9 +5,13 @@ defmodule FeudHall.Application.Recovery do
 
   Steps, in order:
 
-    1. `acquire_authority/3` for the required `opts[:scope]`. The store
+    1. `acquire_authority` for the required `opts[:scope]`. The store
        handle returned carries the new epoch, so any later append by a
-       previous owner is fenced.
+       previous owner is fenced. With `opts[:expected_epoch]` (an authority
+       re-recovering a hall it held), the acquisition succeeds only while that
+       epoch is still current; otherwise recovery returns `{:error, :fenced}`
+       before reading or appending anything, so a superseded owner never takes
+       the hall back from its successor.
     2. With a snapshot decoder (`opts[:decode_snapshot]`, a function
        `binary -> {:ok, %{position:, state: %{hall:, control:}}} | {:error, reason}`,
        e.g. the infrastructure snapshot loader), try the store's verified
@@ -70,7 +74,7 @@ defmodule FeudHall.Application.Recovery do
 
   @doc """
   Recovers the hall held by `store` for `owner`. Options: `:scope`
-  (required; raises `KeyError` without it), `:decode_snapshot`,
+  (required; raises `KeyError` without it), `:expected_epoch`, `:decode_snapshot`,
   `:diagnostics` (passed to the runtime), and `:side_effects` (never invoked
   during replay).
   """
@@ -99,7 +103,7 @@ defmodule FeudHall.Application.Recovery do
 
   defp do_recover(store_mod, store, owner, scope, opts) do
     with :ok <- validate_owner(owner),
-         {:ok, store, epoch} <- store_mod.acquire_authority(store, scope, owner),
+         {:ok, store, epoch} <- acquire(store_mod, store, scope, owner, Keyword.get(opts, :expected_epoch)),
          head = store_mod.head(store),
          {:ok, base, skipped} <-
            base(store_mod, store, head, Keyword.get(opts, :decode_snapshot), skip_reporter(opts, scope)),
@@ -120,6 +124,12 @@ defmodule FeudHall.Application.Recovery do
        }}
     end
   end
+
+  # Unconditional acquisition stays on the three-argument callback.
+  defp acquire(store_mod, store, scope, owner, nil), do: store_mod.acquire_authority(store, scope, owner)
+
+  defp acquire(store_mod, store, scope, owner, expected) when is_integer(expected),
+    do: store_mod.acquire_authority(store, scope, owner, expected)
 
   defp validate_owner(owner) do
     if is_binary(owner) and byte_size(owner) in 1..@max_owner_bytes and String.printable?(owner),

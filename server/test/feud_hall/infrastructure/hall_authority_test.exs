@@ -10,6 +10,66 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
   @scope "hall:test"
   @alice {:principal, "alice"}
 
+  defmodule FaultyStore do
+    @moduledoc """
+    Wraps either adapter to inject faults the adapters do not offer: `:corrupt_snapshot` (one-shot;
+    the next saved snapshot body has a flipped byte), `:raise_on_save` (every snapshot save raises a
+    connection error, as a dropped database would), and `:undecodable` (every log read reports an
+    undecodable batch, as damaged history would). Other faults go to the wrapped adapter.
+    """
+    defstruct [:mod, :inner, fault: nil]
+
+    @own [:corrupt_snapshot, :raise_on_save, :undecodable]
+
+    def wrap({mod, inner}), do: {__MODULE__, %__MODULE__{mod: mod, inner: inner}}
+
+    def fail_next(s, fault) when fault in @own, do: %{s | fault: fault}
+    def fail_next(s, fault), do: %{s | inner: s.mod.fail_next(s.inner, fault)}
+
+    def head(s), do: s.mod.head(s.inner)
+    def stream_versions(s, stream), do: s.mod.stream_versions(s.inner, stream)
+    def receipt(s, id), do: s.mod.receipt(s.inner, id)
+    def snapshots(s), do: s.mod.snapshots(s.inner)
+
+    def read_from(%{fault: :undecodable}, _after), do: {:error, {:undecodable, 1, :injected}}
+    def read_from(s, after_position), do: s.mod.read_from(s.inner, after_position)
+
+    def append(s, request) do
+      case s.mod.append(s.inner, request) do
+        {:ok, inner, position} -> {:ok, %{s | inner: inner}, position}
+        {:error, reason, inner} -> {:error, reason, %{s | inner: inner}}
+      end
+    end
+
+    def acquire_authority(s, scope, owner, expected \\ nil) do
+      acquired =
+        if expected,
+          do: s.mod.acquire_authority(s.inner, scope, owner, expected),
+          else: s.mod.acquire_authority(s.inner, scope, owner)
+
+      with {:ok, inner, epoch} <- acquired,
+           do: {:ok, %{s | inner: inner}, epoch}
+    end
+
+    def save_snapshot(%{fault: :raise_on_save}, _position, _body),
+      do: raise(DBConnection.ConnectionError, "injected snapshot save failure")
+
+    def save_snapshot(%{fault: :corrupt_snapshot} = s, position, <<first, rest::binary>>),
+      do: save_snapshot(%{s | fault: nil}, position, <<Bitwise.bxor(first, 1), rest::binary>>)
+
+    def save_snapshot(s, position, body) do
+      with {:ok, inner, id} <- s.mod.save_snapshot(s.inner, position, body), do: {:ok, %{s | inner: inner}, id}
+    end
+
+    def mark_snapshot_verified(s, id) do
+      with {:ok, inner} <- s.mod.mark_snapshot_verified(s.inner, id), do: {:ok, %{s | inner: inner}}
+    end
+
+    def prune_snapshots(s, keep) do
+      with {:ok, inner} <- s.mod.prune_snapshots(s.inner, keep), do: {:ok, %{s | inner: inner}}
+    end
+  end
+
   # --- helpers ---------------------------------------------------------------
 
   setup context do
@@ -255,6 +315,74 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         assert Enum.any?(records(ctx, :recovery_completed), &(&1.fields[:snapshot_position] == latest))
       end
 
+      test "a failed snapshot check verifies nothing and waits a full threshold before retrying", ctx do
+        pid =
+          ctx
+          |> start_authority(
+            store: FaultyStore.wrap(store_for(ctx.adapter)),
+            snapshot_every_events: 1_000_000,
+            snapshot_every_service_ms: 3_000
+          )
+          |> initialize()
+
+        assert :ok = HallAuthority.inject_fault(pid, :corrupt_snapshot)
+        for _ <- 1..3, do: assert(:ok = tick_after(ctx, pid, 1_000))
+
+        {mod, store} = HallAuthority.store(pid)
+        assert [%{verified: false}] = mod.snapshots(store)
+        assert [%{fields: %{error_class: :corrupt_snapshot}}] = records(ctx, :snapshot_failed)
+        assert records(ctx, :snapshot_taken) == []
+        assert records(ctx, :storage_failure) == []
+
+        # The failed attempt reset the baseline: the next two commits do not retry.
+        for _ <- 1..2, do: assert(:ok = tick_after(ctx, pid, 1_000))
+        {mod, store} = HallAuthority.store(pid)
+        assert length(mod.snapshots(store)) == 1
+        assert length(records(ctx, :snapshot_failed)) == 1
+
+        # A full threshold later the next attempt is made, and it succeeds.
+        assert :ok = tick_after(ctx, pid, 1_000)
+        position = HallAuthority.state(pid).position
+        {mod, store} = HallAuthority.store(pid)
+        assert [%{position: ^position, verified: true}, %{verified: false}] = mod.snapshots(store)
+        assert [%{fields: %{snapshot_position: ^position}}] = records(ctx, :snapshot_taken)
+      end
+
+      test "a snapshot save that raises is a storage failure that neither stops nor hurries the authority", ctx do
+        pid =
+          ctx
+          |> start_authority(
+            store: FaultyStore.wrap(store_for(ctx.adapter)),
+            snapshot_every_events: 1_000_000,
+            snapshot_every_service_ms: 3_000
+          )
+          |> initialize()
+
+        assert :ok = HallAuthority.inject_fault(pid, :raise_on_save)
+        for _ <- 1..5, do: assert(:ok = tick_after(ctx, pid, 1_000))
+        assert [%{fields: %{error_class: :unavailable}}] = records(ctx, :storage_failure)
+
+        assert :ok = tick_after(ctx, pid, 1_000)
+        assert length(records(ctx, :storage_failure)) == 2
+        assert records(ctx, :snapshot_failed) == []
+
+        {mod, store} = HallAuthority.store(pid)
+        assert mod.snapshots(store) == []
+        assert Process.alive?(pid)
+        assert HallAuthority.state(pid).hall.now == 6_000 * Clock.ratio()
+      end
+
+      test "a recovery that fails after a gap shuts the authority down", ctx do
+        pid = ctx |> start_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
+        ref = Process.monitor(pid)
+        assert :ok = HallAuthority.inject_fault(pid, :undecodable)
+
+        reason = {:recovery_failed, {:undecodable, 1, :injected}}
+        assert {:error, ^reason} = tick_after(ctx, pid, 6_000)
+        assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, ^reason}}
+        assert [%{fields: %{error_class: :undecodable}}] = records(ctx, :recovery_failed)
+      end
+
       test "a fenced append stops the authority with {:shutdown, :fenced}", ctx do
         pid = ctx |> start_authority() |> initialize()
         epoch = HallAuthority.state(pid).epoch
@@ -292,6 +420,29 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
       # The new owner keeps advancing the committed hall.
       assert :ok = HallAuthority.tick(b)
       assert HallAuthority.state(b).hall.now == 1_000 * Clock.ratio()
+    end
+
+    test "a paused authority does not take the hall back from its successor after a gap", ctx do
+      a = ctx |> start_authority() |> initialize()
+      a_epoch = HallAuthority.state(a).epoch
+      ref = Process.monitor(a)
+
+      # A is suspended for more than the maximum gap; meanwhile B takes over.
+      ManualClock.advance(ctx.clock, 6_000)
+      b = start_authority(ctx, store: store_for(:postgres), owner: "node-b")
+      b_epoch = HallAuthority.state(b).epoch
+
+      assert {:error, :fenced} = HallAuthority.tick(a)
+      assert_receive {:DOWN, ^ref, :process, ^a, {:shutdown, :fenced}}
+      assert [%{fields: %{epoch: ^a_epoch}}] = records(ctx, :fenced)
+      assert records(ctx, :scheduler_gap) == []
+
+      # B still holds the hall and keeps advancing it under its own epoch.
+      assert :ok = tick_after(ctx, b, 1_000)
+      state = HallAuthority.state(b)
+      assert state.epoch == b_epoch
+      assert state.hall.now == 1_000 * Clock.ratio()
+      assert %{rows: [[^b_epoch]]} = Repo.query!("select epoch from authority where scope = $1", [@scope])
     end
   end
 

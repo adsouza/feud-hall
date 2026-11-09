@@ -86,8 +86,17 @@ defmodule FeudHall.Application.EventStore do
               {:ok, store, non_neg_integer()}
               | {:error, :conflict | :fenced | :unavailable | :invalid_request, store}
               | {:error, :unknown_outcome, store}
+  @doc "Takes the scope's authority unconditionally, returning the new (higher) epoch."
   @callback acquire_authority(store, scope :: String.t(), owner :: String.t()) ::
               {:ok, store, pos_integer()} | {:error, :unavailable}
+  @doc """
+  With an integer `expected_epoch`, takes the scope's authority only if its
+  current epoch is still `expected_epoch` (atomically), otherwise
+  `{:error, :fenced}`: a holder that was superseded cannot take the scope back.
+  `nil` behaves as `acquire_authority/3`.
+  """
+  @callback acquire_authority(store, scope :: String.t(), owner :: String.t(), expected_epoch :: pos_integer() | nil) ::
+              {:ok, store, pos_integer()} | {:error, :fenced | :unavailable}
   @callback save_snapshot(store, position :: non_neg_integer(), binary()) ::
               {:ok, store, snapshot_id :: term()} | {:error, :unavailable}
   @callback mark_snapshot_verified(store, snapshot_id :: term()) ::

@@ -289,6 +289,18 @@ defmodule FeudHall.Application.RecoveryTest do
         assert length(resumed_batches(mod, d.store)) == 1
       end
 
+      test "with an expected epoch, recovery re-acquires only if that epoch is still current",
+           %{mod: mod, store: store} do
+        assert {:ok, a, _} = recover(mod, store, "a")
+        assert {:ok, a2, _} = recover(mod, a.store, "a", expected_epoch: a.epoch)
+        assert a2.epoch == a.epoch + 1
+        head = mod.head(a2.store)
+
+        # The held epoch was superseded: recovery is fenced before it reads or appends anything.
+        assert {:error, :fenced} = recover(mod, a2.store, "a", expected_epoch: a.epoch)
+        assert mod.head(a2.store) == head
+      end
+
       test "a store with no hall starts an epoch without reconciling", %{mod: mod, store: store} do
         assert {:ok, a, %{snapshot: :genesis, tail_batches: 0, recovery_id: nil, reconciliation: nil}} =
                  recover(mod, store, "a")

@@ -419,6 +419,19 @@ defmodule FeudHall.EventStoreContract do
           assert Enum.map(@contract_adapter.snapshots(store), & &1.position) == [5, 4]
         end
 
+        test "contract: a conditional acquisition advances only from the expected epoch" do
+          store = contract_fresh()
+          {:ok, store, held} = @contract_adapter.acquire_authority(store, "hall:test", "node-a")
+
+          assert {:ok, store, next} = @contract_adapter.acquire_authority(store, "hall:test", "node-b", held)
+          assert next == held + 1
+
+          # A holder whose epoch was superseded cannot take the scope back.
+          assert {:error, :fenced} = @contract_adapter.acquire_authority(store, "hall:test", "node-c", held)
+          assert {:ok, _store, after_next} = @contract_adapter.acquire_authority(store, "hall:test", "node-c", next)
+          assert after_next == next + 1
+        end
+
         test "contract: pruning with too few verified snapshots deletes nothing" do
           store = contract_fresh()
           {:ok, store, one} = @contract_adapter.save_snapshot(store, 1, "one")

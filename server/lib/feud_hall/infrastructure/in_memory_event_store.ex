@@ -6,8 +6,8 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   The event log, receipts, stream versions, projections, and snapshots live
   in the struct, so every write returns the next store value and no state is
   shared between copies. There is one implicit authority: appends are never
-  fenced unless a failure is injected, and `acquire_authority/3` only counts
-  epochs.
+  fenced unless a failure is injected, and `acquire_authority/4` only counts
+  epochs (refusing an `expected_epoch` the count has moved past).
 
   Failure injection (`fail_next/2`, one-shot) mirrors the cases the PostgreSQL
   adapter must survive: `:before_commit` and `:unavailable` fail with nothing
@@ -167,11 +167,16 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   @impl true
   def outbox(store), do: store.outbox
 
+  @doc "Counts epochs; with an `expected_epoch` the count must still equal it, else `{:error, :fenced}`."
   @impl true
-  def acquire_authority(store, _scope, _owner) do
+  def acquire_authority(store, scope, owner, expected_epoch \\ nil)
+
+  def acquire_authority(store, _scope, _owner, expected) when is_nil(expected) or expected == store.epoch do
     epoch = store.epoch + 1
     {:ok, %{store | epoch: epoch}, epoch}
   end
+
+  def acquire_authority(_store, _scope, _owner, expected) when is_integer(expected), do: {:error, :fenced}
 
   @impl true
   def save_snapshot(store, position, body) when is_binary(body) do

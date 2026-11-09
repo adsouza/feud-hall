@@ -593,7 +593,9 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   # --- authority and snapshots -------------------------------------------
 
   @impl true
-  def acquire_authority(store, scope, owner) do
+  def acquire_authority(store, scope, owner, expected_epoch \\ nil)
+
+  def acquire_authority(store, scope, owner, nil) do
     sql = """
     insert into authority (scope, owner, epoch) values ($1, $2, 1)
     on conflict (scope) do update set owner = excluded.owner, epoch = authority.epoch + 1
@@ -602,6 +604,18 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
     with {:ok, %{rows: [[epoch]]}} <- attempt(fn -> store.repo.query!(sql, [scope, owner]) end) do
       {:ok, %{store | scope: scope, owner: owner, epoch: epoch}, epoch}
+    end
+  end
+
+  # One conditional update: the row lock makes the compare and the bump atomic against any
+  # concurrent acquisition. No row means the epoch moved on (or the scope was never held).
+  def acquire_authority(store, scope, owner, expected_epoch) when is_integer(expected_epoch) do
+    sql = "update authority set owner = $2, epoch = epoch + 1 where scope = $1 and epoch = $3 returning epoch"
+
+    case attempt(fn -> store.repo.query!(sql, [scope, owner, expected_epoch]) end) do
+      {:ok, %{rows: [[epoch]]}} -> {:ok, %{store | scope: scope, owner: owner, epoch: epoch}, epoch}
+      {:ok, %{rows: []}} -> {:error, :fenced}
+      {:error, _} = error -> error
     end
   end
 
