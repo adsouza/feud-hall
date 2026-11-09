@@ -51,7 +51,7 @@ defmodule FeudHall.Application.Recovery do
   (there is none yet) and is never invoked while replaying.
   """
 
-  alias FeudHall.Application.CommandWorkflow
+  alias FeudHall.Application.{CommandWorkflow, Diagnostics}
   alias FeudHall.Domain.{Control, Hall}
   alias FeudHall.Domain.Hall.Invariants
 
@@ -77,11 +77,32 @@ defmodule FeudHall.Application.Recovery do
   @spec recover(module(), term(), String.t(), keyword()) :: {:ok, CommandWorkflow.t(), report()} | {:error, term()}
   def recover(store_mod, store, owner, opts \\ []) do
     scope = Keyword.fetch!(opts, :scope)
+    diagnostics = Keyword.get(opts, :diagnostics)
+    Diagnostics.emit(diagnostics, :recovery_started, %{scope: scope})
 
+    case do_recover(store_mod, store, owner, scope, opts) do
+      {:ok, _runtime, report} = ok ->
+        Diagnostics.emit(diagnostics, :recovery_completed, %{
+          scope: scope,
+          snapshot_position: if(is_integer(report.snapshot), do: report.snapshot),
+          skipped: length(report.skipped),
+          recovery_id: report.recovery_id
+        })
+
+        ok
+
+      {:error, reason} = error ->
+        Diagnostics.emit(diagnostics, :recovery_failed, %{scope: scope, error_class: Diagnostics.reason(reason)})
+        error
+    end
+  end
+
+  defp do_recover(store_mod, store, owner, scope, opts) do
     with :ok <- validate_owner(owner),
          {:ok, store, epoch} <- store_mod.acquire_authority(store, scope, owner),
          head = store_mod.head(store),
-         {:ok, base, skipped} <- base(store_mod, store, head, Keyword.get(opts, :decode_snapshot)),
+         {:ok, base, skipped} <-
+           base(store_mod, store, head, Keyword.get(opts, :decode_snapshot), skip_reporter(opts, scope)),
          {:ok, tail} <- store_mod.read_from(store, base.position),
          :ok <- contiguous(tail, base.position, head),
          restored = restore(base, tail),
@@ -108,22 +129,38 @@ defmodule FeudHall.Application.Recovery do
 
   # --- snapshot selection ------------------------------------------------------
 
-  defp base(_store_mod, _store, _head, nil), do: {:ok, @genesis, []}
+  defp base(_store_mod, _store, _head, nil, _on_skip), do: {:ok, @genesis, []}
 
-  defp base(store_mod, store, head, decode) when is_function(decode, 1) do
+  defp base(store_mod, store, head, decode, on_skip) when is_function(decode, 1) do
     with snapshots when is_list(snapshots) <- store_mod.snapshots(store) do
       snapshots
       |> Enum.filter(& &1.verified)
       |> Enum.reduce_while([], fn snapshot, skipped ->
         case usable(snapshot, head, decode) do
-          {:ok, base} -> {:halt, {:ok, base, Enum.reverse(skipped)}}
-          {:skip, reason} -> {:cont, [{snapshot.id, reason} | skipped]}
+          {:ok, base} ->
+            {:halt, {:ok, base, Enum.reverse(skipped)}}
+
+          {:skip, reason} ->
+            on_skip.(snapshot, reason)
+            {:cont, [{snapshot.id, reason} | skipped]}
         end
       end)
       |> case do
         {:ok, _base, _skipped} = found -> found
         skipped -> {:ok, @genesis, Enum.reverse(skipped)}
       end
+    end
+  end
+
+  defp skip_reporter(opts, scope) do
+    diagnostics = Keyword.get(opts, :diagnostics)
+
+    fn snapshot, reason ->
+      Diagnostics.emit(diagnostics, :snapshot_skipped, %{
+        scope: scope,
+        snapshot_position: snapshot.position,
+        reason: Diagnostics.reason(reason)
+      })
     end
   end
 

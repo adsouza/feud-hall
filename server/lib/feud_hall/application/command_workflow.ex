@@ -30,6 +30,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   principal or system capability, never a client-supplied ID.
   """
 
+  alias FeudHall.Application.Diagnostics
   alias FeudHall.Application.Projections.Balances
   alias FeudHall.Domain.{Clock, Control, Hall}
 
@@ -100,12 +101,31 @@ defmodule FeudHall.Application.CommandWorkflow do
   """
   def execute(runtime, envelope, observed_service_ms \\ nil)
 
-  def execute(%{mode: :fenced} = runtime, _envelope, _observed), do: {:error, :fenced, runtime}
+  def execute(runtime, envelope, observed_service_ms) do
+    started = if runtime.diagnostics, do: System.monotonic_time(:microsecond)
+    attempted = Map.merge(envelope_fields(envelope), %{attempt: 1, epoch: runtime.epoch})
+    Diagnostics.emit(runtime.diagnostics, :command_attempted, attempted)
 
-  def execute(%{mode: :recovery_required} = runtime, _envelope, _observed),
+    result = run(runtime, envelope, observed_service_ms)
+
+    if runtime.diagnostics do
+      fields =
+        attempted
+        |> Map.put(:duration_us, System.monotonic_time(:microsecond) - started)
+        |> Map.merge(outcome_fields(result))
+
+      Diagnostics.emit(runtime.diagnostics, :command_outcome, fields)
+    end
+
+    result
+  end
+
+  defp run(%{mode: :fenced} = runtime, _envelope, _observed), do: {:error, :fenced, runtime}
+
+  defp run(%{mode: :recovery_required} = runtime, _envelope, _observed),
     do: {:error, :recovery_required, runtime}
 
-  def execute(runtime, envelope, observed_service_ms) do
+  defp run(runtime, envelope, observed_service_ms) do
     with :ok <- validate(envelope),
          fingerprint = fingerprint(envelope),
          :new <- lookup(runtime, envelope.command_id, fingerprint),
@@ -117,6 +137,38 @@ defmodule FeudHall.Application.CommandWorkflow do
       {:error, _reason, _runtime} = failed -> failed
       {:uncertain, _id, _runtime} = uncertain -> uncertain
     end
+  end
+
+  # Identifiers only: never the payload, player text, or the principal's ID.
+  defp envelope_fields(%{command_id: id, actor: actor, command: {kind, _}}),
+    do: %{command_id: id, kind: kind, actor_kind: Diagnostics.actor_kind(actor)}
+
+  defp envelope_fields(_), do: %{}
+
+  # An :accepted outcome exists only on the `{:ok, ...}` append path, so it is
+  # reported after the commit. Input failures (validation, command ID reuse,
+  # a runtime refusing work) are :rejected with their reason.
+  defp outcome_fields({:accepted, receipt, runtime}), do: receipt_fields(:accepted, receipt, runtime)
+
+  defp outcome_fields({:rejected, %{outcome: {:rejected, reason}} = receipt, runtime}),
+    do: Map.put(receipt_fields(:rejected, receipt, runtime), :reason, Diagnostics.reason(reason))
+
+  defp outcome_fields({:replayed, receipt, runtime}), do: receipt_fields(:replayed, receipt, runtime)
+  defp outcome_fields({:uncertain, _id, runtime}), do: %{outcome: :commit_unknown, position: runtime.position}
+
+  defp outcome_fields({:error, reason, runtime}) when reason in [:conflict, :fenced, :unavailable],
+    do: %{outcome: reason, position: runtime.position}
+
+  defp outcome_fields({:error, reason, runtime}),
+    do: %{outcome: :rejected, reason: Diagnostics.reason(reason), position: runtime.position}
+
+  defp receipt_fields(outcome, receipt, runtime) do
+    %{
+      outcome: outcome,
+      position: Map.get(receipt, :position, runtime.position),
+      hall_ms: runtime.state && runtime.state.now,
+      batch_events: Map.get(receipt, :event_count)
+    }
   end
 
   @doc """
