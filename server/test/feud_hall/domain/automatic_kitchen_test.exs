@@ -171,7 +171,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     Oracle.assert_settled!(late, events)
   end
 
-  test "work in progress at 03:00 is cancelled as waste and nothing is dispatched until 05:00" do
+  test "work in progress at 03:00 is cancelled with its consumed cost as waste" do
     w = stocked_world() |> advance_hall(@three - 14 * @min)
     w = w |> simulated_visit("held", "bean_tacos", "horchata") |> simulated_visit("waiting", "chicken_tacos")
     # Quotes finish before 03:00; slow the counter afterwards so both trays are
@@ -195,15 +195,45 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     assert after_cleaning.restaurants["r1"].ledger.wip == 0
     assert after_cleaning.restaurants["r1"].ledger.waste == ledger.waste + ledger.wip
     assert after_cleaning.stalls[@stall].counter == nil
-
-    dispatched =
-      for {t, %{type: type}} <- timeline(events),
-          type in [:stage_started, :handover_started],
-          t >= @three and t < @five,
-          do: t
-
-    assert dispatched == []
     Oracle.assert_settled!(state, events)
+  end
+
+  test "dispatch waits for the 05:00 reopening and runs at that instant" do
+    # Cleaning cancels all customer work, so a waiting item during cleaning is
+    # hand-built: a ready tray (deadline and holding life past 05:00) with a
+    # free counter, put back into a hall that is already cleaning.
+    w = stocked_world() |> advance_hall(@three - 20 * @min) |> simulated_visit("d1", "bean_tacos")
+    {accepted, _} = w
+    tid = tray_id("visit-d1")
+    [main] = accepted.trays[tid].components
+    w = advance_hall(w, @three + @min)
+    {cleaning, log} = w
+    assert cleaning.access == :cleaning
+    late = @five + 30 * @min
+
+    cleaning =
+      cleaning
+      |> put_in([:trays, tid], %{accepted.trays[tid] | deadline: late})
+      |> put_in([:visits, visit_id("visit-d1")], accepted.visits[visit_id("visit-d1")])
+      |> put_in([:orders, main], %{
+        accepted.orders[main]
+        | status: :ready,
+          reservations: [],
+          ready_at: cleaning.now,
+          ready_expires_at: late,
+          deadline: late
+      })
+
+    assert Kitchen.next_start(cleaning, @stall) == {:handover, {:tray, tid}}
+
+    {_, events} = advance_hall({cleaning, log}, @five - Clock.ratio())
+    assert Enum.drop(events, length(log)) |> Enum.filter(&(&1.type in [:stage_started, :handover_started])) == []
+
+    {reopened, events} = advance_hall({cleaning, log}, @five)
+    tail = Enum.drop(events, length(log))
+    assert [:clock_advanced, :hall_cleaning_ended, :handover_started] = Enum.map(tail, & &1.type)
+    assert [@five] = for({t, %{type: :handover_started}} <- timeline(events), t >= @three, do: t)
+    assert reopened.stalls[@stall].counter.done_at == @five + reopened.catalog.rules.handover_ms
   end
 
   test "menu edits and closing the stall leave an accepted tray's bill and service unchanged" do
@@ -287,6 +317,14 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
           %{type: :clock_advanced, to: 4 * @min},
           %{type: :preparation_completed, order_id: main, expires_at: 24 * @min}
         ]
+
+    started = Hall.replay(Enum.drop(history, -2))
+    consumed_cost = consumed |> Enum.map(& &1.cost) |> Enum.sum()
+    assert consumed_cost > 0
+    assert started.restaurants["r1"].ledger.wip == consumed_cost
+    assert started.restaurants["r1"].ledger.raw == state.restaurants["r1"].ledger.raw - consumed_cost
+    assert started.orders[main].reservations == []
+    Oracle.assert_settled!(started, history |> Enum.drop(-2))
 
     replayed = Hall.replay(history)
     assert replayed.trays[tray_id("visit-d1")].estimated_completion == nil

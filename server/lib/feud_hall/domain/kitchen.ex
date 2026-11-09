@@ -2,8 +2,12 @@ defmodule FeudHall.Domain.Kitchen do
   @moduledoc """
   Pure model of a stall's automatic kitchen: the queue-aware completion
   estimate shared by quotes, acceptance and diner choice, and the dispatch
-  decisions the clock advance takes. Both read the same FIFO keys, so a
-  quoted completion is exactly when the dispatch hands the item over.
+  decisions the clock advance takes. Both read the same FIFO keys, so the
+  estimate is exact for the work already queued. It stays exact afterwards
+  only while no later order overtakes: the finish queue is ordered by prep
+  completion and the counter by ready time, so a later order with a shorter
+  prep (or, with several finish stations, a shorter finish) can be served
+  ahead of an earlier quoted one and push it back.
 
   A live order's `status` is its work stage: `:queued_prep | :prep |
   :queued_finish | :finish | :ready` (then `:served` or `:cancelled`). It
