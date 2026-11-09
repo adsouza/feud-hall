@@ -360,10 +360,13 @@ duplicate settlements or bypassing the five-available-real-minute closure.
 Qualification exercises both exact boundaries, accepted shifts truncated at
 03:00, absence during cleaning, and restart midway through the interval.
 
-The service-level identity/control stream owns the launch available-service
-clock; hall clock-advance facts reference that committed service-time boundary.
-One coordinator advances them consistently, using monotonic elapsed time only
-while ready. Credential validity still uses wall time. Before a newly admitted
+The hall stream records one master clock in hall time; available-service time
+is derived as exactly hall time ÷ 24, because both gameplay clocks pause
+together for platform unavailability and both advance through cleaning (owner
+decision, 2026-11-09). The service-level control stream records availability
+epochs and recovery identities rather than a second clock. If a future rule
+makes the two gameplay clocks diverge, store both explicitly. One coordinator
+advances the clock, using monotonic elapsed time only while ready. Credential validity still uses wall time. Before a newly admitted
 economic command, commit the independently due advance, then decide against that
 head. A rejected business command has no own economic effects, even if that
 preceding advance paid bills or expired stock. Original command retries do not
@@ -972,18 +975,18 @@ They do not qualify capacity, the full market, or any online surface.
 
 Implementation decisions within the contracts above:
 
-- **One master tick.** Hall and available-service time both advance only while
-  the service is ready and both pause during downtime, so they stay exactly
-  proportional (24:1). The domain stores hall milliseconds and converts
-  service-time quantities explicitly through `Clock.service_duration/1`. If a
-  future rule makes the clocks diverge, replace this with two stored clocks.
+- **One master tick.** Per the
+  [clock-continuity contract](#recorded-decisions-and-clock-continuity), the
+  domain stores hall milliseconds and converts service-time quantities
+  explicitly through `Clock.service_duration/1`.
 - **Deterministic identities.** Entity IDs (visit, tray, order, batch, wallet
   slice) derive from the command ID, so a decision is a pure function of state,
   command, and context, and a retry cannot mint a second entity.
 - **Temporary seams.** Kitchen progress is decided from explicit
-  `{:system, :kitchen}` commands until the workforce milestone schedules it from
-  staff coverage, and purchases fill directly at the catalog base price until
-  the batched scarcity-priced market lands. Both already emit the same facts
+  `{:system, :kitchen}` commands until Milestone 2 Project B automates it as
+  production jobs (staff coverage arrives with the workforce milestone), and
+  purchases fill directly at the catalog base price until Project B's batched
+  scarcity-priced market lands. Both already emit the same facts
   the later mechanisms will produce.
 - **One hall per database.** Milestone 2 stores exactly one hall's global log
   per PostgreSQL database; `read_from/2` returns the whole log. Multi-hall
@@ -1046,8 +1049,11 @@ Implementation decisions within the contracts above:
 
 Not yet implemented, and therefore not qualified:
 
-- Project B: the batched market, simulated diners and choice, kitchen jobs and
-  staffing, helpers and wages, rent and leases, reports, and NPCs.
+- Project B: the batched market, simulated diners and choice, automatic
+  kitchen jobs, and basic NPC owners, per the
+  [Milestone 2 design](superpowers/specs/2026-11-09-milestone-2-design.md).
+  Staffing, helpers and wages, rent and leases, and further reports belong to
+  later milestones.
 - Project C: the 150-stall capacity and latency measurements; no performance
   claim exists yet.
 - The outbox delivery worker (intents are committed atomically but nothing
