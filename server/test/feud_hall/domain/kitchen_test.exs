@@ -94,6 +94,28 @@ defmodule FeudHall.Domain.KitchenTest do
     assert estimate(state) == state.now + 115
   end
 
+  test "a ready tray in hand at the counter is not queued again" do
+    state =
+      base()
+      |> put_order("H", stage: :ready, tray: "T:H")
+      |> put_in([:stalls, @stall, :counter], %{item: {:tray, "T:H"}, done_at: base().now + 3})
+
+    # H is in hand until 3, so the new tray (ready at 0) hands over 3..8. Were
+    # H re-queued ahead of it, the new tray would wait until 13.
+    quick = [%{prep_ms: 0, finish_ms: 0}]
+    assert estimate(state, quick) == state.now + 3 + 5
+  end
+
+  test "a queued_finish order is released at now" do
+    state = base() |> put_order("Q", stage: :queued_finish)
+    # Q finishes 0..10 and hands over 10..15; the new main prepares 0..100
+    # and finishes 100..110 (the station is free again), handing over 110..115.
+    assert estimate(state) == state.now + 115
+
+    # With a new component needing no prep, it queues behind Q's finish.
+    assert estimate(state, [%{prep_ms: 0, finish_ms: 10}]) == state.now + 20 + 5
+  end
+
   test "orders without stage fields leave the estimate unchanged" do
     state = base() |> put_order("L", status: :preparing)
     assert estimate(state) == state.now + 115
@@ -124,11 +146,24 @@ defmodule FeudHall.Domain.KitchenTest do
     test "a full queue of trays and desserts is refused" do
       full = with_queue(base(), 4, 2)
       refute Kitchen.accepting?(full, @stall)
-      assert {:error, :queue_full} = Offers.open_stall(full, @stall)
+      assert {:error, :queue_full} = Offers.open_stall_for_main(full, @stall)
 
       room = with_queue(base(), 4, 1)
       assert Kitchen.accepting?(room, @stall)
-      assert {:ok, _stall, _restaurant} = Offers.open_stall(room, @stall)
+      assert {:ok, _stall, _restaurant} = Offers.open_stall_for_main(room, @stall)
+    end
+
+    test "the queue limit refuses a new main tray but not a dessert quote" do
+      {state, _} = Fixtures.stocked_world()
+      full = with_queue(state, 6, 0)
+      refute Kitchen.accepting?(full, @stall)
+
+      assert {:error, :queue_full} = Offers.quote_tray(full, @stall, "bean_tacos", nil, blank())
+      assert {:ok, _stall, _restaurant} = Offers.open_stall(full, @stall)
+
+      visit = Map.merge(blank(), %{stall: @stall})
+      assert {:ok, quote} = Offers.quote_dessert(full, visit)
+      assert [%{kind: :dessert}] = quote.components
     end
 
     test "served and cancelled trays and desserts leave the queue" do

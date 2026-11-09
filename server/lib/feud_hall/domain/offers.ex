@@ -22,7 +22,7 @@ defmodule FeudHall.Domain.Offers do
   commitments (`%{requirement:, carbs_reserved:, carbs_served:}`).
   """
   def quote_tray(state, stall_id, main_id, drink_id, visit) do
-    with {:ok, stall, restaurant} <- open_stall(state, stall_id),
+    with {:ok, stall, restaurant} <- open_stall_for_main(state, stall_id),
          available = Inventory.availability(restaurant.batches, state.now),
          committed = visit.carbs_reserved + visit.carbs_served,
          {:ok, main} <- quote_course(state, restaurant, main_id, :main, visit.requirement, committed, available),
@@ -92,22 +92,24 @@ defmodule FeudHall.Domain.Offers do
     end
   end
 
-  @doc "Shared stall eligibility for new customer orders."
+  @doc "Shared stall eligibility for new customer orders (main trays and desserts)."
   def open_stall(state, stall_id) do
     case state.stalls[stall_id] do
-      nil ->
-        {:error, :unknown_stall}
+      nil -> {:error, :unknown_stall}
+      _ when state.access != :open -> {:error, :hall_cleaning}
+      %{mode: :open} = stall -> {:ok, stall, state.restaurants[stall.restaurant]}
+      _ -> {:error, :stall_not_accepting_orders}
+    end
+  end
 
-      _ when state.access != :open ->
-        {:error, :hall_cleaning}
-
-      %{mode: :open} = stall ->
-        if Kitchen.accepting?(state, stall_id),
-          do: {:ok, stall, state.restaurants[stall.restaurant]},
-          else: {:error, :queue_full}
-
-      _ ->
-        {:error, :stall_not_accepting_orders}
+  @doc """
+  Eligibility for a new main tray: `open_stall/2` plus the content queue
+  limit. A diner whose main was served can still take a dessert at a full
+  queue, so the limit gates only new mains.
+  """
+  def open_stall_for_main(state, stall_id) do
+    with {:ok, _stall, _restaurant} = open <- open_stall(state, stall_id) do
+      if Kitchen.accepting?(state, stall_id), do: open, else: {:error, :queue_full}
     end
   end
 
