@@ -11,24 +11,31 @@ defmodule FeudHall.Application.RecoveryTest do
   @authority {:system, :authority}
   @alice {:principal, "alice"}
 
-  defmodule UndecodableStore do
+  defmodule DamagedStore do
     @moduledoc """
-    The in-memory store with one damaged batch: reads that reach `position` stop with the
-    `{:undecodable, ...}` error a durable adapter reports for a payload it cannot decode.
+    The in-memory store with one damaged batch, as a durable log could be damaged:
+    `{:undecodable, position}` makes reads that reach it stop with the adapter's
+    `{:undecodable, ...}` error; `{:missing, position}` silently drops that batch from reads.
     """
     alias FeudHall.Infrastructure.InMemoryEventStore, as: Inner
 
-    def acquire_authority({store, position}, scope, owner) do
+    def acquire_authority({store, damage}, scope, owner) do
       {:ok, store, epoch} = Inner.acquire_authority(store, scope, owner)
-      {:ok, {store, position}, epoch}
+      {:ok, {store, damage}, epoch}
     end
 
-    def read_from({store, position}, after_position) do
+    def read_from({store, damage}, after_position) do
       {:ok, batches} = Inner.read_from(store, after_position)
 
-      if Enum.any?(batches, &(&1.position == position)),
-        do: {:error, {:undecodable, position, {:unknown_atom, "launch_missiles"}}},
-        else: {:ok, batches}
+      case damage do
+        {:undecodable, position} ->
+          if Enum.any?(batches, &(&1.position == position)),
+            do: {:error, {:undecodable, position, {:unknown_atom, "launch_missiles"}}},
+            else: {:ok, batches}
+
+        {:missing, position} ->
+          {:ok, Enum.reject(batches, &(&1.position == position))}
+      end
     end
 
     def snapshots({store, _}), do: Inner.snapshots(store)
@@ -36,10 +43,10 @@ defmodule FeudHall.Application.RecoveryTest do
     def stream_versions({store, _}, stream), do: Inner.stream_versions(store, stream)
     def receipt({store, _}, id), do: Inner.receipt(store, id)
 
-    def append({store, position}, request) do
+    def append({store, damage}, request) do
       case Inner.append(store, request) do
-        {:ok, store, head} -> {:ok, {store, position}, head}
-        {:error, reason, store} -> {:error, reason, {store, position}}
+        {:ok, store, head} -> {:ok, {store, damage}, head}
+        {:error, reason, store} -> {:error, reason, {store, damage}}
       end
     end
   end
@@ -113,6 +120,20 @@ defmodule FeudHall.Application.RecoveryTest do
 
   defp incompatible(position) do
     body = :erlang.term_to_binary(%{position: position, evolution: 1, state: nil}, [:deterministic])
+    :crypto.hash(:sha256, body) <> body
+  end
+
+  # A checksummed snapshot whose state names an atom this build has never defined, as a
+  # snapshot written by a newer release could. The placeholder atom has the same length as
+  # the unknown text, so swapping the bytes keeps the external term format valid.
+  defp unknown_atom_snapshot(rt) do
+    body =
+      :erlang.term_to_binary(
+        %{position: rt.position, evolution: Snapshot.evolution_version(), state: %{hall: :recovery_test_placeholder}},
+        [:deterministic]
+      )
+
+    body = :binary.replace(body, "recovery_test_placeholder", "zz_never_defined_atom_qqq")
     :crypto.hash(:sha256, body) <> body
   end
 
@@ -208,11 +229,18 @@ defmodule FeudHall.Application.RecoveryTest do
         rt = live({mod, store})
         {rt, older} = save_snapshot(rt, incompatible(rt.position), rt.position)
         rt = run(rt, later_commands())
+        {rt, unknown} = save_snapshot(rt, unknown_atom_snapshot(rt), rt.position)
         {rt, newer} = save_snapshot(rt, corrupt(snapshot(rt)), rt.position)
 
         assert {:ok, recovered, report} = recover_from_snapshots(mod, rt.store, "b")
         assert report.snapshot == :genesis
-        assert report.skipped == [{newer, :corrupt_snapshot}, {older, :incompatible_snapshot}]
+
+        assert report.skipped == [
+                 {newer, :corrupt_snapshot},
+                 {unknown, :incompatible_snapshot},
+                 {older, :incompatible_snapshot}
+               ]
+
         assert report.tail_batches == rt.position
         assert recovered.state == resumed(rt.state, "recovery:boot:1")
       end
@@ -313,10 +341,10 @@ defmodule FeudHall.Application.RecoveryTest do
   describe "an undecodable event" do
     test "aborts in-memory recovery with the store's error and appends nothing" do
       rt = live(adapter(:memory))
-      damaged = {rt.store, 3}
+      damaged = {rt.store, {:undecodable, 3}}
 
       assert {:error, {:undecodable, 3, {:unknown_atom, "launch_missiles"}}} =
-               Recovery.recover(UndecodableStore, damaged, "b", scope: @scope, side_effects: no_side_effects())
+               Recovery.recover(DamagedStore, damaged, "b", scope: @scope, side_effects: no_side_effects())
     end
 
     test "aborts PostgreSQL recovery with the store's error and appends nothing" do
@@ -330,6 +358,52 @@ defmodule FeudHall.Application.RecoveryTest do
       assert PostgresEventStore.head(rt.store) == rt.position
       assert PostgresEventStore.receipt(rt.store, "recovery:boot:1") == :none
       assert PostgresEventStore.receipt(rt.store, "start:b:2") == :none
+    end
+  end
+
+  describe "a missing batch" do
+    test "in memory, a gap in the tail aborts recovery on the genesis and snapshot paths" do
+      rt = live(adapter(:memory))
+      {rt, _} = save_snapshot(rt, snapshot(rt), rt.position)
+      snap_position = rt.position
+      rt = run(rt, later_commands())
+
+      for {missing, opts} <- [{3, []}, {snap_position + 2, [decode_snapshot: &Snapshot.load/1]}, {rt.position, []}] do
+        damaged = {rt.store, {:missing, missing}}
+
+        assert {:error, {:missing_batch, ^missing}} =
+                 Recovery.recover(DamagedStore, damaged, "b", [scope: @scope, side_effects: no_side_effects()] ++ opts)
+      end
+    end
+
+    test "on PostgreSQL, a deleted batch row aborts recovery and appends nothing" do
+      for which <- [:middle, :last] do
+        rt = live(adapter(:postgres))
+        position = if which == :middle, do: 3, else: rt.position
+        Repo.query!("delete from events where position = $1", [position])
+        Repo.query!("delete from batches where position = $1", [position])
+
+        assert {:error, {:missing_batch, ^position}} = recover(PostgresEventStore, rt.store, "b")
+        assert PostgresEventStore.head(rt.store) == rt.position
+        assert PostgresEventStore.receipt(rt.store, "start:b:2") == :none
+      end
+    end
+
+    test "on PostgreSQL, a batch that lost event rows aborts recovery" do
+      rt = live(adapter(:postgres))
+      Repo.query!("delete from events where position = 3 and batch_order = 0")
+
+      assert {:error, {:undecodable, 3, {:event_count_mismatch, expected, found}}} =
+               recover(PostgresEventStore, rt.store, "b")
+
+      assert found == expected - 1
+      assert PostgresEventStore.receipt(rt.store, "start:b:2") == :none
+    end
+  end
+
+  test "the authority scope is required" do
+    assert_raise KeyError, fn ->
+      Recovery.recover(InMemoryEventStore, InMemoryEventStore.new(), "a", side_effects: no_side_effects())
     end
   end
 

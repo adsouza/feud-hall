@@ -19,7 +19,13 @@ defmodule FeudHall.Application.CommandWorkflow do
   new economic commands until `resolve/2` has looked up that same command ID.
   A fenced append (another owner holds the hall's authority) puts the runtime
   into `:fenced`; it refuses all later commands and never becomes ready again.
-  Every fenced result, first or later, is `{:error, :fenced, runtime}`.
+
+  Every failed `execute/3` returns `{:error, reason, runtime}`: validation
+  errors, `:command_id_conflict`, `:recovery_required`, and append failures
+  (`:conflict`, `:unavailable`, `:invalid_request`, `:fenced`). After an append
+  failure the runtime holds the store value the adapter returned with the
+  failure (its head and state unchanged), so a one-shot fault the adapter
+  consumed stays consumed.
   Authentication happens before this workflow: `actor` is the server-resolved
   principal or system capability, never a client-supplied ID.
   """
@@ -95,7 +101,9 @@ defmodule FeudHall.Application.CommandWorkflow do
   def execute(runtime, envelope, observed_service_ms \\ nil)
 
   def execute(%{mode: :fenced} = runtime, _envelope, _observed), do: {:error, :fenced, runtime}
-  def execute(%{mode: :recovery_required}, _envelope, _observed), do: {:error, :recovery_required}
+
+  def execute(%{mode: :recovery_required} = runtime, _envelope, _observed),
+    do: {:error, :recovery_required, runtime}
 
   def execute(runtime, envelope, observed_service_ms) do
     with :ok <- validate(envelope),
@@ -105,8 +113,8 @@ defmodule FeudHall.Application.CommandWorkflow do
       decide_and_append(runtime, envelope, fingerprint)
     else
       {:replayed, receipt} -> {:replayed, receipt, runtime}
-      {:error, _reason} = error -> error
-      {:error, :fenced, _runtime} = fenced -> fenced
+      {:error, reason} -> {:error, reason, runtime}
+      {:error, _reason, _runtime} = failed -> failed
       {:uncertain, _id, _runtime} = uncertain -> uncertain
     end
   end
@@ -114,16 +122,21 @@ defmodule FeudHall.Application.CommandWorkflow do
   @doc """
   Resolves an uncertain command by its original ID. A found receipt means it
   committed: the head is rebuilt from the store. No receipt means it did not.
+  A store that cannot be read returns `{:error, reason, runtime}` unchanged.
   """
   def resolve(%{mode: :fenced} = runtime, _command_id), do: {:error, :fenced, runtime}
 
   def resolve(runtime, command_id) do
-    with {:ok, reopened} <-
-           open(runtime.store_mod, runtime.store, epoch: runtime.epoch, diagnostics: runtime.diagnostics) do
-      case runtime.store_mod.receipt(runtime.store, command_id) do
-        {:ok, receipt} -> {:committed, receipt, reopened}
-        :none -> {:not_committed, reopened}
-      end
+    case open(runtime.store_mod, runtime.store, epoch: runtime.epoch, diagnostics: runtime.diagnostics) do
+      {:ok, reopened} ->
+        case runtime.store_mod.receipt(runtime.store, command_id) do
+          {:ok, receipt} -> {:committed, receipt, reopened}
+          :none -> {:not_committed, reopened}
+        end
+
+      # The store could not be read: the runtime stays as it was, still awaiting resolution.
+      {:error, reason} ->
+        {:error, reason, runtime}
     end
   end
 
@@ -229,8 +242,8 @@ defmodule FeudHall.Application.CommandWorkflow do
       {:error, :fenced, store} ->
         {:error, :fenced, %{runtime | store: store, mode: :fenced}}
 
-      {:error, reason, _store} ->
-        {:error, reason}
+      {:error, reason, store} ->
+        {:error, reason, %{runtime | store: store}}
     end
   end
 

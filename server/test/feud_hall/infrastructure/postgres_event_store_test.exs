@@ -262,6 +262,27 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
     assert_nothing_written(store)
   end
 
+  test "each batch records its event count, and a batch missing event rows stops reading there" do
+    store = fresh_store()
+    events = [%{type: :clock_advanced, to: 24}, %{type: :clock_advanced, to: 48}]
+
+    {:ok, store, 1} =
+      PostgresEventStore.append(store, request(events: events, control_events: [%{type: :clock_advanced, to: 1}]))
+
+    {:ok, store, 2} = PostgresEventStore.append(store, next_request(store, command_id: "b"))
+    assert [[1, 3], [2, 1]] = Repo.query!("select position, event_count from batches order by position").rows
+
+    Repo.query!("delete from events where position = 1 and batch_order = 1")
+    assert PostgresEventStore.read_from(store, 0) == {:error, {:undecodable, 1, {:event_count_mismatch, 3, 2}}}
+    assert {:ok, [%{position: 2}]} = PostgresEventStore.read_from(store, 1)
+
+    Repo.query!("delete from events where position = 2")
+    assert PostgresEventStore.read_from(store, 1) == {:error, {:undecodable, 2, {:event_count_mismatch, 1, 0}}}
+
+    assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} =
+             Repo.query("insert into batches (position, command_id, event_count) values (9, 'empty', 0)")
+  end
+
   @tag :capture_log
   test "a refused connection is reported as unavailable" do
     start_supervised!(FeudHall.UnreachableRepo)

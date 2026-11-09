@@ -5,7 +5,7 @@ defmodule FeudHall.Application.Recovery do
 
   Steps, in order:
 
-    1. `acquire_authority/3` for `opts[:scope]` (default `"hall"`). The store
+    1. `acquire_authority/3` for the required `opts[:scope]`. The store
        handle returned carries the new epoch, so any later append by a
        previous owner is fenced.
     2. With a snapshot decoder (`opts[:decode_snapshot]`, a function
@@ -22,7 +22,11 @@ defmodule FeudHall.Application.Recovery do
        skipping committed history after it.
     3. `read_from/2` after the chosen position and fold the tail with the pure
        evolvers. A batch the store cannot decode aborts recovery with the
-       store's `{:undecodable, position, reason}` error.
+       store's `{:undecodable, position, reason}` error. The tail must hold
+       every position from just after the snapshot (or genesis) up to the
+       store's head, read once after acquiring authority; the first absent one
+       aborts with `{:missing_batch, position}`, so a lost authoritative batch
+       blocks recovery instead of being skipped.
     4. `Invariants.check/1` on the restored hall; a violation aborts with
        `{:error, {:invariants, problems}}`.
     5. If `Control.pending_recovery_id/1` names an interrupted epoch and a hall
@@ -65,16 +69,21 @@ defmodule FeudHall.Application.Recovery do
         }
 
   @doc """
-  Recovers the hall held by `store` for `owner`. Options: `:scope`,
-  `:decode_snapshot`, `:diagnostics` (passed to the runtime), and
-  `:side_effects` (never invoked during replay).
+  Recovers the hall held by `store` for `owner`. Options: `:scope`
+  (required; raises `KeyError` without it), `:decode_snapshot`,
+  `:diagnostics` (passed to the runtime), and `:side_effects` (never invoked
+  during replay).
   """
   @spec recover(module(), term(), String.t(), keyword()) :: {:ok, CommandWorkflow.t(), report()} | {:error, term()}
   def recover(store_mod, store, owner, opts \\ []) do
+    scope = Keyword.fetch!(opts, :scope)
+
     with :ok <- validate_owner(owner),
-         {:ok, store, epoch} <- store_mod.acquire_authority(store, Keyword.get(opts, :scope, "hall"), owner),
-         {:ok, base, skipped} <- base(store_mod, store, Keyword.get(opts, :decode_snapshot)),
+         {:ok, store, epoch} <- store_mod.acquire_authority(store, scope, owner),
+         head = store_mod.head(store),
+         {:ok, base, skipped} <- base(store_mod, store, head, Keyword.get(opts, :decode_snapshot)),
          {:ok, tail} <- store_mod.read_from(store, base.position),
+         :ok <- contiguous(tail, base.position, head),
          restored = restore(base, tail),
          :ok <- check(restored.hall),
          {:ok, runtime} <- runtime(store_mod, store, restored, epoch, opts),
@@ -99,12 +108,10 @@ defmodule FeudHall.Application.Recovery do
 
   # --- snapshot selection ------------------------------------------------------
 
-  defp base(_store_mod, _store, nil), do: {:ok, @genesis, []}
+  defp base(_store_mod, _store, _head, nil), do: {:ok, @genesis, []}
 
-  defp base(store_mod, store, decode) when is_function(decode, 1) do
+  defp base(store_mod, store, head, decode) when is_function(decode, 1) do
     with snapshots when is_list(snapshots) <- store_mod.snapshots(store) do
-      head = store_mod.head(store)
-
       snapshots
       |> Enum.filter(& &1.verified)
       |> Enum.reduce_while([], fn snapshot, skipped ->
@@ -139,6 +146,26 @@ defmodule FeudHall.Application.Recovery do
   end
 
   # --- restore and check -------------------------------------------------------
+
+  # Batch positions are contiguous (each stored batch advances the head by one), so the tail
+  # after `from` must be exactly `from + 1 .. head`.
+  defp contiguous(tail, from, head) do
+    expected = Enum.to_list((from + 1)..head//1)
+
+    case Enum.zip(expected, Enum.map(tail, & &1.position)) |> Enum.find(fn {want, got} -> want != got end) do
+      {missing, _found} ->
+        {:error, {:missing_batch, missing}}
+
+      nil when length(tail) < length(expected) ->
+        {:error, {:missing_batch, Enum.at(expected, length(tail))}}
+
+      nil when length(tail) > length(expected) ->
+        {:error, {:batch_beyond_head, Enum.at(tail, length(expected)).position}}
+
+      nil ->
+        :ok
+    end
+  end
 
   defp restore(base, tail) do
     %{
@@ -212,7 +239,6 @@ defmodule FeudHall.Application.Recovery do
     end
   end
 
-  defp failure({:error, :fenced, _runtime}), do: {:error, :fenced}
   defp failure({:uncertain, command_id, _runtime}), do: {:error, {:uncertain, command_id}}
-  defp failure({:error, _reason} = error), do: error
+  defp failure({:error, reason, _runtime}), do: {:error, reason}
 end

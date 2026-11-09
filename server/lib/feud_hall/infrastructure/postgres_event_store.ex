@@ -25,7 +25,9 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   `content`, keyed by its SHA-256 identity (the same value as
   `FeudHall.Domain.Content.hash/1`), and the stored payload carries
   `catalog_ref` instead; `read_from/2` rehydrates it. Missing or corrupt
-  content and undecodable payloads stop reading at that batch's position.
+  content, undecodable payloads, and a batch whose event rows no longer match
+  the `event_count` recorded with it (`{:event_count_mismatch, recorded,
+  found}`) stop reading at that batch's position.
   Receipts are stored as Base64 external term format and decoded with
   `[:safe]`, so they round-trip as the exact Elixir terms that were written.
 
@@ -238,10 +240,11 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   defp insert_batch(repo, request, position, versions) do
     %{command_id: command_id, context: context} = request
 
-    repo.query!("insert into batches (position, command_id, hall_ms) values ($1, $2, $3)", [
+    repo.query!("insert into batches (position, command_id, hall_ms, event_count) values ($1, $2, $3, $4)", [
       position,
       command_id,
-      context.hall_ms
+      context.hall_ms,
+      length(request.events) + length(request.control_events)
     ])
 
     envelope = %{
@@ -403,7 +406,8 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   def read_after(repo, after_position, limit) do
     %{rows: batches} =
       repo.query!(
-        "select position, command_id, hall_ms from batches where position > $1 order by position limit $2",
+        "select position, command_id, hall_ms, event_count from batches where position > $1 " <>
+          "order by position limit $2",
         [after_position, limit]
       )
 
@@ -419,8 +423,15 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     events_by_position = Enum.group_by(event_rows, &hd/1, &tl/1)
 
     batches
-    |> Enum.reduce_while({[], %{}}, fn [position, command_id, hall_ms], {acc, content} ->
-      case decode_batch(repo, Map.get(events_by_position, position, []), content) do
+    |> Enum.reduce_while({[], %{}}, fn [position, command_id, hall_ms, event_count], {acc, content} ->
+      rows = Map.get(events_by_position, position, [])
+
+      result =
+        if length(rows) == event_count,
+          do: decode_batch(repo, rows, content),
+          else: {:error, {:event_count_mismatch, event_count, length(rows)}}
+
+      case result do
         {:ok, events, control_events, content} ->
           batch = %{
             position: position,

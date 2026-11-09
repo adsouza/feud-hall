@@ -177,7 +177,7 @@ defmodule FeudHall.Infrastructure.PostgresAtomicityTest do
     end
 
     defp assert_resolves_once(stuck, head) do
-      assert {:error, :recovery_required} = Workflow.execute(stuck, env("buy-2", purchase(5)))
+      assert {:error, :recovery_required, _} = Workflow.execute(stuck, env("buy-2", purchase(5)))
 
       assert {:committed, receipt, recovered} = Workflow.resolve(stuck, "buy-1")
       assert receipt.outcome == :accepted

@@ -23,17 +23,42 @@ defmodule FeudHall.Infrastructure.Snapshot do
     <<checksum(body)::binary, body::binary>>
   end
 
+  @doc """
+  Loads a snapshot binary. A checksum mismatch, a body that is not an external term, or a
+  term of the wrong shape is `:corrupt_snapshot`; another evolution version, or a body naming
+  an atom this build does not define (as a newer release could write), is
+  `:incompatible_snapshot`. It never raises, so recovery can fall back.
+  """
   def load(<<sum::binary-size(32), body::binary>>) do
     with true <- sum == checksum(body) || {:error, :corrupt_snapshot},
-         %{evolution: @evolution_version} = snapshot <- :erlang.binary_to_term(body, [:safe]) do
+         {:ok, term} <- decode(body),
+         %{evolution: @evolution_version, position: position, state: %{hall: _, control: _}} = snapshot
+         when is_integer(position) <- term do
       {:ok, snapshot}
     else
-      %{evolution: _} -> {:error, :incompatible_snapshot}
-      {:error, _} = error -> error
+      %{evolution: evolution} when is_integer(evolution) and evolution != @evolution_version ->
+        {:error, :incompatible_snapshot}
+
+      {:error, _} = error ->
+        error
+
+      _wrong_shape ->
+        {:error, :corrupt_snapshot}
     end
   end
 
   def load(_), do: {:error, :corrupt_snapshot}
+
+  # A body that is not in the external term format at all is corrupt. With a valid checksum,
+  # a well-formed body that `[:safe]` still refuses names atoms this build does not define:
+  # it was written by another release, so it is incompatible. Atoms are never created here.
+  defp decode(<<131, _::binary>> = body) do
+    {:ok, :erlang.binary_to_term(body, [:safe])}
+  rescue
+    ArgumentError -> {:error, :incompatible_snapshot}
+  end
+
+  defp decode(_body), do: {:error, :corrupt_snapshot}
 
   @doc "The evolution version recorded in a checksummed snapshot binary, or `nil` when it is unreadable."
   def evolution_of(binary) do

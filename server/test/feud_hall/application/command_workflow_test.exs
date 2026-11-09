@@ -3,6 +3,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   use ExUnit.Case, async: false
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
+  alias FeudHall.Application.Recovery
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.{Control, Money}
   alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore, PostgresEventStore, Snapshot}
@@ -47,8 +48,8 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   test "changed content or actor under the same command ID is a conflict" do
     rt = runtime()
     {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
-    assert {:error, :command_id_conflict} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(101)))
-    assert {:error, :command_id_conflict} = Workflow.execute(rt, env("buy-1", {:principal, "bob"}, purchase(100)))
+    assert {:error, :command_id_conflict, _} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(101)))
+    assert {:error, :command_id_conflict, _} = Workflow.execute(rt, env("buy-1", {:principal, "bob"}, purchase(100)))
   end
 
   test "rejections keep their original result and append no domain events" do
@@ -118,20 +119,44 @@ defmodule FeudHall.Application.CommandWorkflowTest do
 
   test "malformed envelopes and unknown commands never reach the domain or storage" do
     rt = runtime()
-    assert {:error, :unknown_command} = Workflow.execute(rt, env("x", {:principal, "alice"}, {:drop_tables, %{}}))
-    assert {:error, :unauthenticated} = Workflow.execute(rt, env("x", {:principal, ""}, purchase(1)))
-    assert {:error, :malformed_envelope} = Workflow.execute(rt, %{command_id: 7})
-    assert {:error, :unauthenticated} = Workflow.execute(rt, env("x", {:system, :root}, purchase(1)))
+    assert {:error, :unknown_command, _} = Workflow.execute(rt, env("x", {:principal, "alice"}, {:drop_tables, %{}}))
+    assert {:error, :unauthenticated, _} = Workflow.execute(rt, env("x", {:principal, ""}, purchase(1)))
+    assert {:error, :malformed_envelope, _} = Workflow.execute(rt, %{command_id: 7})
+    assert {:error, :unauthenticated, _} = Workflow.execute(rt, env("x", {:system, :root}, purchase(1)))
   end
 
   test "a failure before commit leaves nothing; retrying the same ID then succeeds once" do
     rt = runtime()
     failing = %{rt | store: InMemoryEventStore.fail_next(rt.store, :before_commit)}
-    assert {:error, :unavailable} = Workflow.execute(failing, env("buy-1", {:principal, "alice"}, purchase(100)))
+    assert {:error, :unavailable, _} = Workflow.execute(failing, env("buy-1", {:principal, "alice"}, purchase(100)))
     assert InMemoryEventStore.receipt(failing.store, "buy-1") == :none
 
     {:accepted, _, rt} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(100)))
     assert map_size(rt.state.restaurants["r1"].batches) == 1
+  end
+
+  test "every append outcome adopts the returned store, so a consumed one-shot fault stays cleared" do
+    rt = runtime()
+    down = %{rt | store: InMemoryEventStore.fail_next(rt.store, :unavailable)}
+    assert {:error, :unavailable} = Recovery.recover(InMemoryEventStore, down.store, "b", scope: "hall:test")
+
+    assert {:error, :unavailable, after_fault} =
+             Workflow.execute(down, env("buy-1", {:principal, "alice"}, purchase(100)))
+
+    assert after_fault.store.fail_next == nil
+    assert {after_fault.state, after_fault.position, after_fault.versions} == {rt.state, rt.position, rt.versions}
+
+    assert {:accepted, _, after_fault} =
+             Workflow.execute(after_fault, env("buy-1", {:principal, "alice"}, purchase(100)))
+
+    assert {:ok, _, %{tail_batches: 3}} =
+             Recovery.recover(InMemoryEventStore, after_fault.store, "b", scope: "hall:test")
+
+    # A conflict also returns the runtime holding the store the adapter returned.
+    conflicting = %{rt | store: after_fault.store}
+
+    assert {:error, :conflict, ^conflicting} =
+             Workflow.execute(conflicting, env("buy-2", {:principal, "alice"}, purchase(1)))
   end
 
   test "a lost reply is uncertain, blocks new commands, and resolves by the same ID" do
@@ -140,7 +165,13 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     {:uncertain, "buy-1", stuck} = Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(100)))
     # The in-memory head did not apply the batch, and new work is refused.
     assert stuck.state.restaurants["r1"].batches == %{}
-    assert {:error, :recovery_required} = Workflow.execute(stuck, env("buy-2", {:principal, "alice"}, purchase(5)))
+
+    assert {:error, :recovery_required, ^stuck} =
+             Workflow.execute(stuck, env("buy-2", {:principal, "alice"}, purchase(5)))
+
+    # A store that cannot be read leaves the runtime waiting for resolution.
+    unreadable = %{stuck | store: InMemoryEventStore.fail_next(stuck.store, :unavailable)}
+    assert {:error, :unavailable, ^unreadable} = Workflow.resolve(unreadable, "buy-1")
 
     assert {:committed, receipt, recovered} = Workflow.resolve(stuck, "buy-1")
     assert receipt.outcome == :accepted
@@ -176,7 +207,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
 
     # A workflow holding the stale head reports the conflict without evolving.
     stale = %{rt | store: store2}
-    assert {:error, :conflict} = Workflow.execute(stale, env("buy-9", {:principal, "alice"}, purchase(1)))
+    assert {:error, :conflict, _} = Workflow.execute(stale, env("buy-9", {:principal, "alice"}, purchase(1)))
   end
 
   test "a fenced append stops the runtime" do
@@ -297,7 +328,8 @@ defmodule FeudHall.Application.CommandWorkflowTest do
       assert rt2.position == rt.position
       assert PostgresEventStore.head(rt.store) == rt.position
 
-      assert {:error, :command_id_conflict} = Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(101)))
+      assert {:error, :command_id_conflict, _} =
+               Workflow.execute(rt, env("buy-1", {:principal, "alice"}, purchase(101)))
     end
 
     test "a rejection keeps its stored receipt and appends no batch" do
@@ -312,7 +344,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     test "a failure before commit leaves nothing; retrying the same ID then succeeds once" do
       rt = pg_runtime()
       failing = %{rt | store: PostgresEventStore.fail_next(rt.store, :before_commit)}
-      assert {:error, :unavailable} = Workflow.execute(failing, env("buy-1", {:principal, "alice"}, purchase(100)))
+      assert {:error, :unavailable, _} = Workflow.execute(failing, env("buy-1", {:principal, "alice"}, purchase(100)))
       assert PostgresEventStore.receipt(rt.store, "buy-1") == :none
       assert PostgresEventStore.head(rt.store) == rt.position
 
@@ -325,7 +357,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
       armed = %{rt | store: PostgresEventStore.fail_next(rt.store, :lost_reply)}
       {:uncertain, "buy-1", stuck} = Workflow.execute(armed, env("buy-1", {:principal, "alice"}, purchase(100)))
       assert stuck.state.restaurants["r1"].batches == %{}
-      assert {:error, :recovery_required} = Workflow.execute(stuck, env("buy-2", {:principal, "alice"}, purchase(5)))
+      assert {:error, :recovery_required, _} = Workflow.execute(stuck, env("buy-2", {:principal, "alice"}, purchase(5)))
 
       assert {:committed, receipt, recovered} = Workflow.resolve(stuck, "buy-1")
       assert receipt.outcome == :accepted
@@ -382,6 +414,18 @@ defmodule FeudHall.Application.CommandWorkflowTest do
 
       assert {:error, {:unsupported_schema, 2}} = EventCodec.decode(~s({"v":2,"e":{}}))
       assert_raise ArgumentError, fn -> EventCodec.encode!(%{type: :not_allowlisted}) end
+    end
+
+    test "a valid checksum around an unknown atom or the wrong shape is rejected, not raised" do
+      seal = fn body -> :crypto.hash(:sha256, body) <> body end
+      term = %{position: 1, evolution: Snapshot.evolution_version(), state: %{hall: :workflow_test_placeholder}}
+      body = :erlang.term_to_binary(term, [:deterministic])
+      unknown = :binary.replace(body, "workflow_test_placeholder", "zz_never_defined_atom_qqq")
+
+      assert {:error, :incompatible_snapshot} = Snapshot.load(seal.(unknown))
+      assert {:error, :corrupt_snapshot} = Snapshot.load(seal.(:erlang.term_to_binary([1, 2, 3])))
+      assert {:error, :corrupt_snapshot} = Snapshot.load(seal.(:erlang.term_to_binary(%{position: 1})))
+      assert {:error, :corrupt_snapshot} = Snapshot.load(seal.("not an external term"))
     end
 
     test "corrupt or incompatible snapshots are rejected for fallback" do
