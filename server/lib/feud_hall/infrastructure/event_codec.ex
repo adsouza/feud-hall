@@ -33,6 +33,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
     starter_grant storage_capacity max_allowance_grant unit origins carb_mg_per_kunit
     base_price_per_kunit shelf_life_ms storage_per_kunit starter unlock_cost claims suggested_price
     prep_ms finish_ms holding_ms substitute num den enabled stricter_than
+    availability_started availability_resumed hall_resumed epoch_id recovery_id hall_ms
   )a
 
   @by_name Map.new(@atoms, &{Atom.to_string(&1), &1})

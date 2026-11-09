@@ -34,6 +34,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
       now: 0,
       access: :open,
       visitor_fund: e.visitor_fund,
+      last_recovery_id: nil,
       restaurants: %{},
       owners: %{},
       stalls: %{},
@@ -47,6 +48,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
   end
 
   def evolve(state, %{type: :clock_advanced, to: to}) when to >= state.now, do: %{state | now: to}
+
+  def evolve(state, %{type: :hall_resumed, recovery_id: id}), do: %{state | last_recovery_id: id}
 
   def evolve(state, %{type: :hall_cleaning_started}), do: %{state | access: :cleaning}
   def evolve(state, %{type: :hall_cleaning_ended}), do: %{state | access: :open}

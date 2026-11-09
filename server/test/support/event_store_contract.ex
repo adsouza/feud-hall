@@ -207,6 +207,21 @@ defmodule FeudHall.EventStoreContract do
                    @contract_adapter.read_from(store, 2)
         end
 
+        test "contract: a batch touching both streams advances both versions or neither" do
+          store = contract_fresh()
+          control = [%{type: :clock_advanced, to: 24}]
+
+          failing = @contract_adapter.fail_next(store, :before_commit)
+          request = contract_request(failing, "both", control_events: control)
+          assert {:error, :unavailable, store} = @contract_adapter.append(failing, request)
+          assert @contract_adapter.head(store) == 0
+          assert @contract_adapter.receipt(store, "both") == :none
+          assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 0, control: 0}
+
+          assert {:ok, store, 1} = @contract_adapter.append(store, request)
+          assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 1, control: 1}
+        end
+
         test "contract: a stale control version conflicts and writes nothing" do
           store = contract_fresh()
           store = contract_append!(store, "c", events: [], control_events: @contract_control)

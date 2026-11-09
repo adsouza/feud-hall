@@ -3,7 +3,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
   alias FeudHall.Domain.Content.SliceCatalog
-  alias FeudHall.Domain.Money
+  alias FeudHall.Domain.{Control, Money}
   alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore, Snapshot}
 
   defp env(id, actor, command), do: %{command_id: id, actor: actor, command: command}
@@ -57,6 +57,62 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     assert receipt.outcome == {:rejected, :insufficient_storage}
     assert rt.position == head
     assert {:replayed, ^receipt, _} = Workflow.execute(rt, env("buy-big", {:principal, "alice"}, purchase(900_000)))
+  end
+
+  describe "control stream" do
+    @authority {:system, :authority}
+
+    defp started(rt) do
+      {:accepted, _, rt} =
+        Workflow.execute(rt, env("start:e1", @authority, {:start_availability, %{epoch_id: "e1"}}))
+
+      rt
+    end
+
+    defp reconcile(id), do: env(id, @authority, {:reconcile_recovery, %{recovery_id: "recovery:e1"}})
+
+    test "reconciliation appends control and hall events in one batch" do
+      rt = started(runtime())
+      before = rt.versions
+
+      assert {:accepted, receipt, rt} = Workflow.execute(rt, reconcile("rec-1"))
+      assert receipt.event_count == 2
+      assert {:ok, batches} = InMemoryEventStore.read_from(rt.store, rt.position - 1)
+      assert [%{events: [%{type: :hall_resumed}], control_events: [%{type: :availability_resumed}]}] = batches
+      assert rt.versions == %{hall: before.hall + 1, control: before.control + 1}
+      assert rt.state.last_recovery_id == "recovery:e1"
+      assert Control.pending_recovery_id(rt.control) == "recovery:e1"
+    end
+
+    test "owners retrying the same recovery get the original receipt; a new command ID is already reconciled" do
+      rt = started(runtime())
+      {:accepted, receipt, rt} = Workflow.execute(rt, reconcile("rec-1"))
+      assert {:replayed, ^receipt, _} = Workflow.execute(rt, reconcile("rec-1"))
+      assert {:rejected, %{outcome: {:rejected, :already_reconciled}}, _} = Workflow.execute(rt, reconcile("rec-2"))
+    end
+
+    test "start_availability works on an empty store and reconcile there is rejected" do
+      {:ok, rt} = Workflow.open(InMemoryEventStore, InMemoryEventStore.new())
+      rt = started(rt)
+      assert rt.versions == %{hall: 0, control: 1}
+      assert Control.pending_recovery_id(rt.control) == "recovery:e1"
+
+      assert {:rejected, %{outcome: {:rejected, :hall_not_initialized}}, _} = Workflow.execute(rt, reconcile("rec-1"))
+    end
+
+    test "a non-authority actor is refused and reopening replays the control stream" do
+      rt = runtime()
+
+      assert {:rejected, %{outcome: {:rejected, :forbidden}}, _} =
+               Workflow.execute(rt, env("s", {:system, :admin}, {:start_availability, %{epoch_id: "e9"}}))
+
+      rt = started(rt)
+      {:accepted, _, rt} = Workflow.execute(rt, reconcile("rec-1"))
+      assert {:ok, reopened} = Workflow.open(InMemoryEventStore, rt.store)
+      assert reopened.control == rt.control
+      assert reopened.versions == rt.versions
+      assert reopened.state == rt.state
+    end
   end
 
   test "malformed envelopes and unknown commands never reach the domain or storage" do

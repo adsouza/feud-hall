@@ -25,12 +25,13 @@ defmodule FeudHall.Application.CommandWorkflow do
   """
 
   alias FeudHall.Application.Projections.Balances
-  alias FeudHall.Domain.{Clock, Hall}
+  alias FeudHall.Domain.{Clock, Control, Hall}
 
   @commands ~w(initialize_hall advance_clock create_restaurant open_stall close_stall unlock_recipe
                set_menu_price remove_menu_item set_substitution_policy purchase_stock grant_allowance
                admit_visit cancel_tray start_preparation complete_preparation serve_tray accept_dessert
                decline_dessert cancel_dessert serve_dessert)a
+  @control_commands ~w(start_availability reconcile_recovery)a
 
   defstruct store_mod: nil,
             store: nil,
@@ -50,12 +51,14 @@ defmodule FeudHall.Application.CommandWorkflow do
   def open(store_mod, store, opts \\ []) do
     with {:ok, batches} <- store_mod.read_from(store, 0) do
       state = batches |> Enum.flat_map(& &1.events) |> Hall.replay(nil)
+      control = batches |> Enum.flat_map(& &1.control_events) |> Control.replay(nil)
 
       {:ok,
        %__MODULE__{
          store_mod: store_mod,
          store: store,
          state: state,
+         control: control,
          position: store_mod.head(store),
          versions: store_mod.stream_versions(store, hall_stream(state)),
          diagnostics: Keyword.get(opts, :diagnostics)
@@ -112,7 +115,7 @@ defmodule FeudHall.Application.CommandWorkflow do
        when is_binary(id) and byte_size(id) in 1..64 and is_map(payload) do
     cond do
       not String.printable?(id) -> {:error, :malformed_command_id}
-      kind not in @commands -> {:error, :unknown_command}
+      kind not in @commands and kind not in @control_commands -> {:error, :unknown_command}
       not valid_actor?(actor) -> {:error, :unauthenticated}
       true -> :ok
     end
@@ -121,7 +124,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   defp validate(_), do: {:error, :malformed_envelope}
 
   defp valid_actor?({:principal, id}), do: is_binary(id) and byte_size(id) in 1..64
-  defp valid_actor?({:system, cap}), do: cap in [:admin, :scheduler, :kitchen, :demand, :visitor_fund]
+  defp valid_actor?({:system, cap}), do: cap in [:admin, :authority, :scheduler, :kitchen, :demand, :visitor_fund]
   defp valid_actor?(_), do: false
 
   defp lookup(runtime, command_id, fingerprint) do
@@ -165,14 +168,19 @@ defmodule FeudHall.Application.CommandWorkflow do
       actor: envelope.actor
     }
 
-    {events, receipt} =
-      case Hall.decide(runtime.state, envelope.command, ctx) do
-        {:ok, events} -> {events, Map.merge(receipt, %{outcome: :accepted, event_count: length(events)})}
-        {:error, reason} -> {[], Map.merge(receipt, %{outcome: {:rejected, reason}, event_count: 0})}
+    {events, control_events, receipt} =
+      case decide(runtime, envelope.command, ctx) do
+        {:ok, events, control_events} ->
+          count = length(events) + length(control_events)
+          {events, control_events, Map.merge(receipt, %{outcome: :accepted, event_count: count})}
+
+        {:error, reason} ->
+          {[], [], Map.merge(receipt, %{outcome: {:rejected, reason}, event_count: 0})}
       end
 
     candidate = Hall.replay(events, runtime.state)
-    request = append_request(runtime, envelope, events, receipt, candidate)
+    candidate_control = Control.replay(control_events, runtime.control)
+    request = append_request(runtime, envelope, events, control_events, receipt, candidate)
 
     case runtime.store_mod.append(runtime.store, request) do
       {:ok, store, position} ->
@@ -181,7 +189,11 @@ defmodule FeudHall.Application.CommandWorkflow do
           | store: store,
             position: position,
             state: candidate,
-            versions: %{runtime.versions | hall: runtime.versions.hall + length(events)}
+            control: candidate_control,
+            versions: %{
+              hall: runtime.versions.hall + length(events),
+              control: runtime.versions.control + length(control_events)
+            }
         }
 
         receipt = Map.put(receipt, :position, position)
@@ -200,14 +212,26 @@ defmodule FeudHall.Application.CommandWorkflow do
     end
   end
 
-  defp append_request(runtime, envelope, events, receipt, candidate) do
+  # Control commands see the hall state (nil before initialisation) read-only;
+  # hall commands never touch the control stream.
+  defp decide(runtime, {kind, _} = command, ctx) when kind in @control_commands do
+    with {:ok, %{control: control, hall: hall}} <- Control.decide(runtime.control, runtime.state, command, ctx) do
+      {:ok, hall, control}
+    end
+  end
+
+  defp decide(runtime, command, ctx) do
+    with {:ok, events} <- Hall.decide(runtime.state, command, ctx), do: {:ok, events, []}
+  end
+
+  defp append_request(runtime, envelope, events, control_events, receipt, candidate) do
     %{
       command_id: envelope.command_id,
       expected_position: runtime.position,
       expected_versions: runtime.versions,
       hall_stream: hall_stream(runtime.state || candidate),
       events: events,
-      control_events: [],
+      control_events: control_events,
       receipt: receipt,
       outbox: [],
       projection_rows: Balances.changes(runtime.state, candidate, runtime.position + 1),
