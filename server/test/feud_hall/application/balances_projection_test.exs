@@ -37,4 +37,14 @@ defmodule FeudHall.Application.BalancesProjectionTest do
 
     assert {:delete_stock, "r1", "rice_long"} in Balances.changes(after_buy, emptied, 9)
   end
+
+  test "a nil before-state emits every account and product of every restaurant" do
+    {state, _} = stocked_world()
+    rows = Balances.changes(nil, state, 7)
+    ledger = state.restaurants["r1"].ledger
+
+    for {account, amount} <- ledger, do: assert({:balance, "r1", account, amount} in rows)
+    assert {:stock, "r1", "rice_long", 1_000, 0} in rows
+    assert Enum.sort(rows) == Enum.sort(Balances.changes(%{restaurants: %{}}, state, 7))
+  end
 end

@@ -48,6 +48,8 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   @behaviour FeudHall.Application.EventStore
 
+  alias FeudHall.Application.Projections.Balances
+  alias FeudHall.Domain.Hall
   alias FeudHall.Domain.Hall.Evolver
   alias FeudHall.Infrastructure.{EventCodec, Snapshot}
 
@@ -484,6 +486,48 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
       %{restaurant_id: r, product: product, on_hand: on_hand, reserved: reserved, position: position}
     end)
     |> Enum.sort_by(&{&1.restaurant_id, &1.product})
+  end
+
+  @doc """
+  Rebuilds `restaurant_balances` and `restaurant_stock` from the event log.
+
+  One transaction holds the append-head lock (so no batch lands mid-rebuild),
+  truncates both tables, folds every batch with `Hall.replay/1`, and writes every
+  account and product of the folded state. Rows carry the head position they
+  were rebuilt at, not the batch that last changed them. Returns
+  `{:error, :unavailable}` when storage cannot be reached and `{:error, reason}`
+  when a stored event cannot be decoded; neither leaves a partial rebuild.
+  """
+  @spec rebuild_projections(t()) :: :ok | {:error, term()}
+  def rebuild_projections(store) do
+    repo = store.repo
+
+    result =
+      attempt(fn ->
+        repo.transaction(
+          fn ->
+            set_lock_timeout(repo, store.lock_timeout_ms)
+            head = lock_head(repo)
+
+            case read_from(store, 0) do
+              {:ok, batches} ->
+                state = batches |> Enum.flat_map(& &1.events) |> Hall.replay()
+                repo.query!("truncate restaurant_balances, restaurant_stock")
+                apply_projection_rows(repo, Balances.changes(nil, state, head), head)
+
+              {:error, reason} ->
+                repo.rollback(reason)
+            end
+          end,
+          timeout: @timeout
+        )
+      end)
+
+    case result do
+      {:ok, {:ok, _}} -> :ok
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:error, _} = error -> error
+    end
   end
 
   # --- authority and snapshots -------------------------------------------
