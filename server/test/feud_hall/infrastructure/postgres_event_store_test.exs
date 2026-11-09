@@ -99,6 +99,16 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
       assert {:ok, _, 1} = PostgresEventStore.append(new, request())
     end
 
+    test "a superseded holder whose head is also stale is told it is fenced, not conflicting" do
+      old = fresh_store()
+      assert {:ok, new, 2} = PostgresEventStore.acquire_authority(old, "hall:test", "node-b")
+      assert {:ok, _, 1} = PostgresEventStore.append(new, request())
+
+      # `old` still expects position 0: both checks fail, and fencing is reported.
+      assert {:error, :fenced, _} = PostgresEventStore.append(old, request(command_id: "b"))
+      assert PostgresEventStore.head(old) == 1
+    end
+
     test "a store that never acquired authority is fenced" do
       store = PostgresEventStore.new(Repo, "hall:test")
       assert {:error, :fenced, _} = PostgresEventStore.append(store, request())

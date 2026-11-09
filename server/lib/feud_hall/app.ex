@@ -1,9 +1,14 @@
 defmodule FeudHall.App do
-  @moduledoc "OTP application: supervises the durable-storage infrastructure."
+  @moduledoc "OTP application: supervises the durable-storage infrastructure and the hall authorities."
   use Application
 
   @impl true
   def start(_type, _args) do
-    Supervisor.start_link([FeudHall.Infrastructure.Repo], strategy: :one_for_one, name: FeudHall.Supervisor)
+    children = [
+      FeudHall.Infrastructure.Repo,
+      {DynamicSupervisor, name: FeudHall.AuthoritySupervisor, strategy: :one_for_one}
+    ]
+
+    Supervisor.start_link(children, strategy: :one_for_one, name: FeudHall.Supervisor)
   end
 end

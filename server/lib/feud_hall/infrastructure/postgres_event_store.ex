@@ -9,9 +9,11 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   One append is one transaction that takes its locks in a fixed order:
 
-    1. the `append_head` row (`for update`), compared with `expected_position`;
+    1. the `append_head` row (`for update`);
     2. the scope's `authority` row (`for share`), compared with the handle's
-       epoch, so a writer whose authority was taken over is fenced;
+       epoch, so a writer whose authority was taken over is fenced; only then
+       is the head compared with `expected_position`, so a superseded writer
+       (whose head is usually stale too) is told `:fenced`, not `:conflict`;
     3. the hall stream's and then the `control` stream's `stream_heads` rows
        (`for update`), compared with `expected_versions`.
 
@@ -175,8 +177,10 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     repo = store.repo
     set_lock_timeout(repo, store.lock_timeout_ms)
     position = lock_head(repo)
-    if position != request.expected_position, do: repo.rollback(:conflict)
+    # Fencing is judged before the head: a superseded owner's head is usually stale too (the new
+    # owner's recovery appended), and it must learn it is fenced rather than retry a conflict.
     if authority_epoch(repo, store.scope) != store.epoch, do: repo.rollback(:fenced)
+    if position != request.expected_position, do: repo.rollback(:conflict)
     versions = lock_streams(repo, request.hall_stream)
     if versions != request.expected_versions, do: repo.rollback(:conflict)
     if receipt_exists?(repo, request.command_id), do: repo.rollback(:conflict)

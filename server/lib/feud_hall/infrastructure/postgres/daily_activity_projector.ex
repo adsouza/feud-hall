@@ -84,9 +84,13 @@ defmodule FeudHall.Infrastructure.Postgres.DailyActivityProjector do
     catch_up(repo)
   end
 
-  defp checkpoint(repo) do
-    %{rows: [[position]]} = repo.query!("select position from projector_checkpoints where name = $1", [@name])
-    position
+  @doc "The last position applied to the projection (0 before its first catch-up)."
+  @spec checkpoint(module()) :: non_neg_integer()
+  def checkpoint(repo) do
+    case repo.query!("select position from projector_checkpoints where name = $1", [@name]) do
+      %{rows: [[position]]} -> position
+      %{rows: []} -> 0
+    end
   end
 
   defp add_deltas(_repo, []), do: :ok
