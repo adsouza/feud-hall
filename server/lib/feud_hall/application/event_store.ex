@@ -10,6 +10,11 @@ defmodule FeudHall.Application.EventStore do
   with nothing written. A request with no events records only its receipt
   (a rejection) and appends no batch, so the position is unchanged.
 
+  A request is `:invalid_request` (nothing written) when it carries outbox
+  intents without events, hall events without a hall stream, or an outbox kind
+  outside `outbox_kinds/0`. A `dedupe_key` already used by an earlier batch, or
+  repeated within the request, is a `:conflict`.
+
   An append may report `{:error, :unknown_outcome, store}` (a lost response);
   that is never proof of rollback, and callers resolve it by looking up the
   same command ID. Snapshot callbacks return the store like `append/2`, so
@@ -20,6 +25,10 @@ defmodule FeudHall.Application.EventStore do
   """
 
   alias FeudHall.Application.Projections.Balances
+
+  # Outbox kinds an adapter accepts. Adapters map stored text back to these atoms
+  # (never `String.to_atom/1`), so a new kind is added here with its consumer.
+  @outbox_kinds [:test_notice]
 
   @type store :: term()
   @type versions :: %{hall: non_neg_integer(), control: non_neg_integer()}
@@ -50,6 +59,24 @@ defmodule FeudHall.Application.EventStore do
         }
   @type snapshot :: %{id: term(), position: non_neg_integer(), body: binary(), verified: boolean()}
 
+  @doc "Outbox kinds the port accepts; any other kind is an `:invalid_request`."
+  def outbox_kinds, do: @outbox_kinds
+
+  @doc """
+  Shape checks every adapter applies before touching storage: intents need a
+  batch to belong to (a rejection receipt carries none), hall events need a
+  hall stream, and kinds must be allowlisted.
+  """
+  @spec validate_request(append_request()) :: :ok | :invalid_request
+  def validate_request(%{events: events, control_events: control, outbox: outbox, hall_stream: stream}) do
+    cond do
+      outbox != [] and events == [] and control == [] -> :invalid_request
+      events != [] and is_nil(stream) -> :invalid_request
+      Enum.any?(outbox, &(&1.kind not in @outbox_kinds)) -> :invalid_request
+      true -> :ok
+    end
+  end
+
   @callback head(store) :: non_neg_integer()
   @callback stream_versions(store, hall_stream :: String.t() | nil) :: versions()
   @callback read_from(store, after_position :: non_neg_integer()) ::
@@ -57,7 +84,7 @@ defmodule FeudHall.Application.EventStore do
   @callback receipt(store, command_id :: String.t()) :: {:ok, receipt} | :none
   @callback append(store, append_request) ::
               {:ok, store, non_neg_integer()}
-              | {:error, :conflict | :fenced | :unavailable, store}
+              | {:error, :conflict | :fenced | :unavailable | :invalid_request, store}
               | {:error, :unknown_outcome, store}
   @callback acquire_authority(store, scope :: String.t(), owner :: String.t()) ::
               {:ok, store, pos_integer()} | {:error, :unavailable}
@@ -68,4 +95,14 @@ defmodule FeudHall.Application.EventStore do
   @doc "Stored snapshots, newest first."
   @callback snapshots(store) :: [snapshot()]
   @callback projection(store, :balances | :stock) :: [map()]
+  @doc "Committed outbox intents in insertion order."
+  @callback outbox(store) :: [
+              %{
+                dedupe_key: String.t(),
+                command_id: String.t(),
+                position: non_neg_integer(),
+                kind: atom(),
+                payload: map()
+              }
+            ]
 end

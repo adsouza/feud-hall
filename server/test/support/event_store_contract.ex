@@ -253,6 +253,97 @@ defmodule FeudHall.EventStoreContract do
           assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 0, control: 1}
         end
 
+        test "contract: an accepted append stores its outbox intents with the batch position" do
+          store = contract_append!(contract_fresh(), "a")
+          assert @contract_adapter.outbox(store) == []
+
+          outbox = [
+            %{dedupe_key: "n:1", kind: :test_notice, payload: %{to: "alice", n: 1}},
+            %{dedupe_key: "n:2", kind: :test_notice, payload: %{to: "bob", n: 2}}
+          ]
+
+          store = contract_append!(store, "b", events: [%{type: :clock_advanced, to: 48}], outbox: outbox)
+
+          assert @contract_adapter.outbox(store) == [
+                   %{
+                     dedupe_key: "n:1",
+                     command_id: "b",
+                     position: 2,
+                     kind: :test_notice,
+                     payload: %{to: "alice", n: 1}
+                   },
+                   %{dedupe_key: "n:2", command_id: "b", position: 2, kind: :test_notice, payload: %{to: "bob", n: 2}}
+                 ]
+        end
+
+        test "contract: a failed commit stores no outbox intents" do
+          store = contract_fresh()
+          outbox = [%{dedupe_key: "n:1", kind: :test_notice, payload: %{}}]
+
+          failing = @contract_adapter.fail_next(store, :before_commit)
+          request = contract_request(failing, "a", outbox: outbox)
+          assert {:error, :unavailable, store} = @contract_adapter.append(failing, request)
+          assert @contract_adapter.outbox(store) == []
+
+          assert {:ok, store, 1} = @contract_adapter.append(store, request)
+          assert [%{dedupe_key: "n:1", position: 1}] = @contract_adapter.outbox(store)
+        end
+
+        test "contract: a reused dedupe key conflicts and writes nothing" do
+          one = [%{dedupe_key: "n:1", kind: :test_notice, payload: %{v: 1}}]
+          store = contract_append!(contract_fresh(), "a", outbox: one)
+
+          reuse = [
+            %{dedupe_key: "n:2", kind: :test_notice, payload: %{v: 2}},
+            %{dedupe_key: "n:1", kind: :test_notice, payload: %{v: 3}}
+          ]
+
+          request = contract_request(store, "b", events: [%{type: :clock_advanced, to: 48}], outbox: reuse)
+          assert {:error, :conflict, store} = @contract_adapter.append(store, request)
+
+          assert @contract_adapter.head(store) == 1
+          assert @contract_adapter.receipt(store, "b") == :none
+          assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 1, control: 0}
+          assert [%{dedupe_key: "n:1", command_id: "a", payload: %{v: 1}}] = @contract_adapter.outbox(store)
+        end
+
+        test "contract: a dedupe key repeated within one request conflicts and writes nothing" do
+          twice = List.duplicate(%{dedupe_key: "n:1", kind: :test_notice, payload: %{}}, 2)
+          store = contract_fresh()
+
+          assert {:error, :conflict, store} =
+                   @contract_adapter.append(store, contract_request(store, "a", outbox: twice))
+
+          assert @contract_adapter.head(store) == 0
+          assert @contract_adapter.receipt(store, "a") == :none
+          assert @contract_adapter.outbox(store) == []
+        end
+
+        test "contract: invalid requests are refused and write nothing" do
+          store = contract_fresh()
+          intent = %{dedupe_key: "n:1", kind: :test_notice, payload: %{}}
+
+          # A rejection receipt (no events) cannot carry outbox intents.
+          rejection = contract_request(store, "r", events: [], outbox: [intent])
+          assert {:error, :invalid_request, store} = @contract_adapter.append(store, rejection)
+
+          # An unknown outbox kind is refused, not converted to an atom.
+          unknown = contract_request(store, "u", outbox: [%{intent | kind: :not_allowlisted}])
+          assert {:error, :invalid_request, store} = @contract_adapter.append(store, unknown)
+
+          # Hall events need a hall stream.
+          no_stream = contract_request(store, "s", hall_stream: nil)
+          assert {:error, :invalid_request, store} = @contract_adapter.append(store, no_stream)
+
+          assert @contract_adapter.head(store) == 0
+          assert @contract_adapter.outbox(store) == []
+
+          for id <- ["r", "u", "s"], do: assert(@contract_adapter.receipt(store, id) == :none)
+
+          # The same store still accepts a valid request afterwards.
+          assert {:ok, _, 1} = @contract_adapter.append(store, contract_request(store, "ok", outbox: [intent]))
+        end
+
         test "contract: snapshots are saved unverified and listed newest first" do
           store = contract_fresh()
           assert @contract_adapter.snapshots(store) == []

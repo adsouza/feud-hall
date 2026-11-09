@@ -48,6 +48,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   @behaviour FeudHall.Application.EventStore
 
+  alias FeudHall.Application.EventStore
   alias FeudHall.Application.Projections.Balances
   alias FeudHall.Domain.Hall
   alias FeudHall.Domain.Hall.Evolver
@@ -127,8 +128,11 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     hooks = store.hooks
     store = clear_hooks(store)
 
-    case transact(store, request, hooks) do
-      {:ok, position} -> if hooks.lost_reply, do: {:error, :unknown_outcome, store}, else: {:ok, store, position}
+    with :ok <- EventStore.validate_request(request),
+         {:ok, position} <- transact(store, request, hooks) do
+      if hooks.lost_reply, do: {:error, :unknown_outcome, store}, else: {:ok, store, position}
+    else
+      :invalid_request -> {:error, :invalid_request, store}
       {:error, reason} -> {:error, reason, store}
     end
   end
@@ -160,7 +164,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     do: {:error, :unavailable}
 
   defp classify(%Postgrex.Error{postgres: %{code: :unique_violation, table: table}}, _stack)
-       when table in ["receipts", "batches"],
+       when table in ["receipts", "batches", "outbox"],
        do: {:error, :conflict}
 
   defp classify(error, stack), do: reraise(error, stack)
@@ -174,6 +178,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     versions = lock_streams(repo, request.hall_stream)
     if versions != request.expected_versions, do: repo.rollback(:conflict)
     if receipt_exists?(repo, request.command_id), do: repo.rollback(:conflict)
+    if outbox_key_taken?(repo, request.outbox), do: repo.rollback(:conflict)
 
     %{events: events, control_events: control_events} = request
     batch? = events != [] or control_events != []
@@ -338,7 +343,17 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     |> Enum.each(&repo.insert_all(table, &1, on_conflict: {:replace, fields}, conflict_target: target))
   end
 
-  # Outbox payloads are opaque external terms until the outbox defines its own codec.
+  # Checked under the head lock, so no concurrent writer can slip a key in between.
+  defp outbox_key_taken?(_repo, []), do: false
+
+  defp outbox_key_taken?(repo, outbox) do
+    keys = Enum.map(outbox, & &1.dedupe_key)
+
+    length(Enum.uniq(keys)) != length(keys) or
+      repo.query!("select 1 from outbox where dedupe_key = any($1)", [keys]).num_rows > 0
+  end
+
+  # Outbox payloads are Base64 external terms (like receipts), decoded with `[:safe]`.
   defp insert_outbox(_repo, %{outbox: []}, _position), do: :ok
 
   defp insert_outbox(repo, request, position) do
@@ -355,7 +370,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
     rows
     |> Enum.chunk_every(@chunk)
-    |> Enum.each(&repo.insert_all("outbox", &1, on_conflict: :nothing, conflict_target: [:dedupe_key]))
+    |> Enum.each(&repo.insert_all("outbox", &1))
   end
 
   defp insert_receipt(repo, request, position) do
@@ -495,6 +510,24 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
       %{restaurant_id: r, product: product, on_hand: on_hand, reserved: reserved, position: position}
     end)
     |> Enum.sort_by(&{&1.restaurant_id, &1.product})
+  end
+
+  @outbox_kinds Map.new(EventStore.outbox_kinds(), &{Atom.to_string(&1), &1})
+
+  @impl true
+  def outbox(store) do
+    %{rows: rows} =
+      store.repo.query!("select dedupe_key, command_id, position, kind, payload from outbox order by id")
+
+    Enum.map(rows, fn [dedupe_key, command_id, position, kind, payload] ->
+      %{
+        dedupe_key: dedupe_key,
+        command_id: command_id,
+        position: position,
+        kind: Map.fetch!(@outbox_kinds, kind),
+        payload: decode_term(payload)
+      }
+    end)
   end
 
   @doc """

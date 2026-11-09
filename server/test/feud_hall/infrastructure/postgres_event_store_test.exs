@@ -144,10 +144,10 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
 
   test "outbox intents commit with their batch position and command" do
     store = fresh_store()
-    outbox = [%{dedupe_key: "mail:1", kind: :notify, payload: %{to: "alice"}}]
+    outbox = [%{dedupe_key: "mail:1", kind: :test_notice, payload: %{to: "alice"}}]
     assert {:ok, _, 1} = PostgresEventStore.append(store, request(outbox: outbox))
 
-    assert %{rows: [["mail:1", "a", 1, "notify"]]} =
+    assert %{rows: [["mail:1", "a", 1, "test_notice"]]} =
              Repo.query!("select dedupe_key, command_id, position, kind from outbox")
   end
 

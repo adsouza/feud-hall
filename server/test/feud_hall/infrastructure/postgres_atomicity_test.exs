@@ -25,7 +25,7 @@ defmodule FeudHall.Infrastructure.PostgresAtomicityTest do
       events: [%{type: :clock_advanced, to: 24}],
       control_events: [%{type: :availability_started, epoch_id: "e-" <> id}],
       receipt: %{command_id: id, fingerprint: "fp-" <> id, kind: :advance_clock, outcome: :accepted},
-      outbox: [%{dedupe_key: "mail:" <> id, kind: :notify, payload: %{to: "alice"}}],
+      outbox: [%{dedupe_key: "mail:" <> id, kind: :test_notice, payload: %{to: "alice"}}],
       projection_rows: [{:balance, "r1", :cash, 1_000}],
       context: %{actor: {:system, :scheduler}, correlation_id: "corr-" <> id, content_hash: nil, hall_ms: 24}
     }

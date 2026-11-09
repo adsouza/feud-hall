@@ -18,6 +18,8 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
 
   @behaviour FeudHall.Application.EventStore
 
+  alias FeudHall.Application.EventStore
+
   @failure_modes [:before_commit, :unavailable, :fenced, :lost_reply]
 
   defstruct batches: [],
@@ -67,6 +69,12 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
 
   def append(store, request) do
     cond do
+      EventStore.validate_request(request) == :invalid_request ->
+        {:error, :invalid_request, store}
+
+      duplicate_dedupe_key?(store, request) ->
+        {:error, :conflict, store}
+
       request.expected_position != store.head ->
         {:error, :conflict, store}
 
@@ -83,6 +91,12 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
           do: {:error, :unknown_outcome, committed},
           else: {:ok, committed, committed.head}
     end
+  end
+
+  defp duplicate_dedupe_key?(store, request) do
+    keys = Enum.map(request.outbox, & &1.dedupe_key)
+    used = MapSet.new(store.outbox, & &1.dedupe_key)
+    length(Enum.uniq(keys)) != length(keys) or Enum.any?(keys, &MapSet.member?(used, &1))
   end
 
   defp commit(store, request) do
@@ -145,6 +159,9 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
   def projection(store, :stock), do: sorted_rows(store.stock)
 
   defp sorted_rows(rows), do: rows |> Enum.sort() |> Enum.map(&elem(&1, 1))
+
+  @impl true
+  def outbox(store), do: store.outbox
 
   @impl true
   def acquire_authority(store, _scope, _owner) do
