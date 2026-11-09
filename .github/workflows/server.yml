@@ -1,0 +1,65 @@
+name: server
+
+on:
+  push:
+    branches: [main]
+    paths: ["server/**", ".github/workflows/server.yml"]
+  pull_request:
+    paths: ["server/**", ".github/workflows/server.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: server
+
+env:
+  MIX_ENV: test
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: server/.tool-versions
+          version-type: strict
+      - uses: actions/cache@v4
+        with:
+          path: |
+            server/deps
+            server/_build
+          key: mix-${{ runner.os }}-${{ hashFiles('server/.tool-versions', 'server/mix.lock') }}
+      - run: mix deps.get --check-locked
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      # Full suite runs in hosted CI only; locally, run focused files.
+      - run: mix test --warnings-as-errors
+
+  mutation:
+    # Bounded curated cohort, one worker, in a disposable copy.
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: server/.tool-versions
+          version-type: strict
+      - uses: actions/cache@v4
+        with:
+          path: |
+            server/deps
+            server/_build
+          key: mix-${{ runner.os }}-${{ hashFiles('server/.tool-versions', 'server/mix.lock') }}
+      - run: mix deps.get --check-locked && mix compile
+      - run: elixir scripts/mutation_cohort.exs "$RUNNER_TEMP/mutation"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: ${{ runner.temp }}/mutation/mutation_report.txt
+          if-no-files-found: ignore

@@ -3,10 +3,12 @@
 ## Start here
 
 Feud Hall is a persistent online restaurant-management game. This repository
-currently contains the design and artwork; application scaffolding, dependency
-manifests, and CI workflows have not been implemented. Inspect the current tree
-before choosing commands. Update this guide with verified entry points as code
-lands; do not describe planned features or checks as already working.
+contains the design, artwork, and the first implementation slice: the pure
+Elixir economic core in `server/` (Milestone 1, one-cuisine internal slice; no
+Phoenix, PostgreSQL, or frontend yet). Inspect the current tree before choosing
+commands. Update this guide with verified entry points as code lands; do not
+describe planned features or checks as already working. Verified backend entry
+points are listed in [Testing](docs/TESTING.md#implemented-backend-entry-points).
 
 Read the relevant owning documents before changing behavior:
 
@@ -189,9 +191,12 @@ Consult the full design for conditions and tuning; these are common failure poin
   Node, cap its old space at 1536 MB per process; this is not a Bun heap setting.
   Use hosted CI for broad suites and expensive property/mutation work; local
   `bun check` remains permitted within these limits.
-- No runnable application commands are established yet. Once manifests exist,
-  use the pinned Bun/Elixir toolchains and lockfiles; do not invent passing build/test
-  claims or assume a default script is safe.
+- Backend commands run from `server/` with the pinned `.tool-versions` and
+  `mix.lock`; see [Testing](docs/TESTING.md#implemented-backend-entry-points).
+  `mix test` with no file argument is the full suite: run focused files locally
+  and leave the full suite and mutation cohort to hosted CI unless the owner
+  approves otherwise. No frontend manifests exist yet; do not invent passing
+  build/test claims or assume a default script is safe.
 - Verify meaningful behavior at the layer changed. Documentation/artwork changes
   need appropriate link, format, or render checks rather than a game test suite.
   Run configured format/lint checks only after inspecting their command chain.

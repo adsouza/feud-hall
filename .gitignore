@@ -1,13 +1,13 @@
-# Elixir / Phoenix
-/_build
-/cover
-/deps
-/doc
-/.fetch
+# Elixir / Phoenix (unanchored: the Mix project lives in server/)
+_build/
+cover/
+deps/
+doc/
+.fetch
 erl_crash.dump
 *.ez
 *.beam
-/config/*.secret.exs
+**/config/*.secret.exs
 .elixir_ls/
 
 # Svelte / Vite / TypeScript (including nested frontend packages)

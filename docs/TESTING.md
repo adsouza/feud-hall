@@ -1,9 +1,11 @@
 # Feud Hall Testing
 
-Status: verification plan. Application manifests, test runners, and hosted CI
-workflows are not implemented yet. Commands below are planned interfaces, not
-claims of installed tooling or passing checks. Pin versions and verify command
-chains when the first application slice lands.
+Status: verification plan with the first backend slice implemented. The Elixir
+economic core in `server/` has a Mix manifest, lockfile, pinned toolchain, and a
+hosted CI workflow (`.github/workflows/server.yml`); its verified entry points
+are listed under [Implemented backend entry points](#implemented-backend-entry-points).
+Frontend commands below remain planned interfaces, not claims of installed
+tooling or passing checks.
 
 The [game design](GAME_DESIGN.md#required-correctness-scenarios) owns gameplay
 acceptance scenarios; [architecture](ARCHITECTURE.md#architecture-verification)
@@ -102,6 +104,30 @@ suite or any indirect `tsc` execution.
 | Browser/component tests | Bun-invoked scripts | Pin the browser/component harness when added; use actual browser/webview checks for interaction, IME, and rendering. |
 | Backend unit/property test | `mix test <test-file>` | Focused ExUnit/StreamData or equivalent; inspect Mix aliases and setup first. |
 | SQL, replay, mutation, load, package checks | Dedicated scripts/jobs | Implement explicit bounded entry points; run broad/heavy work in hosted CI. |
+
+## Implemented backend entry points
+
+Run from `server/` with Elixir/OTP pinned in `server/.tool-versions` and
+dependencies locked in `server/mix.lock` (StreamData, test-only). The project
+defines no Mix aliases, so these commands have no hidden child steps.
+
+| Check | Command | Scope and cost |
+| --- | --- | --- |
+| Dependencies | `mix deps.get` (CI: `--check-locked`) | Fetches StreamData only. |
+| Formatting | `mix format`; CI: `mix format --check-formatted` | `.formatter.exs` covers `lib`, `test`, `scripts`, and Mix files. |
+| Compile | `mix compile --warnings-as-errors` | Pure Elixir, no NIFs or network. |
+| Focused tests | `mix test <file> --max-cases 1` | One file at a time locally; each domain file runs in well under a second. |
+| Model-based property | `mix test test/feud_hall/properties/hall_trace_property_test.exs --max-cases 1` | Explicit budget: 100 runs, at most 70 actions; measured about 130 MB peak RSS locally. |
+| Full suite | `mix test` | Hosted CI. Locally only with the owner's advance permission. |
+| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>` | Copies the project into `<empty-dir>`, never edits the checkout; one worker, focused files per mutant, baseline verified before and after. Hosted CI job; about 20 s and under 100 MB RSS locally. |
+
+The property test checks the independent oracle (`test/support/oracle.ex`) after
+every accepted command, then genesis replay, snapshot-plus-tail replay, JSON
+codec round-trip replay, and clock-partition equivalence, and asserts
+cross-run progress floors so an all-rejected trace cannot pass. The mutation
+cohort's curated faults each name the test file expected to kill them; a
+compile failure is reported as invalid and a timeout as a timeout, never as a
+kill.
 
 ## Choose checks by change
 

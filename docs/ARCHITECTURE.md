@@ -1,6 +1,6 @@
 # Feud Hall Architecture
 
-Status: implementation design; no runtime, recovery, or capacity qualification is claimed.
+Status: implementation design with a first pure-core slice ([implementation status](#implementation-status)); no runtime, recovery, or capacity qualification is claimed.
 
 This document owns the implementation contracts for the game defined in the
 [game design](GAME_DESIGN.md). The [event-sourcing ADR](decisions/0001-event-sourcing.md)
@@ -956,6 +956,37 @@ geometry-to-hit alignment at different sizes/zooms, small and overlapping
 regions, all cuisine IDs, input methods, localization, and map-loading failure.
 Installed clients must include the map assets; missing WebGL must not disable
 the picker or its list alternative.
+
+## Implementation status
+
+Milestone 1 (economic core) has an internal one-cuisine slice in `server/`.
+It qualifies none of the capacity, recovery, or PostgreSQL contracts above.
+
+| Layer | Modules |
+| --- | --- |
+| Domain (pure) | `FeudHall.Domain.Money`, `Clock`, `Content` (+ `SliceCatalog`), `Dietary`, `Substitution`, `Inventory`, `Offers`, and the hall boundary `Hall` with `Decider`, `Evolver`, `Advance`, `Settlement` |
+| Application | `CommandWorkflow` (validation, fingerprinted receipts, separate clock-advance batch, decide, append) and the `EventStore` port |
+| Infrastructure | `InMemoryEventStore` (with failure injection), `EventCodec` (allowlisted JSON), `Snapshot` (versioned, checksummed) |
+
+Implementation decisions within the contracts above:
+
+- **One master tick.** Hall and available-service time both advance only while
+  the service is ready and both pause during downtime, so they stay exactly
+  proportional (24:1). The domain stores hall milliseconds and converts
+  service-time quantities explicitly through `Clock.service_duration/1`. If a
+  future rule makes the clocks diverge, replace this with two stored clocks.
+- **Deterministic identities.** Entity IDs (visit, tray, order, batch, wallet
+  slice) derive from the command ID, so a decision is a pure function of state,
+  command, and context, and a retry cannot mint a second entity.
+- **Temporary seams.** Kitchen progress is decided from explicit
+  `{:system, :kitchen}` commands until the workforce milestone schedules it from
+  staff coverage, and purchases fill directly at the catalog base price until
+  the batched scarcity-priced market lands. Both already emit the same facts
+  the later mechanisms will produce.
+
+Not yet implemented: the PostgreSQL adapter and projections, market clearing,
+simulated arrivals and choice, workforce/helpers and wages, rent and leases,
+identity/invitations/licensing, reports, NPCs, Phoenix, and every client.
 
 ## Architecture verification
 
