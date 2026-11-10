@@ -27,7 +27,7 @@ defmodule FeudHall.Domain.Kitchen do
   is reused after finished orders leave live state.
   """
 
-  alias FeudHall.Domain.Hall.Management
+  alias FeudHall.Domain.Hall.{CounterPlay, Management}
 
   @stages [:queued_prep, :prep, :queued_finish, :finish, :ready]
 
@@ -42,7 +42,7 @@ defmodule FeudHall.Domain.Kitchen do
   state, using the same FIFO keys as `next_start/2`.
   """
   def estimate(state, stall_id, new_components, now) do
-    {earliest, _valid_for} = estimate_at(state, stall_id, new_components, now)
+    {earliest, _valid_for, _items} = estimate_at(state, stall_id, new_components, now)
     %{earliest_completion: earliest}
   end
 
@@ -53,7 +53,7 @@ defmodule FeudHall.Domain.Kitchen do
   this forecast is valid while the existing kitchen state stays fixed.
   """
   def completion_forecast(state, stall_id, course, now) do
-    {time, valid_for} = estimate_at(state, stall_id, [course], {now, 1})
+    {time, valid_for, _items} = estimate_at(state, stall_id, [course], {now, 1})
     {at(time), rate(time), valid_for}
   end
 
@@ -126,7 +126,14 @@ defmodule FeudHall.Domain.Kitchen do
       end)
 
     {items, counter_order} = forecast_fifo(items, & &1.ready, forecast?)
-    initial = if(counter, do: counter.done_at, else: now)
+    task = CounterPlay.task(state, stall_id)
+
+    initial =
+      cond do
+        counter -> counter.done_at
+        task -> elem(later(now, task.done_at), 0)
+        true -> now
+      end
 
     {ends, _free, counter_assignment} =
       Enum.reduce(items, {%{}, initial, :infinity}, fn item, {ends, free, bound} ->
@@ -146,7 +153,18 @@ defmodule FeudHall.Domain.Kitchen do
         counter_assignment
       ])
 
-    {ends[:new], bound}
+    forecast =
+      if new_components == [] do
+        Map.new(items, fn item -> {item.key, %{ready_at: at(item.ready), service_at: at(ends[item.key])}} end)
+      end
+
+    {ends[:new], bound, forecast}
+  end
+
+  @doc "Current readiness and service estimates for accepted counter items."
+  def counter_forecast(state, stall_id) do
+    {_, _, items} = estimate_at(state, stall_id, [], state.now)
+    items
   end
 
   @doc """
@@ -171,10 +189,14 @@ defmodule FeudHall.Domain.Kitchen do
 
       Map.get(state.stalls[stall_id], :counter) == nil and
         get_in(state, [:management, :selections, stall_id]) == nil and
+        CounterPlay.task(state, stall_id) == nil and
           Management.stage_available?(state, stall_id, :counter) ->
         case ready_items(state, stall_id) do
-          [first | _] -> {:handover, first}
-          [] -> nil
+          [first | _] ->
+            {:handover, first}
+
+          [] ->
+            if event = CounterPlay.automatic(state, stall_id), do: {:staging, event}
         end
 
       true ->
@@ -224,6 +246,8 @@ defmodule FeudHall.Domain.Kitchen do
   end
 
   # -- helpers -------------------------------------------------------------
+
+  def counter_orders(state, stall_id), do: live_orders(state, stall_id)
 
   defp live_orders(state, stall_id) do
     state.orders

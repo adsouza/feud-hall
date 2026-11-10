@@ -9,6 +9,8 @@ defmodule FeudHall.Domain.Hall.Advance do
     1. raw-stock and ready-food expiry (expiry wins an exact freshness tie);
     2. the 03:00 cleaning cutoff, which closes customer access and cancels all
        unserved customer work, queued or in progress;
+    2.75. pickup setup completes before a tray that becomes ready at the same
+       time can claim the counter;
     3. kitchen stage completions and counter handover completions (service);
     4. diner deadlines and dessert-offer timeouts (a deadline falls at its
        instant, after same-timestamp service, so service exactly at the
@@ -40,6 +42,7 @@ defmodule FeudHall.Domain.Hall.Advance do
 
   alias FeudHall.Domain.Hall.{
     Admission,
+    CounterPlay,
     Evolver,
     Management,
     OperatingPolicy,
@@ -61,6 +64,7 @@ defmodule FeudHall.Domain.Hall.Advance do
       {1, &expiries/1},
       {2, &cleaning_start/1},
       {2.5, &Recognition.boundaries/1},
+      {2.75, &CounterPlay.completions/1},
       {3, &kitchen_completions/1},
       {4, &deadlines/1},
       {5, &reopening/1},
@@ -70,6 +74,7 @@ defmodule FeudHall.Domain.Hall.Advance do
       {8.5, &Management.boundaries/1},
       {8.75, &Progression.boundaries/1},
       {8.9, &Population.boundaries/1},
+      {8.95, &CounterPlay.interruptions/1},
       {9, &dispatch/1}
     ]
   end
@@ -385,6 +390,9 @@ defmodule FeudHall.Domain.Hall.Advance do
     [expired | Management.enforce(Evolver.evolve(state, expired))]
   end
 
+  defp handle(state, {:counter_staging_done, sid}), do: CounterPlay.finish(state, sid)
+  defp handle(state, {:counter_staging_yield, sid}), do: CounterPlay.interrupt(state, sid)
+
   defp handle(state, {:dispatch, sid}), do: dispatch_stall(state, sid, [])
 
   defp handle(state, {:tray_deadline, tid}), do: Settlement.cancel_tray(state, state.trays[tid], :deadline_missed)
@@ -433,14 +441,16 @@ defmodule FeudHall.Domain.Hall.Advance do
   defp start_event(state, _sid, {:finish, oid}),
     do: %{type: :stage_started, order_id: oid, stage: :finish, done_at: state.now + state.orders[oid].finish_ms}
 
+  defp start_event(_state, _sid, {:staging, event}), do: event
+
   defp start_event(state, sid, {:handover, {kind, id}}) do
     Management.start_selection(state, sid) ||
-      %{
+      CounterPlay.shorten(state, %{
         type: :handover_started,
         stall_id: sid,
         item: %{kind: kind, id: id},
         done_at: state.now + state.catalog.rules.handover_ms
-      }
+      })
   end
 
   # Expiring reserved stock may be replaced only by fresh stock of the same

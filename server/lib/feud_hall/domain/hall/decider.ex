@@ -19,6 +19,7 @@ defmodule FeudHall.Domain.Hall.Decider do
     Admission,
     Advance,
     CatalogExpansion,
+    CounterPlay,
     Equipment,
     Evolver,
     Management,
@@ -29,6 +30,7 @@ defmodule FeudHall.Domain.Hall.Decider do
   }
 
   @management_commands Management.commands()
+  @counter_commands CounterPlay.commands()
   @progression_commands Progression.commands()
   @max_qty 1_000_000
   @max_price 1_000_000
@@ -78,6 +80,11 @@ defmodule FeudHall.Domain.Hall.Decider do
     target = Clock.hall_at_service(to)
     if target < state.now, do: {:error, :clock_cannot_move_backwards}, else: {:ok, Advance.run(state, target)}
   end
+
+  def decide(state, {:enable_visitor_play, %{}}, %{actor: {:system, :admin}}), do: CounterPlay.enable(state)
+
+  def decide(state, {kind, _} = command, ctx) when kind in @counter_commands,
+    do: CounterPlay.decide(state, command, ctx)
 
   def decide(state, {kind, _} = command, ctx) when kind in @progression_commands,
     do: Progression.decide(state, command, ctx)

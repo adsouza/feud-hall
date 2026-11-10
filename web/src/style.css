@@ -256,3 +256,45 @@ textarea {
   min-width: 0;
   max-width: 100%;
 }
+
+.hall-mode {
+  display: flex;
+  gap: 0.5rem;
+  margin-block: 0.65rem;
+}
+.hall-mode button[aria-pressed="true"] {
+  border-color: var(--accent, #ffc96d);
+}
+.hall-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2.5fr) minmax(14rem, 1fr);
+  align-items: start;
+  gap: 0.9rem;
+  margin-block: 0.75rem;
+}
+.hall-layout.list-mode {
+  grid-template-columns: minmax(0, 1fr);
+}
+.stall-inspector,
+.visit-tracker {
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+}
+.stall-inspector select {
+  width: 100%;
+}
+.counter-options {
+  display: grid;
+  gap: 0.65rem;
+  padding-left: 0;
+  list-style: none;
+}
+.counter-options small {
+  display: block;
+}
+@media (max-width: 760px) {
+  .hall-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

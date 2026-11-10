@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { fade } from "svelte/transition";
   import appIcon from "../../assets/branding/feud-hall-icon.svg?no-inline";
   import CuisinePicker from "./CuisinePicker.svelte";
+  import DinerCompare from "./DinerCompare.svelte";
+  import HallScene from "./HallScene.svelte";
+  import type { CameraState } from "./hall-scene";
   import {
     ApiError,
     cash,
@@ -15,7 +18,16 @@
     send,
     serviceDuration,
   } from "./api";
-  import type { DiningHistory, Page, Pending, Quote, View } from "./api";
+  import type {
+    DiningFilters,
+    DiningHistory,
+    DiningOption,
+    DiningOptions,
+    Page,
+    Pending,
+    Quote,
+    View,
+  } from "./api";
   import { refusalMessage } from "./refusals";
   import { contentLabel, label } from "./i18n";
   import type { Key, Locale } from "./i18n";
@@ -31,6 +43,19 @@
   let pending = $state<Pending | null>(null);
   let acknowledgedHandover = $state<Pending | null>(null);
   let submitting = $state(false);
+  let hallMode = $state<"3d" | "list">("3d");
+  let hallSelection = $state("");
+  let sceneError = $state(false);
+  let camera = $state.raw<CameraState>();
+  let comparison = $state<DiningOptions | null>(null);
+  let compareFilters = $state<DiningFilters>({
+    profile: "unrestricted",
+    budget: "",
+    drink: false,
+    newOnly: false,
+    onlySelected: false,
+    sort: "wait",
+  });
   let guestName = $state("");
   let restaurantName = $state("");
   let chosenCuisine = $state("");
@@ -78,9 +103,29 @@
 
   let profile = $derived(view?.profile ?? null);
   let receiptScope = $derived(
-    page === "visit" && profile
+    (page === "visit" || (page === "hall" && view?.hall.visitor_play)) &&
+      profile
       ? JSON.stringify([profile.account.id, profile.visit?.id])
       : "",
+  );
+  let hallStall = $derived(
+    view?.hall.stalls.find((stall) => stall.stall_id === hallSelection),
+  );
+  let recentPickup = $derived.by(() => {
+    const newest = receipts?.receipts[0];
+    if (!newest || !view || view.hall.now - newest.at > 720_000) return "";
+    return newest.courses.some(
+      (course) => course.kind === "main" && course.outcome === "served",
+    )
+      ? newest.stall_id
+      : "";
+  });
+  let pickup = $derived(
+    profile?.visit
+      ? profile.visit.stage === "served"
+        ? profile.visit.stall
+        : ""
+      : recentPickup,
   );
   let restaurant = $derived(profile?.restaurant ?? null);
   let ownerStall = $derived(
@@ -170,6 +215,8 @@
   );
   let trayRequest = $derived(currentQuoteRequest("tray"));
   let dessertRequest = $derived(currentQuoteRequest("dessert"));
+  let autoDessertKey = "";
+  let dessertPreviewUnavailable = $state(false);
   let currentQuote = $derived(
     quoteRequest && isCurrentQuoteRequest(quoteRequest) ? quote : null,
   );
@@ -250,6 +297,20 @@
   });
 
   $effect(() => {
+    if (
+      !view?.hall.visitor_play ||
+      page !== "visit" ||
+      !connected ||
+      !dessertRequest
+    )
+      return;
+    const request = dessertRequest;
+    if (autoDessertKey === request.key) return;
+    autoDessertKey = request.key;
+    untrack(() => void showQuote(request, true));
+  });
+
+  $effect(() => {
     if (status !== "update") {
       dismissFocused = false;
       return;
@@ -267,6 +328,10 @@
     try {
       const current = await getView();
       if (!view || current.hall.position >= view.hall.position) {
+        if (current.profile?.account.id !== profile?.account.id) {
+          comparison = null;
+          compareFilters.newOnly = false;
+        }
         if (
           !current.profile?.account["reviewer?"] ||
           current.profile.account.id !== profile?.account.id
@@ -389,6 +454,13 @@
     page = "visit";
   }
 
+  function chooseMeal(option: DiningOption, profileId: string) {
+    inspect(option.stall_id);
+    main = option.main;
+    drink = option.drink ?? "";
+    diet = profileId;
+  }
+
   function clearQuote() {
     quote = null;
     quoteRequest = null;
@@ -431,18 +503,23 @@
     );
   }
 
-  async function showQuote(request: QuoteRequest | null) {
+  async function showQuote(request: QuoteRequest | null, automatic = false) {
     if (composing || !request) return;
     quote = null;
     // A fresh object also supersedes an earlier request for the same inputs.
     const sent = { ...request };
     quoteRequest = sent;
-    status = null;
+    dessertPreviewUnavailable = false;
+    if (!automatic) status = null;
     try {
       const result = await getQuote(sent.fields);
       if (isCurrentQuoteRequest(sent)) quote = result;
     } catch (error) {
       if (!isCurrentQuoteRequest(sent)) return;
+      if (automatic) {
+        dessertPreviewUnavailable = true;
+        return;
+      }
       if (error instanceof ApiError) {
         status = {
           // An unavailable ingredient bill is a 409. An unavailable hall returns 503.
@@ -462,6 +539,37 @@
     await submit("open_stall", { stall_id: id });
   }
 </script>
+
+{#snippet visitProgress()}
+  {#if profile?.visit && view}
+    {@const visit = profile.visit}
+    {@const stage = view.hall.visitor_play ? visit.stage : undefined}
+    <p role="status">
+      {t(
+        stage === "queued"
+          ? "queuedVisit"
+          : stage === "counter"
+            ? "atCounter"
+            : stage === "served" || (!stage && visit.tray_status === "served")
+              ? "served"
+              : "preparing",
+      )}
+      · {view.hall.stalls.find((stall) => stall.stall_id === visit.stall)
+        ?.name ?? visit.stall}
+    </p>
+    {#if view.hall.visitor_play && visit.recipes?.length}
+      <p>{visit.recipes.map(title).join(" + ")}</p>
+    {/if}
+    {#if view.hall.visitor_play && visit.estimate != null}
+      <p>
+        {t("estimatedWait")}
+        {serviceDuration(visit.estimate - view.hall.now)} · {t(
+          "visitEstimateHint",
+        )}
+      </p>
+    {/if}
+  {/if}
+{/snippet}
 
 <header>
   <div class="brand">
@@ -552,32 +660,142 @@
           }}>{t("startGuest")}</button
         >
       </p>{/if}
-    <div class="cards">
-      {#each view.hall.stalls as stall (stall.stall_id)}
-        <article class="stall">
-          <p class="eyebrow">{stall.stall_id} · {title(stall.tier)}</p>
-          <h2>{stall.name}</h2>
-          <p>
-            {title(stall.cuisine)}{stall.npc
-              ? " · " + t("npcOperator")
-              : ""}{stall.retiring ? " · " + t("npcRetiring") : ""}
-          </p>
-          {#each stall.awards ?? [] as award}
-            {#if !award.cuisine || award.cuisine === stall.cuisine}
-              <small>{title(award.distinction)}</small>
+    {#if view.hall.visitor_play}
+      {#if profile?.visit || pickup}
+        <section class="visit-tracker" aria-label={t("visit")}>
+          {@render visitProgress()}
+          {#if pickup}
+            <p role="status">
+              {t("pickupReady").replace(
+                "{stall}",
+                view.hall.stalls.find((stall) => stall.stall_id === pickup)
+                  ?.name ?? pickup,
+              )}
+            </p>
+          {/if}
+          <button onclick={() => (page = "visit")}>{t("viewVisit")}</button>
+        </section>
+      {/if}
+      <div class="hall-mode" role="group" aria-label={t("hall")}>
+        <button
+          aria-pressed={hallMode === "3d"}
+          onclick={() => {
+            sceneError = false;
+            hallMode = "3d";
+          }}>{t("hall3d")}</button
+        >
+        <button
+          aria-pressed={hallMode === "list"}
+          onclick={() => (hallMode = "list")}>{t("hallList")}</button
+        >
+      </div>
+      {#if sceneError}<p role="status">{t("sceneUnavailable")}</p>{/if}
+      <div class="hall-layout" class:list-mode={hallMode === "list"}>
+        {#if hallMode === "3d"}
+          <div>
+            <HallScene
+              stalls={view.hall.stalls}
+              selected={hallSelection}
+              {pickup}
+              saved={camera}
+              {t}
+              select={(id) => (hallSelection = id)}
+              saveCamera={(state) => (camera = state)}
+              onUnavailable={() => {
+                sceneError = true;
+                hallMode = "list";
+              }}
+            />
+          </div>
+        {/if}
+        <section class="stall-inspector" aria-label={t("viewMenu")}>
+          <label
+            >{t("location")}
+            <select bind:value={hallSelection}>
+              <option value="">—</option>
+              {#each view.hall.stalls as stall (stall.stall_id)}
+                <option value={stall.stall_id}
+                  >{stall.name} · {stall.stall_id}</option
+                >
+              {/each}
+            </select>
+          </label>
+          {#if hallStall}
+            <h2>{hallStall.name}</h2>
+            <p>
+              {title(hallStall.cuisine)} · {t(
+                hallStall["open?"] ? "open" : "closed",
+              )}
+            </p>
+            <p>{t("hallQueue")} {hallStall.activity?.waiting ?? 0}</p>
+            {#if hallStall.activity?.paused}<p>{t("tradingPaused")}</p>{/if}
+            <ul>
+              {#each Object.entries(hallStall.menu) as [id, price] (id)}
+                <li>{title(id)} · {cash(price)}</li>
+              {/each}
+            </ul>
+            {#if pickup === hallStall.stall_id}
+              <button onclick={() => (page = "visit")}>{t("viewVisit")}</button>
+            {:else if !profile?.visit && hallStall["open?"] && view.hall.access === "open"}
+              <button onclick={() => inspect(hallSelection)}
+                >{t("orderHere")}</button
+              >
             {/if}
-          {/each}
-          <span class:good={stall["open?"] && view.hall.access === "open"}
-            >{t(
-              stall["open?"] && view.hall.access === "open" ? "open" : "closed",
-            )}</span
-          >
-          <button onclick={() => inspect(stall.stall_id)}
-            >{t("viewMenu")}</button
-          >
-        </article>
-      {:else}<p>{t("emptyHall")}</p>{/each}
-    </div>
+          {:else}
+            <p>{t("chooseStallToInspect")}</p>
+          {/if}
+          {#key profile?.account.id}
+            <DinerCompare
+              diets={dietaryProfiles}
+              signedIn={!!profile}
+              allowed={connected && view.hall.access === "open"}
+              bind:filters={compareFilters}
+              bind:result={comparison}
+              stall={hallSelection}
+              {t}
+              {title}
+              choose={chooseMeal}
+            />
+          {/key}
+        </section>
+      </div>
+    {/if}
+    {#if !view.hall.visitor_play || hallMode === "list"}
+      <div class="cards">
+        {#each view.hall.stalls as stall (stall.stall_id)}
+          <article class="stall">
+            <p class="eyebrow">{stall.stall_id} · {title(stall.tier)}</p>
+            <h2>{stall.name}</h2>
+            <p>
+              {title(stall.cuisine)}{stall.npc
+                ? " · " + t("npcOperator")
+                : ""}{stall.retiring ? " · " + t("npcRetiring") : ""}
+            </p>
+            {#each stall.awards ?? [] as award}
+              {#if !award.cuisine || award.cuisine === stall.cuisine}
+                <small>{title(award.distinction)}</small>
+              {/if}
+            {/each}
+            <span class:good={stall["open?"] && view.hall.access === "open"}
+              >{t(
+                stall["open?"] && view.hall.access === "open"
+                  ? "open"
+                  : "closed",
+              )}</span
+            >
+            <p>{t("hallQueue")} {stall.activity?.waiting ?? 0}</p>
+            <button
+              onclick={() =>
+                view?.hall.visitor_play
+                  ? (hallSelection = stall.stall_id)
+                  : inspect(stall.stall_id)}
+            >
+              {t("viewMenu")}
+            </button>
+          </article>
+        {:else}<p>{t("emptyHall")}</p>{/each}
+      </div>
+    {/if}
     {#if view.hall.failed_ventures?.length}
       <details>
         <summary>{t("businessHistory")}</summary>
@@ -1365,11 +1583,17 @@
         >
       </p>
       {#if profile.visit}
-        <p>
-          {t(profile.visit.tray_status === "served" ? "served" : "preparing")} · {profile
-            .visit.stall}
-        </p>
+        {@render visitProgress()}
         {#if profile.visit.dessert === "offered"}
+          {#if view.hall.visitor_play && profile.visit.dessert_deadline != null}
+            <p>
+              {t("dessertOfferLeft")}
+              {serviceDuration(profile.visit.dessert_deadline - view.hall.now)}
+            </p>
+          {/if}
+          {#if dessertPreviewUnavailable}
+            <p role="status">{t("dessertPreviewUnavailable")}</p>
+          {/if}
           <button
             disabled={disabled || !dessertRequest}
             onclick={() => showQuote(dessertRequest)}
@@ -1381,7 +1605,14 @@
               submit("decline_dessert", { visit_id: profile?.visit?.id })}
             >{t("skip")}</button
           >
-        {:else if profile.visit.tray_status === "accepted"}
+        {:else if view.hall.visitor_play && profile.visit.can_cancel_dessert}
+          <button
+            {disabled}
+            onclick={() =>
+              submit("cancel_dessert", { visit_id: profile?.visit?.id })}
+            >{t("cancelDessert")}</button
+          >
+        {:else if view.hall.visitor_play ? profile.visit.can_cancel : profile.visit.tray_status === "accepted"}
           <button
             {disabled}
             onclick={() =>
@@ -1451,9 +1682,13 @@
     {#if currentQuote}
       <section class="quote">
         <p>
-          <strong>{cash(currentQuote.total)}</strong> · {clock(
-            currentQuote.earliest_completion,
-          )}
+          <strong>{cash(currentQuote.total)}</strong> ·
+          {#if quoteRequest?.kind === "dessert"}
+            {t("estimatedWait")}
+            {serviceDuration(currentQuote.earliest_completion - view.hall.now)}
+          {:else}
+            {clock(currentQuote.earliest_completion)}
+          {/if}
         </p>
         <button
           disabled={disabled || !profile}
@@ -1467,7 +1702,10 @@
                 ...payload,
                 drink: fields.drink ?? null,
               });
-          }}>{t("acceptOrder")}</button
+          }}
+          >{t(
+            quoteRequest?.kind === "dessert" ? "acceptDessert" : "acceptOrder",
+          )}</button
         >
       </section>
     {/if}
@@ -1541,6 +1779,32 @@
             )}</span
           >
         </p>
+        {#if view.hall.visitor_play}
+          {#if selectedShift.approaching?.length}
+            <details open>
+              <summary>{t("approachingTrays")}</summary>
+              <ul>
+                {#each selectedShift.approaching as item (item.id)}
+                  <li>
+                    {item.recipes.map(title).join(" + ")} ·
+                    {t("estimatedReadyIn")}
+                    {serviceDuration(
+                      (item.ready_at ?? view.hall.now) - view.hall.now,
+                    )}
+                  </li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
+          {#if selectedShift.prepared}<p>{t("preparedCounter")}</p>{/if}
+          {#if selectedShift.staged}<p>
+              {t("stagedTasks")}
+              {selectedShift.staged}
+            </p>{/if}
+          {#if selectedShift.tasks && !selectedShift.handover}<p>
+              {t("lastService")}
+            </p>{/if}
+        {/if}
         {#if selectedShift.handover}
           <p role="status">
             {t("handoverInProgress").replace(
@@ -1569,19 +1833,82 @@
               serviceDuration(selectedShift.selection.deadline - view.hall.now),
             )}
           </p>
-          {#each selectedShift.selection.items as item (item.id)}
+          <ul class="counter-options">
+            {#each selectedShift.selection.items as item (item.id)}
+              <li>
+                <button
+                  {disabled}
+                  onclick={() =>
+                    submit("select_handover", {
+                      shift_id: selectedShift?.shift_id,
+                      selection_id: selectedShift?.selection?.id,
+                      item_id: item.id,
+                      recipes: item.recipes,
+                    })}>{item.recipes.map(title).join(" + ")}</button
+                >
+                {#if view.hall.visitor_play && item.number != null}
+                  <small>
+                    {t("trayNumber").replace("{number}", String(item.number))} ·
+                    {t("waited")}
+                    {serviceDuration(
+                      view.hall.now - (item.queued_at ?? view.hall.now),
+                    )} ·
+                    {t("serveBy")}
+                    {serviceDuration(
+                      (item.serve_by ?? view.hall.now) - view.hall.now,
+                    )}
+                    {#if selectedShift.selection.auto_item === item.id}
+                      · {t("fifoChoice")}{/if}
+                  </small>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {:else if selectedShift.staging}
+          <p role="status">
+            {t("stagingInProgress")} · {serviceDuration(
+              selectedShift.staging.done_at - view.hall.now,
+            )}
+          </p>
+          {#if selectedShift.waiting?.length}
+            <ul>
+              {#each selectedShift.waiting as item (item.id)}
+                <li>
+                  {item.recipes.map(title).join(" + ")} · {t("serveBy")}
+                  {serviceDuration(
+                    (item.serve_by ?? view.hall.now) - view.hall.now,
+                  )}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          <button
+            {disabled}
+            onclick={() =>
+              submit("yield_counter_staging", {
+                shift_id: selectedShift?.shift_id,
+                task_id: selectedShift?.staging?.id,
+              })}>{t("yieldToService")}</button
+          >
+        {:else}
+          <p>{t("standby")}</p>
+          {#if selectedShift.staging_offer}
             <button
               {disabled}
               onclick={() =>
-                submit("select_handover", {
+                submit("start_counter_staging", {
                   shift_id: selectedShift?.shift_id,
-                  selection_id: selectedShift?.selection?.id,
-                  item_id: item.id,
-                  recipes: item.recipes,
-                })}>{item.recipes.map(title).join(" + ")}</button
+                })}
             >
-          {/each}
-        {:else}<p>{t("standby")}</p>{/if}
+              {t("stagingOffer")}
+            </button>
+            <p>
+              {t("stageWorkTime")}
+              {serviceDuration(selectedShift.staging_offer - view.hall.now)} ·
+              {t("setupSaving")}
+            </p>
+          {/if}
+        {/if}
         <button
           {disabled}
           onclick={() =>
@@ -1623,6 +1950,7 @@
         {#each profile.work.history as shift (shift.shift_id)}<li>
             {cash(shift.amount)} · {title(shift.reason)}
             {#if shift.qualified}· {t("qualified")}{/if}
+            {#if shift.staged}· {t("stagedTasks")} {shift.staged}{/if}
             {#if shift.reason === "actionable_idle"}
               <details class="shift-help">
                 <summary>

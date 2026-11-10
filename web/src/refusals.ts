@@ -1,6 +1,10 @@
 import type { Locale } from "./i18n";
 
 const messages = {
+  staging_unavailable: [
+    "That setup task is no longer available. Check the counter for the next tray.",
+    "その準備作業はできなくなりました。次のトレーをカウンターで確認してください。",
+  ],
   location_refitting: [
     "This location is still being fitted out.",
     "この店舗は準備中です。",

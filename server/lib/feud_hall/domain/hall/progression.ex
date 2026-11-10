@@ -2,7 +2,7 @@ defmodule FeudHall.Domain.Hall.Progression do
   @moduledoc "Venture and location transitions owned by the managed hall."
 
   alias FeudHall.Domain.{Market, Money}
-  alias FeudHall.Domain.Hall.{Equipment, Evolver, Management, Population, Recognition, Settlement}
+  alias FeudHall.Domain.Hall.{CounterPlay, Equipment, Evolver, Management, Population, Recognition, Settlement}
 
   @commands [
     :lease_location,
@@ -423,6 +423,7 @@ defmodule FeudHall.Domain.Hall.Progression do
   def evolve(state, %{type: :location_refitted} = e) do
     state
     |> Equipment.store(e.stall_id)
+    |> CounterPlay.clear_location(e.stall_id)
     |> update_in([:stalls, e.stall_id], fn stall ->
       Map.merge(stall, %{cuisine: e.cuisine, ready_at: e.ready_at, menu_overrides: %{}, equipment: %{}})
     end)
@@ -446,6 +447,7 @@ defmodule FeudHall.Domain.Hall.Progression do
       end
 
     state
+    |> CounterPlay.clear_location(sid)
     |> update_in([:stalls], &Map.delete(&1, sid))
     |> update_in([:management, :leases], &Map.delete(&1, sid))
   end

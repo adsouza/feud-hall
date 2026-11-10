@@ -12,6 +12,15 @@ defmodule FeudHall.Web.Router do
     run(conn, fn -> HallAuthority.management_view(authority(), device(conn)) end)
   end
 
+  get "/api/dining-options" do
+    if RateLimit.allow?({:dining_options, conn.remote_ip}, 60) do
+      params = fetch_query_params(conn).query_params
+      run(conn, fn -> HallAuthority.dining_options(authority(), device(conn), params) end)
+    else
+      respond(conn, 429, %{error: :command_denied})
+    end
+  end
+
   get "/api/dining-history" do
     before = fetch_query_params(conn).query_params["before"]
     run(conn, fn -> HallAuthority.dining_history(authority(), device(conn), before) end)

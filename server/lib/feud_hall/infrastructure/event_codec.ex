@@ -14,6 +14,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
   @schema 1
 
   @atoms ~w(
+    visitor_play_enabled duration counter_staging_started counter_staging_completed staging_yielded task_id setup_credit
     recovery_code_issued recovery_code_id device_restored
     stall_opening_queued preserve_opening business_day_reviewed closing delta cash raw wip cost_of_sales waste capex operating_cost capital revenue
     guest_profile_created device owner_admitted parent admission_route seed invitation license

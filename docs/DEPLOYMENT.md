@@ -69,6 +69,10 @@ without the actual built artifact is insufficient for rollback or verification.
    daily-activity projector before migration. The migration clears its derived
    rows and resets its checkpoint. Run `Postgres.DailyActivityProjector.catch_up/1`
    with the new code and verify its checkpoint before exposing those reports.
+   Before serving Milestone 5, apply the served-tray index migration and retain
+   a recovery-capable binary that understands the visitor-play activation and
+   staging events. Bootstrap enables them once per launch hall, including
+   existing halls. A pre-M5 server cannot replay a hall after activation.
 4. **Hand over authority.** Drain/stop the old authority under the defined
    availability protocol, acquire a newer database-fenced ownership epoch, and
    prevent the previous instance from appending or publishing as authority.

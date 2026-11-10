@@ -87,7 +87,9 @@ defmodule FeudHall.Application.EventStore do
   @doc "A bounded newest-first page of committed guest visit facts for one principal and stream."
   @callback guest_visit_events(store, String.t(), String.t(), non_neg_integer(), pos_integer(), pos_integer()) ::
               {:ok, [map()]} | {:error, term()}
-  @optional_callbacks guest_visit_events: 6
+  @callback guest_tasted_recipes(store, String.t(), String.t(), non_neg_integer()) ::
+              {:ok, [String.t()]} | {:error, term()}
+  @optional_callbacks guest_visit_events: 6, guest_tasted_recipes: 4
   @doc """
   The receipt recorded under `command_id`. A durable adapter returns
   `{:error, {:undecodable_receipt, command_id}}` for a stored receipt it cannot

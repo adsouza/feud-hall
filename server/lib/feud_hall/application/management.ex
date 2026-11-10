@@ -2,11 +2,11 @@ defmodule FeudHall.Application.Management do
   @moduledoc "Authenticated management commands and scoped read models."
   alias FeudHall.Domain.{Clock, Dietary, Identity, Kitchen, Money, Offers, PublicView}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
-  alias FeudHall.Domain.Hall.{Equipment, OperatingPolicy, Population, Progression, Recognition, Staff}
+  alias FeudHall.Domain.Hall.{CounterPlay, Equipment, OperatingPolicy, Population, Progression, Recognition, Staff}
 
   @guest_commands ~w(request_allowance admit_visit cancel_tray accept_dessert decline_dessert cancel_dessert
     accept_helper_shift leave_helper_shift select_handover report_helper_presence redeem_invitation apply_for_license
-    withdraw_license_application revoke_device issue_recovery_code)a
+    withdraw_license_application revoke_device issue_recovery_code)a ++ CounterPlay.commands()
   @owner_commands ~w(create_restaurant open_stall close_stall unlock_recipe set_menu_price remove_menu_item
     set_substitution_policy submit_purchase_request cancel_purchase_request set_staff_schedule hire_staff set_worker_schedule dismiss_staff set_helper_offers
     reserve_stall cancel_stall_draft join_waitlist leave_waitlist
@@ -73,6 +73,7 @@ defmodule FeudHall.Application.Management do
     principal = Identity.principal_for_device(identity, device)
     account = identity.principals[principal]
     public = PublicView.build(state)
+    activity = public_activity(state)
 
     stalls =
       Enum.map(public.stalls, fn stall ->
@@ -82,8 +83,10 @@ defmodule FeudHall.Application.Management do
           name: restaurant.name,
           cuisine: Progression.cuisine(state.stalls[stall.stall_id], restaurant),
           npc: restaurant.owner_kind == :npc,
+          open?: stall.open? and state.access == :open,
           retiring: Population.closing?(state, restaurant.id),
           awards: Recognition.active_awards(state, restaurant.id),
+          activity: stall_activity(state, stall.stall_id, activity),
           menu: Map.new(stall.menu, fn {id, price} -> {id, cents(price)} end)
         })
       end)
@@ -93,6 +96,7 @@ defmodule FeudHall.Application.Management do
       access: state.access,
       stalls: stalls,
       position: runtime.position,
+      visitor_play: CounterPlay.enabled?(state),
       failed_ventures: public_history(state, identity),
       lease_forecast: lease_forecast(state, public.market),
       cuisines: state.catalog.recipes |> Map.values() |> Enum.map(& &1.cuisine) |> Enum.uniq() |> Enum.sort(),
@@ -107,6 +111,37 @@ defmodule FeudHall.Application.Management do
     }
 
     {:ok, %{hall: hall, profile: account && private_view(identity, state, account, public.market)}}
+  end
+
+  defp public_activity(state) do
+    Enum.reduce(state.orders, %{}, fn {_, order}, by_stall ->
+      if order.status in Kitchen.stages() do
+        sid = state.visits[order.visit].stall
+        item = order.tray || order.id
+        cooking = if order.status in [:prep, :finish], do: 1, else: 0
+
+        Map.update(by_stall, sid, {MapSet.new([item]), cooking}, fn {items, active} ->
+          {MapSet.put(items, item), active + cooking}
+        end)
+      else
+        by_stall
+      end
+    end)
+  end
+
+  defp stall_activity(state, sid, activity) do
+    {items, cooking} = Map.get(activity, sid, {MapSet.new(), 0})
+
+    %{
+      waiting: MapSet.size(items),
+      cooking: cooking,
+      handover: state.stalls[sid].counter != nil,
+      staffed: state.access == :open and HallManagement.staffed?(state, sid, state.now),
+      paused:
+        state.access == :open and state.stalls[sid].mode == :closed and
+          get_in(state, [:management, :leases, sid, :opening_requested]) == true,
+      staging: CounterPlay.task(state, sid) != nil
+    }
   end
 
   defp private_view(identity, state, account, market) do
@@ -344,7 +379,36 @@ defmodule FeudHall.Application.Management do
 
   defp visit_view(state, visit) do
     tray = state.trays[visit.tray]
-    %{id: visit.id, stall: visit.stall, tray_status: tray && tray.status, dessert: visit.dessert}
+    item = if visit.dessert == :accepted, do: {:dessert, visit.dessert_order}, else: {:tray, visit.tray}
+    orders = CounterPlay.item_orders(state, item)
+    counter = state.stalls[visit.stall].counter
+
+    {stage, estimate} =
+      cond do
+        Enum.all?(orders, &(&1.status == :served)) ->
+          {:served, nil}
+
+        counter && counter.item == item ->
+          {:counter, counter.done_at}
+
+        true ->
+          phase = if Enum.all?(orders, &(&1.status == :queued_prep)), do: :queued, else: :preparing
+          forecast = Kitchen.counter_forecast(state, visit.stall)
+          {phase, get_in(forecast, [item, :service_at])}
+      end
+
+    %{
+      id: visit.id,
+      stall: visit.stall,
+      tray_status: tray && tray.status,
+      dessert: visit.dessert,
+      stage: stage,
+      estimate: estimate,
+      dessert_deadline: visit.dessert_offer_deadline,
+      can_cancel: stage == :queued and visit.dessert != :accepted,
+      can_cancel_dessert: stage == :queued and visit.dessert == :accepted,
+      recipes: Enum.map(orders, & &1.recipe_id)
+    }
   end
 
   defp work_view(state, principal) do
@@ -366,7 +430,7 @@ defmodule FeudHall.Application.Management do
         for {_, %{principal: ^principal, status: :ended} = old} <- m.shifts,
             do:
               old
-              |> Map.take([:shift_id, :stall_id, :at, :ended_at, :reason, :qualified, :tasks])
+              |> Map.take([:shift_id, :stall_id, :at, :ended_at, :reason, :qualified, :tasks, :staged])
               |> Map.put(:amount, cents(old.amount))
 
       %{
@@ -389,7 +453,14 @@ defmodule FeudHall.Application.Management do
           ready = Kitchen.ready_items(state, sid)
           items = Enum.map(ready, &handover_item(state, &1))
           choice = if selection.choice in ready, do: handover_item(state, selection.choice)
-          %{id: selection.id, deadline: selection.deadline, items: items, choice: choice}
+
+          %{
+            id: selection.id,
+            deadline: selection.deadline,
+            items: items,
+            choice: choice,
+            auto_item: items |> List.first() |> then(&(&1 && &1.id))
+          }
 
         _ ->
           nil
@@ -404,13 +475,44 @@ defmodule FeudHall.Application.Management do
           nil
       end
 
+    forecast = Kitchen.counter_forecast(state, sid)
+
+    approaching =
+      for {item, %{ready_at: ready}} <- Enum.sort_by(forecast, fn {item, timing} -> {timing.ready_at, item} end),
+          ready > state.now do
+        Map.put(handover_item(state, item), :ready_at, ready)
+      end
+
+    stage_task = CounterPlay.task(state, sid)
+    stage_offer = CounterPlay.offer(state, sid, shift_id)
+
     shift
-    |> Map.take([:shift_id, :stall_id, :at, :expires_at, :tasks])
-    |> Map.merge(%{selection: claim, handover: handover})
+    |> Map.take([:shift_id, :stall_id, :at, :expires_at, :tasks, :staged])
+    |> Map.merge(%{
+      selection: claim,
+      handover: handover,
+      approaching: approaching,
+      waiting: if(stage_task, do: Enum.map(Kitchen.ready_items(state, sid), &handover_item(state, &1)), else: []),
+      staging: stage_task,
+      staging_offer: stage_offer,
+      prepared: CounterPlay.prepared(state, sid) != nil
+    })
   end
 
-  defp handover_item(state, {_kind, id} = item),
-    do: %{id: id, recipes: HallManagement.handover_recipes(state, item)}
+  defp handover_item(state, {_kind, id} = item) do
+    orders = CounterPlay.item_orders(state, item)
+    summary = %{id: id, recipes: Enum.map(orders, & &1.recipe_id)}
+
+    if CounterPlay.enabled?(state) do
+      Map.merge(summary, %{
+        number: Enum.min_by(orders, & &1.seq).seq + 1,
+        queued_at: if(Enum.all?(orders, & &1.ready_at), do: Enum.max_by(orders, & &1.ready_at).ready_at),
+        serve_by: CounterPlay.item_deadline(state, item)
+      })
+    else
+      summary
+    end
+  end
 
   def quote(%{state: nil}, _device, _params), do: {:error, :hall_not_initialized}
 

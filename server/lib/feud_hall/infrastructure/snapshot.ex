@@ -9,7 +9,7 @@ defmodule FeudHall.Infrastructure.Snapshot do
   alias FeudHall.Domain.{Control, Hall}
 
   # Bump when the shape of evolved state changes.
-  @evolution_version 5
+  @evolution_version 6
 
   @doc "The evolved-state shape version this module writes and accepts."
   def evolution_version, do: @evolution_version
@@ -20,9 +20,9 @@ defmodule FeudHall.Infrastructure.Snapshot do
   requests, stall counters, order stage fields, demand bookkeeping, simulated-arrival stats);
   version 4 the demand state's last recorded operating list (`demand.operating`), which a
   `clock_advanced` written without the list credits; version 5 retires finished visits, trays
-  and orders from live state and numbers orders with `order_seq` (a version 4 state still holds
-  every finished visit and has no counter). Older snapshots are rejected as incompatible, so
-  recovery replays from genesis instead.
+  and orders from live state and numbers orders with `order_seq`. Version 6 carries activated
+  visitor play, including counter tasks and unconsumed setup. Version 5 can still supply a base
+  before activation. Versions 1–4 are incompatible, so recovery replays their events.
   """
   def take(%{hall: _, control: _} = state, position, versions \\ nil) do
     snapshot = %{position: position, evolution: @evolution_version, state: state}
@@ -40,11 +40,13 @@ defmodule FeudHall.Infrastructure.Snapshot do
   def load(<<sum::binary-size(32), body::binary>>) do
     with true <- sum == checksum(body) || {:error, :corrupt_snapshot},
          {:ok, term} <- decode(body),
-         %{evolution: @evolution_version, position: position, state: %{hall: _, control: _}} = snapshot
-         when is_integer(position) <- term do
-      {:ok, snapshot}
+         %{evolution: evolution, position: position, state: %{hall: hall, control: _}} = snapshot
+         when is_integer(evolution) and is_integer(position) <- term do
+      if evolution == @evolution_version or (evolution == 5 and pre_visitor_play?(hall)),
+        do: {:ok, snapshot},
+        else: {:error, :incompatible_snapshot}
     else
-      %{evolution: evolution} when is_integer(evolution) and evolution != @evolution_version ->
+      %{evolution: evolution} when is_integer(evolution) and evolution not in [5, @evolution_version] ->
         {:error, :incompatible_snapshot}
 
       {:error, _} = error ->
@@ -57,10 +59,16 @@ defmodule FeudHall.Infrastructure.Snapshot do
 
   def load(_), do: {:error, :corrupt_snapshot}
 
+  defp pre_visitor_play?(nil), do: true
+  defp pre_visitor_play?(hall) when is_map(hall), do: not Map.has_key?(hall, :counter_play)
+  defp pre_visitor_play?(_hall), do: false
+
   # A body that is not in the external term format at all is corrupt. With a valid checksum,
   # a well-formed body that `[:safe]` still refuses names atoms this build does not define:
   # it was written by another release, so it is incompatible. Atoms are never created here.
   defp decode(<<131, _::binary>> = body) do
+    # A cold recovery can load a snapshot before any counter-play event is decoded.
+    Code.ensure_loaded!(FeudHall.Domain.Hall.CounterPlay)
     {:ok, :erlang.binary_to_term(body, [:safe])}
   rescue
     ArgumentError -> {:error, :incompatible_snapshot}

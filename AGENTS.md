@@ -12,8 +12,10 @@ remains available for replay and focused tests. Managed slice halls add launch
 content through a recorded upgrade that preserves existing recipes and stock.
 The local [Project C report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md)
 records the original single-cuisine 150-stall measurement. Tests and the
-benchmark start authorities. The management slice adds a Phoenix endpoint and
-the Bun/Svelte client under `web/`. Use a dedicated database for a managed hall.
+benchmark start authorities. The management game runs on Phoenix with a
+Bun/Svelte client under `web/`. Launch halls enable Milestone 5 diner
+comparison, the 3D hall with its HTML alternative, and counter staging through
+a recorded activation. Use a dedicated database for a managed hall.
 See [local setup](docs/DEPLOYMENT.md#local-management-game). Inspect
 the current tree before choosing commands. Update this guide with verified entry points as code
 lands; do not describe planned features or checks as already working. Verified

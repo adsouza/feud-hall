@@ -308,7 +308,7 @@ defmodule FeudHall.Application.RecoveryTest do
       end
 
       test "an evolution 4 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
-        assert Snapshot.evolution_version() == 5
+        assert Snapshot.evolution_version() == 6
 
         rt = live({mod, store})
         {rt, old} = save_snapshot(rt, evolution_4_snapshot(rt), rt.position)
@@ -324,7 +324,7 @@ defmodule FeudHall.Application.RecoveryTest do
       end
 
       test "an evolution 3 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
-        assert Snapshot.evolution_version() == 5
+        assert Snapshot.evolution_version() == 6
 
         rt = live({mod, store})
         {rt, old} = save_snapshot(rt, evolution_3_snapshot(rt), rt.position)
@@ -340,7 +340,7 @@ defmodule FeudHall.Application.RecoveryTest do
       end
 
       test "an evolution 2 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
-        assert Snapshot.evolution_version() == 5
+        assert Snapshot.evolution_version() == 6
 
         rt = live({mod, store})
         {rt, old} = save_snapshot(rt, evolution_2_snapshot(rt), rt.position)

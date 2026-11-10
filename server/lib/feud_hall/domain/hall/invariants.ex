@@ -72,7 +72,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   """
 
   alias FeudHall.Domain.{Clock, Demand, Inventory, Market}
-  alias FeudHall.Domain.Hall.Management
+  alias FeudHall.Domain.Hall.{Management, Staff}
 
   @spec check(map() | nil) :: :ok | {:error, [term()]}
   def check(nil), do: :ok
@@ -84,9 +84,42 @@ defmodule FeudHall.Domain.Hall.Invariants do
            retired(state) ++
            access(state) ++
            market(state) ++
-           arrivals(state) ++ stats(state) ++ npcs(state) ++ kitchen(state) ++ management(state) ++ progression(state) do
+           arrivals(state) ++
+           stats(state) ++
+           npcs(state) ++ kitchen(state) ++ management(state) ++ counter_play(state) ++ progression(state) do
       [] -> :ok
       problems -> {:error, problems}
+    end
+  end
+
+  defp counter_play(%{counter_play: play} = state) do
+    tasks =
+      for {sid, task} <- play.tasks,
+          not valid_staging?(state, play, sid, task),
+          do: {:invalid_counter_staging, sid}
+
+    credits =
+      for {sid, credit} <- play.prepared,
+          not (match?(%{mode: :open, counter: nil}, state.stalls[sid]) and state.access == :open and
+                 credit == play.duration and is_integer(credit) and credit > 0),
+          do: {:invalid_counter_setup_credit, sid}
+
+    tasks ++ credits
+  end
+
+  defp counter_play(_state), do: []
+
+  defp valid_staging?(state, play, sid, task) do
+    with :open <- state.access,
+         %{mode: :open, counter: nil} <- state.stalls[sid],
+         %{workers: workers} <- state.management.leases[sid],
+         true <- is_integer(task.done_at) and task.done_at >= state.now,
+         true <- state.management.shift_by_stall[sid] == task.shift_id,
+         nil <- state.management.selections[sid],
+         nil <- play.prepared[sid] do
+      Enum.any?(Staff.active(workers, state.now), &(&1.id == task.worker_id and &1.role == :counter))
+    else
+      _ -> false
     end
   end
 

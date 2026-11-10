@@ -18,6 +18,14 @@ export type Stall = {
   npc?: boolean;
   retiring?: boolean;
   awards?: Award[];
+  activity?: {
+    waiting: number;
+    cooking: number;
+    handover: boolean;
+    staffed: boolean;
+    staging: boolean;
+    paused: boolean;
+  };
 };
 type Lease = {
   start_hour: number;
@@ -103,17 +111,31 @@ export type ShiftOffer = {
   quoted_at: number;
   estimated_pay: Money;
 };
-type HandoverItem = { id: string; recipes: string[] };
+type HandoverItem = {
+  id: string;
+  recipes: string[];
+  number?: number;
+  queued_at?: number;
+  ready_at?: number;
+  serve_by?: number;
+};
 type Shift = {
   shift_id: string;
   stall_id: string;
   tasks: number;
+  staged?: number;
   expires_at: number;
+  approaching?: HandoverItem[];
+  waiting?: HandoverItem[];
+  staging?: { id: string; shift_id: string; done_at: number } | null;
+  staging_offer?: number | null;
+  prepared?: boolean;
   selection: {
     id: string;
     deadline: number;
     items: HandoverItem[];
     choice?: HandoverItem | null;
+    auto_item?: string | null;
   } | null;
   handover?: (HandoverItem & { done_at: number }) | null;
 };
@@ -137,6 +159,12 @@ export type Profile = {
     stall: string;
     tray_status: string;
     dessert: string;
+    stage?: "queued" | "preparing" | "counter" | "served";
+    estimate?: number | null;
+    dessert_deadline?: number | null;
+    can_cancel?: boolean;
+    can_cancel_dessert?: boolean;
+    recipes?: string[];
   } | null;
   work: {
     offers: ShiftOffer[];
@@ -146,6 +174,7 @@ export type Profile = {
       amount: Money;
       reason: string;
       qualified: boolean;
+      staged?: number;
     }[];
   };
   applications: Application[];
@@ -158,6 +187,7 @@ export type Profile = {
 export type View = {
   hall: {
     now: number;
+    visitor_play?: boolean;
     access: string;
     stalls: Stall[];
     position: number;
@@ -178,6 +208,31 @@ export type Quote = {
   earliest_completion: number;
   terms: Record<string, unknown>;
 };
+export type DiningOption = {
+  stall_id: string;
+  name: string;
+  cuisine: string;
+  main: string;
+  drink: string | null;
+  total: Money;
+  completion: number;
+};
+export type DiningFilters = {
+  profile: string;
+  budget: string;
+  drink: boolean;
+  newOnly: boolean;
+  onlySelected: boolean;
+  sort: "wait" | "price";
+};
+export type DiningOptions = {
+  at: number;
+  options: DiningOption[];
+  tasted: string[];
+  matched: number;
+  sold_out: string[];
+};
+
 export type DiningHistory = {
   before: string | null;
   receipts: {
@@ -234,6 +289,17 @@ async function read<T>(url: string): Promise<T> {
 }
 
 export const getView = () => read<View>("/api/state");
+export function compareDining(filters: DiningFilters, stall: string) {
+  const params = new URLSearchParams({
+    profile_id: filters.profile,
+    sort: filters.sort,
+    include_drink: filters.drink ? "1" : "0",
+    new_to_me: filters.newOnly ? "1" : "0",
+  });
+  if (filters.budget) params.set("budget", filters.budget);
+  if (stall) params.set("stall_id", stall);
+  return read<DiningOptions>("/api/dining-options?" + params);
+}
 export function getDiningHistory(before?: string) {
   const query = before ? "?" + new URLSearchParams({ before }) : "";
   return read<DiningHistory>("/api/dining-history" + query);

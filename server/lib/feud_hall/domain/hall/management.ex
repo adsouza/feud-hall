@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.Hall.Management do
   @moduledoc "Managed leases, staffing windows, attendance and counter-helper coverage."
   alias FeudHall.Domain.{Clock, Kitchen, Money}
-  alias FeudHall.Domain.Hall.{Evolver, OperatingPolicy, Population, Progression, Staff}
+  alias FeudHall.Domain.Hall.{CounterPlay, Evolver, OperatingPolicy, Population, Progression, Staff}
 
   @shift_max Clock.service_duration(10 * 60 * 1_000)
   @shift_default Clock.service_duration(5 * 60 * 1_000)
@@ -273,7 +273,11 @@ defmodule FeudHall.Domain.Hall.Management do
     shift = get_in(state, [:management, :shift_by_stall, sid])
 
     ending =
-      if shift && state.management.shifts[shift].worker_id == id, do: end_stall_shift(state, sid, :reassigned), else: []
+      cond do
+        shift && state.management.shifts[shift].worker_id == id -> end_stall_shift(state, sid, :reassigned)
+        match?(%{worker_id: ^id}, CounterPlay.task(state, sid)) -> CounterPlay.interrupt(state, sid)
+        true -> []
+      end
 
     changes = ending ++ [change]
     changes ++ enforce(Enum.reduce(changes, state, &Evolver.evolve(&2, &1)))
@@ -643,13 +647,13 @@ defmodule FeudHall.Domain.Hall.Management do
           duration = max(1, state.catalog.rules.handover_ms - @selection_duration)
 
           [
-            %{
+            CounterPlay.shorten(state, %{
               type: :handover_started,
               stall_id: sid,
               item: %{kind: kind, id: id},
               done_at: state.now + duration,
               shift_id: if(selected?, do: current_shift)
-            }
+            })
           ]
 
         nil ->
@@ -954,7 +958,8 @@ defmodule FeudHall.Domain.Hall.Management do
 
   def evolve(state, %{type: :stall_opening_queued, stall_id: sid}), do: opening_requested(state, sid, true)
 
-  def evolve(state, %{type: :management_resumed}), do: put_in(state.management.presence, %{}) |> Population.recovered()
+  def evolve(state, %{type: :management_resumed}),
+    do: put_in(state.management.presence, %{}) |> Population.recovered() |> CounterPlay.clear_tasks()
 
   def evolve(state, %{type: :stall_draft_reserved} = e) do
     state
@@ -1070,6 +1075,7 @@ defmodule FeudHall.Domain.Hall.Management do
     shift = Map.merge(Map.drop(e, [:type]), %{status: :active, tasks: 0, presence_until: e.at + @attendance_window})
 
     state
+    |> CounterPlay.clear_task(e.stall_id)
     |> put_in([:management, :shifts, e.shift_id], shift)
     |> put_in([:management, :shift_by_stall, e.stall_id], e.shift_id)
     |> put_in([:management, :shift_by_principal, e.principal], e.shift_id)
@@ -1084,6 +1090,7 @@ defmodule FeudHall.Domain.Hall.Management do
 
     state =
       state
+      |> CounterPlay.clear_task(shift.stall_id)
       |> update_in(
         [:management, :shifts, e.shift_id],
         &Map.merge(&1, %{status: :ended, ended_at: e.at, amount: e.amount, reason: e.reason, qualified: e.qualified})

@@ -4,10 +4,10 @@
 
 A persistent multiplayer business simulation about running restaurants in a food hall.
 
-The repository contains the design, artwork, and an Elixir/PostgreSQL backend
-for the shared simulation. Milestone 2 is complete with the accepted local
-150-stall measurement.
-[Capacity report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md).
+The playable web game runs on Phoenix and PostgreSQL with a Svelte client.
+Manage a restaurant, dine in the live 3D hall, or work a counter shift.
+The hall also has an HTML stall list with the same dining actions.
+[Server capacity report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md).
 
 See the [game design document](docs/GAME_DESIGN.md) for the gameplay, simulation rules, first-release scope, and acceptance criteria.
 

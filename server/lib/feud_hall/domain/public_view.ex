@@ -39,7 +39,7 @@ defmodule FeudHall.Domain.PublicView do
     end)
   end
 
-  defp stalls(state) do
+  def stalls(state) do
     state.stalls
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.map(fn {stall_id, stall} ->

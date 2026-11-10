@@ -632,7 +632,10 @@ private restaurant state out of the helper projection.
 
 The [diner comparison and tracking views](GAME_DESIGN.md#milestone-5-diner-interactions)
 use the same eligibility calculations as checkout and derive the private
-tasting list from committed served-main receipts and pinned cuisine data.
+tasting list from committed guest admission, accepted main, and tray service
+events at the hall's committed position. An indexed read joins those events
+using the signed-in principal and resolves their recipes through pinned cuisine
+data. A served main appears while a dessert offer is still pending.
 Queries may rank offers by exact money or time but cannot reserve food,
 money, or a queue place. A rendered pickup, notification, or receipt click
 is a presentation action. Committed events drive service and the dessert
@@ -1185,8 +1188,9 @@ Implementation decisions within the contracts above:
   order, starting a clock batch at the preceding committed time. An activity
   batch can contribute to more than one game day. The rebuild functions
   recompute derived tables from the event log.
-- **Snapshots, evolution 5.** A snapshot encodes the hall and control states at
-  a position and is accepted only for the current evolution version; version 1
+- **Snapshots, evolution 6.** A snapshot encodes the hall and control states at
+  a position. Version 6 records visitor play and counter staging. Version 5
+  remains a valid base before visitor play activates. Version 1
   (hall only), version 2 (before the shared simulation's layout, seed, NPCs,
   market requests, stall counters, order stage fields, demand bookkeeping and
   simulated-arrival stats), version 3 (before the last recorded operating

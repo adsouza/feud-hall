@@ -496,6 +496,34 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     end
   end
 
+  @impl true
+  def guest_tasted_recipes(store, stream, principal, head) do
+    with {:ok, %{rows: rows}} <-
+           attempt(fn ->
+             store.repo.query!(
+               """
+               select distinct course.data ->> 'recipe_id'
+               from events a
+               join events t on t.stream = a.stream and t.type = 'tray_accepted'
+                 and t.payload::json #>> '{e,visit_id}' = a.payload::json #>> '{e,visit_id}'
+                 and t.stream_version between a.stream_version and $3
+               join events s on s.stream = a.stream and s.type = 'tray_served'
+                 and s.payload::json #>> '{e,tray_id}' = t.payload::json #>> '{e,tray_id}'
+                 and s.stream_version between t.stream_version and $3
+               cross join lateral json_array_elements(t.payload::json #> '{e,components}') course(data)
+               where a.stream = $1 and a.type = 'visit_admitted'
+                 and a.payload::json #>> '{e,source,$a}' = 'guest'
+                 and a.payload::json #>> '{e,principal}' = $2
+                 and a.stream_version <= $3 and course.data #>> '{kind,$a}' = 'main'
+               """,
+               [stream, principal, head],
+               timeout: 1_000
+             )
+           end) do
+      {:ok, Enum.map(rows, &hd/1)}
+    end
+  end
+
   defp decode_accepted_orders(payloads) do
     Enum.reduce_while(payloads, {:ok, []}, fn payload, {:ok, acc} ->
       case EventCodec.decode(payload) do

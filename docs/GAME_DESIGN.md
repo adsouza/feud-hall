@@ -838,7 +838,8 @@ ready work when it interrupts staging. A stale choice, disconnect, or expiring
 task hands control back through the existing fallback. Closure and cleaning
 invalidate staging and its unused setup credit.
 
-Keep staging duration and its effect provisional until playtesting. Quiet
+Start with two real seconds of staging and up to two seconds saved on the
+next handover. Keep both values provisional until playtesting. Quiet
 shifts show whether work is expected and keep normal paid standby available.
 Staging can appear separately in work history. It earns the ordinary on-duty
 wage and does not count as the completed handover required for license

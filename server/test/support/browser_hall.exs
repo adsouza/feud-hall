@@ -107,17 +107,15 @@ defmodule FeudHall.BrowserHall do
   end
 
   defp control(%{"ready_order" => label}, clock) when label in ["first", "second"] do
-    execute("browser-diner-#{label}", {:system, :demand}, :admit_visit, %{
-      source: :simulated,
-      diner_id: label,
-      stall_id: "s001",
-      main: "falafel_wrap",
-      profile_id: "unrestricted",
-      budget: 2_000
-    })
-
+    admit_test_diner(label)
     selection = await_selection(clock, 48)
     %{deadline: selection.deadline}
+  end
+
+  defp control(%{"incoming_order" => "staging"}, clock) do
+    admit_test_diner("staging")
+    advance(clock, 1)
+    %{now: hall().now}
   end
 
   defp control(%{"restart_plan" => true}, _clock) do
@@ -126,6 +124,22 @@ defmodule FeudHall.BrowserHall do
     {:ok, [%{command_id: @restart_plan, events: events} | _]} = PostgresEventStore.read_from(handle, position - 1)
     %{type: :npc_planned, outcomes: outcomes} = Enum.find(events, &(&1.type == :npc_planned))
     %{position: position, outcomes: outcomes}
+  end
+
+  defp admit_test_diner(label) do
+    state = hall()
+    stall = state.stalls["s001"]
+    cuisine = state.restaurants[stall.restaurant].cuisine
+    starter = Enum.find(Map.values(state.catalog.recipes), &(&1.cuisine == cuisine and &1.starter))
+
+    execute("browser-diner-#{label}", {:system, :demand}, :admit_visit, %{
+      source: :simulated,
+      diner_id: label,
+      stall_id: "s001",
+      main: starter.id,
+      profile_id: "unrestricted",
+      budget: 2_000
+    })
   end
 
   defp await_selection(clock, remaining) do

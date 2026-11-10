@@ -35,7 +35,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
   alias FeudHall.Domain.{Demand, Inventory, Market, Random}
 
-  alias FeudHall.Domain.Hall.{Management, SimulationUpgrade}
+  alias FeudHall.Domain.Hall.{CounterPlay, Management, SimulationUpgrade}
 
   @ledger %{cash: 0, raw: 0, wip: 0, cost_of_sales: 0, waste: 0, capex: 0, capital: 0, revenue: 0}
 
@@ -129,7 +129,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
   def evolve(state, %{type: :hall_resumed, recovery_id: id}), do: %{state | last_recovery_id: id}
 
-  def evolve(state, %{type: :hall_cleaning_started}), do: %{state | access: :cleaning}
+  def evolve(state, %{type: :hall_cleaning_started}), do: CounterPlay.clean(%{state | access: :cleaning})
   def evolve(state, %{type: :hall_cleaning_ended}), do: %{state | access: :open}
 
   def evolve(state, %{type: :restaurant_created} = e) do
@@ -175,6 +175,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
     do:
       state
       |> put_in([:stalls, s, :mode], :closed)
+      |> CounterPlay.clear_location(s)
       |> Management.opening_requested(s, Map.get(event, :preserve_opening, false))
 
   def evolve(state, %{type: :recipe_unlocked} = e) do
@@ -338,13 +339,10 @@ defmodule FeudHall.Domain.Hall.Evolver do
     end)
   end
 
-  def evolve(state, %{type: :handover_started, item: item} = e),
-    do:
-      put_in(
-        state,
-        [:stalls, e.stall_id, :counter],
-        Map.merge(%{item: counter_item(item), done_at: e.done_at}, Map.take(e, [:shift_id]))
-      )
+  def evolve(state, %{type: :handover_started, item: item} = e) do
+    counter = Map.merge(%{item: counter_item(item), done_at: e.done_at}, Map.take(e, [:shift_id]))
+    state |> CounterPlay.consume(e) |> put_in([:stalls, e.stall_id, :counter], counter)
+  end
 
   # Milestone 1 kitchen commands, kept for historical replay: the combined
   # preparation occupies the finishing stage until `ready_not_before`.
@@ -459,6 +457,10 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
   def evolve(state, %{type: type} = event) when type in [:location_equipped, :equipment_salvaged],
     do: FeudHall.Domain.Hall.Equipment.evolve(state, event)
+
+  def evolve(state, %{type: type} = event)
+      when type in [:visitor_play_enabled, :counter_staging_started, :counter_staging_completed, :staging_yielded],
+      do: CounterPlay.evolve(state, event)
 
   @progression_events ~w(location_added location_refitted location_released distress_started distress_cleared venture_activity_recorded
                           stock_salvaged business_bankrupted)a

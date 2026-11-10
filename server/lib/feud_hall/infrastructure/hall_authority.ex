@@ -168,6 +168,8 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   def management_view(pid, device), do: GenServer.call(pid, {:management_view, device}, @call_timeout)
 
+  def dining_options(pid, device, params), do: GenServer.call(pid, {:dining_options, device, params}, @call_timeout)
+
   def dining_history(pid, device, before),
     do: GenServer.call(pid, {:dining_history, device, before}, @call_timeout)
 
@@ -280,6 +282,9 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   def handle_call({:management_view, device}, _from, s),
     do: {:reply, FeudHall.Application.Management.view(s.runtime, device), s}
+
+  def handle_call({:dining_options, device, params}, _from, s),
+    do: {:reply, FeudHall.Application.DinerBrowse.compare(s.runtime, device, params), s}
 
   def handle_call({:dining_history, device, before}, _from, s),
     do: {:reply, FeudHall.Application.DiningHistory.page(s.runtime, device, before), s}

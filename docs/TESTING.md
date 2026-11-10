@@ -1,11 +1,9 @@
 # Feud Hall Testing
 
-Status: verification plan with the first backend slice implemented. The Elixir
-economic core in `server/` has a Mix manifest, lockfile, pinned toolchain, and a
-hosted CI workflow (`.github/workflows/server.yml`); its verified entry points
-are listed under [Implemented backend entry points](#implemented-backend-entry-points).
-Frontend commands below remain planned interfaces, not claims of installed
-tooling or passing checks.
+The Phoenix server and Svelte client have focused local and hosted checks.
+See [Implemented backend entry points](#implemented-backend-entry-points) and
+[Management and web checks](#management-and-web-checks) for runnable commands.
+The qualification matrix also lists checks required for a release.
 
 The [game design](GAME_DESIGN.md#required-correctness-scenarios) owns gameplay
 acceptance scenarios; [architecture](ARCHITECTURE.md#architecture-verification)
@@ -386,6 +384,12 @@ the reported seed and path as `FEUD_HALL_BROWSER_SEED` and
 A second generated browser check varies which license applications are edited,
 then changes the queue and verifies that each draft and decision stays with
 its own application. Replay it with `--grep 'generated review edits'`.
+Run `--grep 'M5 '` for the live 3D hall, WebGL loss and HTML checkout journey,
+and the helper staging and yield journey. The Chromium checks use software
+rendering. They do not qualify hardware or 150-stall frame rates. The focused
+`visitor_play_test.exs` file checks replay, payroll, tasting privacy, and
+staging across different readiness boundaries. The curated mutation
+`M5 staged setup credit can be reused` checks the one-use invariant.
 CI retains failure traces and hall logs. A separate Svelte template type-check
 and broader cross-browser coverage remain release qualification work.
 
