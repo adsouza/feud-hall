@@ -11,7 +11,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
 
   alias FeudHall.Domain.{Choice, Clock, Demand, Dietary, Hall, Offers}
   alias FeudHall.Domain.Content.SliceCatalog
-  alias FeudHall.Domain.Hall.Invariants
+  alias FeudHall.Domain.Hall.{Admission, Advance, Invariants}
   alias FeudHall.Infrastructure.EventCodec
   alias FeudHall.Oracle
 
@@ -138,7 +138,32 @@ defmodule FeudHall.Domain.ArrivalsTest do
       assert Map.get(outcomes, :admitted, 0) > 0 and Map.get(outcomes, :left, 0) > 0
     end
 
-    @tag timeout: 60_000
+    test "cuts exactly at and just before each arrival equal one advance" do
+      {start, _} = stocked_world()
+      to = start.now + 12 * @hour
+
+      # Cut at a - 1 and at a (the boundary equals the target) for the first eight arrivals.
+      {cut, cut_log} =
+        Enum.reduce(1..8, {start, []}, fn _, {s, log} ->
+          a = s.demand.next_arrival_at
+
+          Enum.reduce([a - 1, a], {s, log}, fn t, {s, log} ->
+            events = Advance.run(s, t)
+            {Hall.replay(events, s), log ++ events}
+          end)
+        end)
+
+      assert cut.now < to
+      events = Advance.run(cut, to)
+      cut = Hall.replay(events, cut)
+      single_log = Advance.run(start, to)
+
+      assert non_clock(cut_log ++ events) == non_clock(single_log)
+      assert cut == Hall.replay(single_log, start)
+      assert Enum.any?(single_log, &match?(%{type: :diner_arrived, outcome: :admitted}, &1))
+      assert Enum.any?(single_log, &(&1.type == :stage_started))
+    end
+
     test "two complete game days in one advance equal the same span in many small advances" do
       world = stocked_world()
       to = elem(world, 0).now + 2 * @day
@@ -215,8 +240,9 @@ defmodule FeudHall.Domain.ArrivalsTest do
   end
 
   describe "a simulated diner" do
-    # One unrestricted diner per day at 00:59:59.999 whose patience is exactly
-    # the quoted wait for chicken tacos with a ten-minute preparation.
+    # One unrestricted diner per day at 00:59:59.999 whose patience (17 hall
+    # minutes, inside the shipped 5-40 minute ranges) is exactly the quoted
+    # wait for chicken tacos with a ten-minute preparation.
     defp patient_catalog do
       catalog = SliceCatalog.catalog()
 
@@ -225,7 +251,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
           %{
             s
             | budget: [5_000, 5_000],
-              patience_service_ms: [42_500, 42_500],
+              patience_hall_ms: [17 * @min, 17 * @min],
               drink_attach_permille: 0,
               leave_weight: 0,
               main_preference: Map.put(s.main_preference, "chicken_tacos", 1_000_000_000)
@@ -245,7 +271,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
       {state, events} = world
 
       assert [{^arrival, %{arrival_id: "A0-0", outcome: :admitted, patience_hall_ms: patience}}] = arrivals(events)
-      assert patience == Clock.service_duration(42_500)
+      assert patience == 17 * @min
       tray = state.trays["T:A0-0"]
       # Quoted: 10 min prep + 3 min finish + 4 min handover, exactly the patience.
       assert tray.estimated_completion == arrival + 17 * @min
@@ -304,6 +330,74 @@ defmodule FeudHall.Domain.ArrivalsTest do
       assert %{source: :simulated, principal: "diner:D0-" <> _, budget: budget} = admitted
       assert budget == arrived.budget
       assert admitted.dessert_appetite? == arrived.dessert_appetite?
+    end
+  end
+
+  describe "patience and collisions" do
+    test "with shipped segments, patience binds below the 45-minute service window" do
+      {state, events} = stocked_world() |> advance_hall(@t0 + @day)
+      window = state.catalog.rules.service_window_ms
+
+      bound =
+        for {at, %{outcome: :admitted} = e} <- arrivals(events),
+            tray = state.trays["T:" <> e.arrival_id],
+            do: {tray.deadline, Enum.min([at + e.patience_hall_ms, at + window, Clock.service_cutoff(at)])}
+
+      assert bound != []
+      assert Enum.all?(bound, fn {deadline, expected} -> deadline == expected end)
+      assert Enum.any?(arrivals(events), fn {_, e} -> e.patience_hall_ms < window end)
+
+      assert Enum.any?(arrivals(events), fn {at, e} ->
+               e.outcome == :admitted and state.trays["T:" <> e.arrival_id].deadline == at + e.patience_hall_ms and
+                 e.patience_hall_ms < window
+             end)
+    end
+
+    test "an arrival whose IDs a command already took is recorded as having left, not admitted twice" do
+      # A fixture command under the first arrival's entity ID holds V:A0-0 and T:A0-0.
+      world =
+        stocked_world(catalog: patient_catalog())
+        |> run!(
+          {:admit_visit,
+           %{
+             source: :simulated,
+             diner_id: "x",
+             budget: 5_000,
+             stall_id: "s001",
+             main: "bean_tacos",
+             profile_id: "unrestricted"
+           }},
+          {:system, :demand},
+          "A0-0"
+        )
+
+      {before, _} = world
+      taken = before.visits["V:A0-0"]
+      {state, events} = advance_hall(world, ceil_to_tick(@hour))
+
+      assert [{_, %{arrival_id: "A0-0", outcome: :left, reason: :admission_failed}}] = arrivals(events)
+      assert state.visits["V:A0-0"].principal == taken.principal
+      assert state.stats.left_simulated == %{admission_failed: 1}
+      Oracle.assert_settled!(state, events)
+    end
+
+    test "Admission refuses an entity ID whose visit or tray already exists" do
+      {state, _} = stocked_world(arrivals: false) |> simulated_visit("d1", "bean_tacos")
+
+      request = %{
+        source: :simulated,
+        principal: "diner:other",
+        budget: 5_000,
+        stall_id: "s001",
+        main: "bean_tacos",
+        drink: nil,
+        profile_id: "unrestricted",
+        confirmed: nil,
+        deadline_cap: nil
+      }
+
+      assert {:error, :visit_id_taken} = Admission.admit(state, request, "visit-d1")
+      assert {:ok, _} = Admission.admit(state, request, "visit-d2")
     end
   end
 

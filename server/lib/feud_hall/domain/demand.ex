@@ -121,7 +121,7 @@ defmodule FeudHall.Domain.Demand do
 
   @doc """
   Draws one simulated diner from the demand PRNG, in order: segment (by
-  weight), budget, patience in available-service ms (converted to hall ms),
+  weight), budget, patience in hall ms,
   dietary profile (over enabled profiles by `profile_mix`, in profile ID
   order), drink attachment and dessert appetite (`uniform(1000) < permille`).
   Returns `{%{segment, budget, patience_hall_ms, profile_id, drink?,
@@ -132,7 +132,7 @@ defmodule FeudHall.Domain.Demand do
     {segment, rng} = Random.weighted(rng, Enum.map(rules.segments, &{&1, &1.weight}))
     [budget_lo, budget_hi] = segment.budget
     {budget, rng} = Random.range(rng, budget_lo, budget_hi)
-    [patience_lo, patience_hi] = segment.patience_service_ms
+    [patience_lo, patience_hi] = segment.patience_hall_ms
     {patience, rng} = Random.range(rng, patience_lo, patience_hi)
 
     profiles =
@@ -145,7 +145,7 @@ defmodule FeudHall.Domain.Demand do
     {%{
        segment: segment,
        budget: budget,
-       patience_hall_ms: Clock.service_duration(patience),
+       patience_hall_ms: patience,
        profile_id: profile_id,
        drink?: drink < segment.drink_attach_permille,
        dessert_appetite?: dessert < segment.dessert_appetite_permille

@@ -23,6 +23,7 @@ defmodule FeudHall.Domain.Hall.Admission do
     %{source: source, principal: principal, budget: budget} = p
 
     with :ok <- ensure(id?(p[:stall_id]) and id?(p[:main]), :invalid_payload),
+         :ok <- ensure(entity_free?(state, entity_id), :visit_id_taken),
          :ok <- ensure(p[:drink] == nil or id?(p[:drink]), :invalid_payload),
          :ok <- ensure(not Map.has_key?(state.active_visits, principal), :visit_already_active),
          {:ok, requirement} <- Dietary.requirement(state.catalog, p[:profile_id]),
@@ -198,6 +199,11 @@ defmodule FeudHall.Domain.Hall.Admission do
       do: {:ok, [[]]},
       else: {:error, :over_budget}
   end
+
+  # Visit and tray IDs derive from `entity_id`; an admission never reuses one
+  # (a client command ID and a simulated arrival could otherwise collide).
+  defp entity_free?(state, entity_id),
+    do: not Map.has_key?(state.visits, "V:" <> entity_id) and not Map.has_key?(state.trays, "T:" <> entity_id)
 
   defp ensure(true, _reason), do: :ok
   defp ensure(_, reason), do: {:error, reason}

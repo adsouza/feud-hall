@@ -166,7 +166,7 @@ defmodule FeudHall.Domain.Content do
   defp segment_problems(catalog, s) do
     id = s.id
 
-    ranges_ok = range?(get(s, :budget)) and range?(get(s, :patience_service_ms))
+    ranges_ok = range?(get(s, :budget)) and range?(get(s, :patience_hall_ms))
 
     weights_ok =
       pos_int?(get(s, :weight)) and

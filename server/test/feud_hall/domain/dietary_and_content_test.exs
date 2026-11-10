@@ -196,7 +196,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
              )
 
       assert {:demand, "value", :bad_range} in problems!(
-               broken([:rules, :demand, :segments], bad_segment(:patience_service_ms, [0, 3]))
+               broken([:rules, :demand, :segments], bad_segment(:patience_hall_ms, [0, 3]))
              )
     end
 

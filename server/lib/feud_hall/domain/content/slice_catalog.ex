@@ -149,7 +149,7 @@ defmodule FeudHall.Domain.Content.SliceCatalog do
       id: id,
       weight: weight,
       budget: budget,
-      patience_service_ms: patience,
+      patience_hall_ms: patience,
       drink_attach_permille: drink,
       dessert_appetite_permille: dessert,
       price_weight: price_w,
