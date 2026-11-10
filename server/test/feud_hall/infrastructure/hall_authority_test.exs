@@ -695,6 +695,34 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     npc_authority(ctx, store: fresh_store, owner: owner)
   end
 
+  # Loads a planner whose `plan/5` raises ArithmeticError for the mainstream profile and plans
+  # nothing for the others, runs `fun`, then restores the real module.
+  defp with_crashing_planner(fun) do
+    planner = FeudHall.Domain.Npc.Planner
+    {^planner, binary, file} = :code.get_object_code(planner)
+    options = Code.compiler_options()
+    Code.compiler_options(ignore_module_conflict: true)
+
+    try do
+      Module.create(
+        planner,
+        quote do
+          def plan(_view, _own, %{id: "mainstream"}, _catalog, _rng), do: raise(ArithmeticError)
+          def plan(_view, _own, _profile, _catalog, rng), do: {[], rng}
+          def choose_slot(_view, _layout, _profile), do: raise("not expected")
+        end,
+        Macro.Env.location(__ENV__)
+      )
+
+      fun.()
+    after
+      :code.purge(planner)
+      {:module, ^planner} = :code.load_binary(planner, file, binary)
+      :code.purge(planner)
+      Code.compiler_options(ignore_module_conflict: Map.get(options, :ignore_module_conflict, false))
+    end
+  end
+
   for adapter <- [:memory, :postgres] do
     describe "#{adapter} adapter NPCs" do
       @describetag adapter: adapter
@@ -852,6 +880,107 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
           %{rows: rows} = Repo.query!("select distinct actor from events where causation_id like 'npc:%' order by 1")
           assert rows == Enum.map(@operators, &["npc:#{&1}"])
         end
+      end
+
+      test "an NPC with no vacant slot is reported once and is not created", ctx do
+        # Two slots for three profiles: premium (last by ID) finds the hall full.
+        layout = [%{slot_id: "s001", tier: :quiet}, %{slot_id: "s002", tier: :standard}]
+        pid = ctx |> npc_authority() |> initialize_with(%{SliceCatalog.catalog() | layout: layout})
+
+        for _ <- 1..3, do: assert(:ok = tick_after(ctx, pid, 1_000))
+        assert {:accepted, _} = HallAuthority.execute(pid, grant("grant-1"))
+
+        hall = HallAuthority.state(pid).hall
+        assert Enum.sort(Map.keys(hall.npcs)) == ["budget", "mainstream"]
+        refute Map.has_key?(hall.owners, {:npc, "premium"})
+
+        assert [%{fields: %{command_id: "npc:premium:create", reason: :no_vacant_slot}}] =
+                 records(ctx, :npc_planner_failed)
+
+        assert npc_ids(pid) == ["npc:budget:create", "npc:mainstream:create"]
+      end
+
+      test "a planner that raises is reported once for its slot while the other NPCs plan", ctx do
+        pid = ctx |> npc_authority() |> initialize()
+
+        with_crashing_planner(fn ->
+          assert :ok = tick_after(ctx, pid, @hour_service)
+          # Premium, sorted after the crashing mainstream, planned in the same pass.
+          assert planned_slots(pid) == [{"budget", Clock.hour()}, {"premium", Clock.hour()}]
+          assert :ok = tick_after(ctx, pid, 1_000)
+          assert {:accepted, _} = HallAuthority.execute(pid, grant("grant-1"))
+        end)
+
+        slot = Clock.hour()
+
+        assert [%{fields: fields} = failed] = records(ctx, :npc_planner_failed)
+        assert fields.command_id == "npc:mainstream:#{slot}"
+        assert fields.reason == :planner_crashed
+        assert fields.error_class == ArithmeticError
+        assert failed.severity == :warning
+
+        assert planned_slots(pid) == [{"budget", slot}, {"premium", slot}]
+        assert HallAuthority.state(pid).hall.npcs["mainstream"].next_slot_at == slot
+
+        # With the real planner back, the next slot plans everyone.
+        assert :ok = tick_after(ctx, pid, @hour_service - 1_000)
+        assert Enum.take(planned_slots(pid), -3) == for(op <- @operators, do: {op, 2 * slot})
+      end
+
+      test "a fenced NPC append replies to the triggering command, then stops the authority", ctx do
+        pid = npc_authority(ctx, store: FaultyStore.wrap(store_for(ctx.adapter)), restart: :temporary)
+        epoch = HallAuthority.state(pid).epoch
+        ref = Process.monitor(pid)
+
+        # The hall's initialisation commits; the first NPC create is then fenced.
+        assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :fenced})
+        init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+        assert {:accepted, %{command_id: "init"}} = HallAuthority.execute(pid, init)
+
+        assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :fenced}}
+        assert [%{fields: %{epoch: ^epoch}}] = records(ctx, :fenced)
+      end
+
+      test "a fenced plan append after a tick replies :ok, then stops the authority", ctx do
+        pid =
+          ctx
+          |> npc_authority(store: FaultyStore.wrap(store_for(ctx.adapter)), restart: :temporary)
+          |> initialize()
+
+        ref = Process.monitor(pid)
+        assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :fenced})
+        assert :ok = tick_after(ctx, pid, @hour_service)
+        assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :fenced}}
+        assert length(records(ctx, :fenced)) == 1
+      end
+
+      test "a fenced NPC create during start-up recovery stops the start", ctx do
+        # The hall committed, but its NPC creates did not (storage was unavailable).
+        pid = npc_authority(ctx, store: FaultyStore.wrap(store_for(ctx.adapter)))
+        assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :unavailable})
+        initialize(pid)
+        assert npc_ids(pid) == []
+
+        {store_mod, store} = HallAuthority.store(pid)
+        stop_supervised_authority(pid, ctx)
+        store = if ctx.adapter == :memory, do: store, else: elem(FaultyStore.wrap(store_for(:postgres)), 1)
+
+        # Recovery appends twice (reconciliation, then availability); the bootstrap create after them is fenced.
+        armed = store_mod.fail_next(store, {:nth_append, 3, :fenced})
+
+        opts = [
+          store_mod: store_mod,
+          store: armed,
+          owner: "node-b",
+          scope: @scope,
+          clock: {ManualClock, ctx.clock},
+          diagnostics: {MemorySink, ctx.sink},
+          tick_ms: :manual
+        ]
+
+        Process.flag(:trap_exit, true)
+        assert {:error, {:shutdown, :fenced}} = HallAuthority.start_link(opts)
+        assert [%{fields: %{epoch: _}}] = records(ctx, :fenced)
       end
 
       test "a plan whose reply was lost is not planned again after a restart", ctx do

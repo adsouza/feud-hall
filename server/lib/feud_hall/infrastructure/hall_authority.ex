@@ -589,6 +589,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     emit(s, :npc_planner_failed, %{
       command_id: command_id,
       reason: Diagnostics.reason(reason),
+      error_class: crash_class(reason),
       position: s.runtime.position,
       hall_ms: s.runtime.state && s.runtime.state.now
     })
@@ -597,11 +598,15 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   end
 
   # The planner is pure, but a defect in it must not take the hall down: it is reported instead.
+  # Only the exception's module is kept: its message could carry hall state.
   defp guarded(fun) do
     {:ok, fun.()}
   rescue
-    _ -> {:error, :planner_crashed}
+    error -> {:error, {:planner_crashed, error.__struct__}}
   end
+
+  defp crash_class({:planner_crashed, module}), do: module
+  defp crash_class(_reason), do: nil
 
   # --- recovery ----------------------------------------------------------------
 

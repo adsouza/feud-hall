@@ -55,7 +55,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
     unknown_stall unknown_restaurant forbidden unknown_recipe wrong_cuisine already_unlocked recipe_locked
     invalid_price not_on_menu unknown_line invalid_policy no_approved_substitute unknown_product
     invalid_quantity invalid_price_limit no_pending_request unauthorized_or_malformed malformed_command
-    action_not_allowed malformed_action
+    action_not_allowed malformed_action unrecognised_reason
   )a
 
   @by_name Map.new(@atoms, &{Atom.to_string(&1), &1})

@@ -260,8 +260,7 @@ defmodule FeudHall.Domain.Hall.Decider do
   defp plan_action(state, {kind, payload} = action, ctx) when kind in @plan_actions and is_map(payload),
     do: decide(state, action, ctx)
 
-  defp plan_action(_state, {kind, _payload}, _ctx) when is_atom(kind) and kind in @plan_actions,
-    do: {:error, :malformed_action}
+  defp plan_action(_state, {kind, _payload}, _ctx) when kind in @plan_actions, do: {:error, :malformed_action}
 
   defp plan_action(_state, {kind, _payload}, _ctx) when is_atom(kind), do: {:error, :action_not_allowed}
   defp plan_action(_state, _action, _ctx), do: {:error, :malformed_action}
@@ -271,7 +270,7 @@ defmodule FeudHall.Domain.Hall.Decider do
   defp action_kind(_action), do: :other
 
   defp reason_code(reason) when is_atom(reason), do: reason
-  defp reason_code(_reason), do: :malformed_action
+  defp reason_code(_reason), do: :unrecognised_reason
 
   # -- visits -----------------------------------------------------------------
 

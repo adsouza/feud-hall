@@ -200,7 +200,8 @@ defmodule FeudHall.Domain.NpcPlanTest do
         ~w(unknown_stall unknown_restaurant forbidden unknown_recipe wrong_cuisine already_unlocked
            insufficient_cash recipe_locked invalid_price not_on_menu unknown_line invalid_policy
            no_approved_substitute unknown_product invalid_quantity invalid_price_limit no_pending_request
-           unauthorized_or_malformed malformed_command action_not_allowed malformed_action)a
+           unauthorized_or_malformed malformed_command action_not_allowed malformed_action
+           unrecognised_reason)a
 
       event = %{
         type: :npc_planned,
