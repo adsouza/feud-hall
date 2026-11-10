@@ -8,7 +8,7 @@ defmodule FeudHall.Domain.Npc.Planner do
 
   Heuristics, in action order:
 
-    1. open the stall when it is closed and the hall is not in scheduled cleaning;
+    1. stagger the managed starter shifts and open the stall outside scheduled cleaning;
     2. unlock the cheapest locked recipe of its cuisine when cash is at least
        four times the unlock cost (one per plan, priced on the next plan);
     3. price each unlocked recipe at `suggested_price * price_permille / 1000`,
@@ -34,6 +34,7 @@ defmodule FeudHall.Domain.Npc.Planner do
   @unlock_cash_multiple 4
   @price_limit_permille 1_500
   @fallback_trays_per_day 10
+  @starter_shifts %{"budget" => {5, 17}, "mainstream" => {12, 0}, "premium" => {19, 7}}
 
   @max_qty 1_000_000
   @max_price_limit 1_000_000_000
@@ -41,7 +42,7 @@ defmodule FeudHall.Domain.Npc.Planner do
   @spec plan(map(), map(), map(), map(), term()) :: {[tuple()], term()}
   def plan(view, own, profile, catalog, rng) do
     actions =
-      open_stall(view, own) ++
+      opening_actions(view, own, profile) ++
         unlock_recipe(own, catalog) ++
         menu_prices(own, profile, catalog) ++
         substitution_policies(own, profile, catalog) ++
@@ -67,12 +68,27 @@ defmodule FeudHall.Domain.Npc.Planner do
 
   # -- opening ------------------------------------------------------------------
 
-  defp open_stall(view, own) do
+  defp opening_actions(view, own, profile) do
     case Enum.find(view.stalls, &(&1.restaurant_id == own.id)) do
-      %{open?: false, stall_id: id} -> if Clock.cleaning?(view.now), do: [], else: [{:open_stall, %{stall_id: id}}]
-      _ -> []
+      %{open?: open?, stall_id: id} ->
+        schedule = staff_schedule(own[:lease], @starter_shifts[profile.id], id)
+        # A schedule change reopens a staffed stall if it already has an opening request.
+        reopening? = schedule != [] and own.lease.opening_requested
+
+        if open? or reopening? or Clock.cleaning?(view.now),
+          do: schedule,
+          else: schedule ++ [{:open_stall, %{stall_id: id}}]
+
+      nil ->
+        []
     end
   end
+
+  defp staff_schedule(%{start_hour: start, end_hour: finish}, {new_start, new_finish}, stall_id)
+       when {start, finish} != {new_start, new_finish},
+       do: [{:set_staff_schedule, %{stall_id: stall_id, start_hour: new_start, end_hour: new_finish}}]
+
+  defp staff_schedule(_lease, _shift, _stall_id), do: []
 
   # -- unlocking ----------------------------------------------------------------
 

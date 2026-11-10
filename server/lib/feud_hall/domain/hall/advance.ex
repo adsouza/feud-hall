@@ -37,7 +37,7 @@ defmodule FeudHall.Domain.Hall.Advance do
   """
 
   alias FeudHall.Domain.{Choice, Clock, Demand, Dietary, Inventory, Kitchen, Market}
-  alias FeudHall.Domain.Hall.{Admission, Evolver, Settlement}
+  alias FeudHall.Domain.Hall.{Admission, Evolver, Management, OperatingPolicy, Settlement}
 
   @doc "Returns the events that advance `state` to hall time `target`."
   def run(state, target), do: loop(state, target, [])
@@ -56,6 +56,7 @@ defmodule FeudHall.Domain.Hall.Advance do
       {6, &day_boundary/1},
       {7, &market_clearing/1},
       {8, &arrival/1},
+      {8.5, &Management.boundaries/1},
       {9, &dispatch/1}
     ]
   end
@@ -227,17 +228,28 @@ defmodule FeudHall.Domain.Hall.Advance do
     offers =
       for {_, v} <- Enum.sort(state.visits), v.dessert == :offered, do: {:offer, v.id}
 
-    {_, events} =
+    management = Management.cleaning_events(state)
+    state = Enum.reduce(management, state, &Evolver.evolve(&2, &1))
+
+    {settled, events} =
       Enum.reduce(trays ++ desserts ++ offers, {state, []}, fn item, {st, acc} ->
         events = cleaning_settlement(st, item)
         {Enum.reduce(events, st, &Evolver.evolve(&2, &1)), acc ++ events}
       end)
 
-    [started | events]
+    costs =
+      if Management.enabled?(settled) and settled.management.next_hour == state.now,
+        do: Management.charge_events(settled),
+        else: []
+
+    reported = Enum.reduce(costs, settled, &Evolver.evolve(&2, &1))
+    [started | management] ++ events ++ costs ++ Management.report_events(reported)
   end
 
-  defp handle(state, {:cleaning_end}),
-    do: [%{type: :hall_cleaning_ended, day: Clock.day_of(state.now), at: state.now}]
+  defp handle(state, {:cleaning_end}) do
+    event = %{type: :hall_cleaning_ended, day: Clock.day_of(state.now), at: state.now}
+    [event | Management.enforce(Evolver.evolve(state, event))]
+  end
 
   defp handle(state, {:stage_done, oid}) do
     order = state.orders[oid]
@@ -255,10 +267,13 @@ defmodule FeudHall.Domain.Hall.Advance do
   # Expiry, deadlines and the cutoff come first at this instant and release
   # the counter, so an item still in hand here is fresh, in time and open.
   defp handle(state, {:handover_done, sid}) do
-    case state.stalls[sid].counter.item do
-      {:tray, tid} -> Settlement.serve_tray(state, state.trays[tid])
-      {:dessert, oid} -> Settlement.serve_dessert(state, state.orders[oid])
-    end
+    events =
+      case state.stalls[sid].counter.item do
+        {:tray, tid} -> Settlement.serve_tray(state, state.trays[tid])
+        {:dessert, oid} -> Settlement.serve_dessert(state, state.orders[oid])
+      end
+
+    Management.handover_proof(state, sid) ++ events
   end
 
   defp handle(state, {:day_close}), do: [Demand.close_day(state)]
@@ -326,6 +341,24 @@ defmodule FeudHall.Domain.Hall.Advance do
     [arrived | admission]
   end
 
+  defp handle(state, {:staff_condition, sid, worker, condition}),
+    do: Management.staff_condition_events(state, sid, worker, condition)
+
+  defp handle(state, {:draft_expired, id}), do: Management.release_draft(state, id, :expired)
+  defp handle(state, {:helper_absent, shift}), do: [Management.end_shift(state, shift, :disconnect)]
+  defp handle(state, {:helper_end, shift}), do: [Management.end_shift(state, shift, :scheduled_end)]
+  defp handle(state, {:selection_end, sid}), do: Management.finish_selection(state, sid)
+
+  defp handle(state, {:management_hour}) do
+    charges = Management.charge_events(state)
+    charges ++ OperatingPolicy.hourly(Enum.reduce(charges, state, &Evolver.evolve(&2, &1)))
+  end
+
+  defp handle(state, {:attendance, id}) do
+    expired = %{type: :owner_presence_recorded, principal: id, expires_at: state.now}
+    [expired | Management.enforce(Evolver.evolve(state, expired))]
+  end
+
   defp handle(state, {:dispatch, sid}), do: dispatch_stall(state, sid, [])
 
   defp handle(state, {:tray_deadline, tid}), do: Settlement.cancel_tray(state, state.trays[tid], :deadline_missed)
@@ -374,13 +407,15 @@ defmodule FeudHall.Domain.Hall.Advance do
   defp start_event(state, _sid, {:finish, oid}),
     do: %{type: :stage_started, order_id: oid, stage: :finish, done_at: state.now + state.orders[oid].finish_ms}
 
-  defp start_event(state, sid, {:handover, {kind, id}}),
-    do: %{
-      type: :handover_started,
-      stall_id: sid,
-      item: %{kind: kind, id: id},
-      done_at: state.now + state.catalog.rules.handover_ms
-    }
+  defp start_event(state, sid, {:handover, {kind, id}}) do
+    Management.start_selection(state, sid) ||
+      %{
+        type: :handover_started,
+        stall_id: sid,
+        item: %{kind: kind, id: id},
+        done_at: state.now + state.catalog.rules.handover_ms
+      }
+  end
 
   # Expiring reserved stock may be replaced only by fresh stock of the same
   # bound product; otherwise the whole tray (or dessert) is cancelled.

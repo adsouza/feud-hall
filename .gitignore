@@ -40,3 +40,6 @@ pnpm-debug.log*
 
 # Tauri / Rust build output
 target/
+
+# Built web client served by Phoenix
+/server/priv/static/

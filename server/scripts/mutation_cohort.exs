@@ -2,6 +2,7 @@
 #
 # Usage (from server/):  elixir scripts/mutation_cohort.exs <empty-work-dir>
 #                        elixir scripts/mutation_cohort.exs --check
+#                        elixir scripts/mutation_cohort.exs <empty-work-dir> --match <name-fragment>
 #
 # `--check` only counts how often each patch's source string occurs in the
 # checkout (it must be exactly once) and runs nothing else.
@@ -43,10 +44,29 @@ defmodule MutationCohort do
   @planner "test/feud_hall/domain/npc_planner_test.exs"
   @npc_plan "test/feud_hall/domain/npc_plan_test.exs"
   @forecast "test/feud_hall/domain/demand_forecast_test.exs"
+  @management "test/feud_hall/application/management_test.exs"
   @retention "test/feud_hall/domain/retention_test.exs"
 
   def mutants do
     [
+      {"M3 standby erroneously grants licensing eligibility", "lib/feud_hall/domain/hall/management.ex",
+       "and work.tasks > 0", "and work.tasks >= 0", [@management]},
+      {"M3 a revoked device remains authenticated", "lib/feud_hall/domain/identity.ex",
+       "do: put_in(state.devices[device], nil)", "do: state", [@management]},
+      {"M3 allowance can be claimed again from a second device", "lib/feud_hall/domain/hall/management.ex",
+       "state.management.allowance_days[id] == day ->", "state.management.allowance_days[id] == day + 1 ->",
+       [@management]},
+      {"M3 allowance fund is not renewed at midnight", "lib/feud_hall/domain/hall/management.ex",
+       "      state = %{state | visitor_fund: state.catalog.rules.visitor_fund}\n", "", [@management]},
+      {"M3 a held stall is offered to another owner", "lib/feud_hall/domain/hall/management.ex",
+       "and not Map.has_key?(state.stalls, sid) and not reserved?(state, sid) do",
+       "and not Map.has_key?(state.stalls, sid) do", [@management]},
+      {"M3 off-duty NPC refusal is missing from the event codec", "lib/feud_hall/infrastructure/event_codec.ex",
+       "    staff_off_duty unpaid_rent owner_absent\n", "    unpaid_rent owner_absent\n", [@npc_plan]},
+      {"M3 selecting a tray prematurely credits a completed handover", "lib/feud_hall/domain/hall/management.ex",
+       "  def evolve(state, %{type: :helper_choice_selected} = e),\n    do: put_in(state.management.selections[e.stall_id].choice, {e.item.kind, e.item.id})",
+       "  def evolve(state, %{type: :helper_choice_selected} = e) do\n    state\n    |> put_in([:management, :selections, e.stall_id, :choice], {e.item.kind, e.item.id})\n    |> update_in([:management, :shifts, state.management.shift_by_stall[e.stall_id], :tasks], &(&1 + 1))\n  end",
+       [@management]},
       {"expiry loses its exact tie to same-instant service (class 1 sorted after class 3)",
        "lib/feud_hall/domain/hall/advance.ex", "      {1, &expiries/1},\n", "      {3.5, &expiries/1},\n", [@tray]},
       {"cleaning gate opens at exactly 03:00", "lib/feud_hall/domain/clock.ex",
@@ -147,7 +167,7 @@ defmodule MutationCohort do
        "Enum.reduce(trays ++ desserts ++ offers, {state, []}", "Enum.reduce(desserts ++ offers, {state, []}",
        [@kitchen]},
       {"B9 stage capacity bypassed (prep stations unlimited)", "lib/feud_hall/domain/kitchen.ex",
-       "count.(:prep) < prep_n and count.(:queued_prep) > 0 ->", "count.(:queued_prep) > 0 ->", [@kitchen]},
+       "count.(:prep) < prep_n and count.(:queued_prep) > 0", "count.(:queued_prep) > 0", [@kitchen]},
       {"B10 consumed ingredients posted twice", "lib/feud_hall/domain/hall/evolver.ex",
        "    |> post(rid, raw: -consumed_cost, wip: consumed_cost)\n",
        "    |> post(rid, raw: -consumed_cost, wip: consumed_cost)\n    |> post(rid, raw: -consumed_cost, wip: consumed_cost)\n",
@@ -157,16 +177,16 @@ defmodule MutationCohort do
        "        open?: stall.mode == :open,\n        cash: state.restaurants[stall.restaurant].ledger.cash,\n",
        [@planner]},
       {"B11b authority hands the planner the full hall state", "lib/feud_hall/infrastructure/hall_authority.ex",
-       "Planner.plan(PublicView.build(hall), own, profile, hall.catalog, npc.rng)",
-       "Planner.plan(hall, own, profile, hall.catalog, npc.rng)", [@authority]},
+       "Planner.plan(view, Map.put(own, :lease, lease), profile, hall.catalog, rng)",
+       "Planner.plan(hall, Map.put(own, :lease, lease), profile, hall.catalog, rng)", [@authority]},
       {"B12 NPC slot not advanced by a plan", "lib/feud_hall/domain/hall/decider.ex",
        "      next_slot_at: slot + Clock.hour(),\n", "      next_slot_at: slot,\n", [@npc_plan]},
       {"B13 a product dropped from day_closed replenishment", "lib/feud_hall/domain/market.ex",
        "    Map.new(Map.keys(catalog.products), fn product ->\n      target =",
        "    Map.new(Enum.drop(Map.keys(catalog.products), 1), fn product ->\n      target =", [@forecast]},
       {"B13b day_closed replenishment not applied to market stock", "lib/feud_hall/domain/hall/evolver.ex",
-       "update_in(state, [:market, :stock], &add_stock(&1, e.replenishment))",
-       "update_in(state, [:market, :stock], &add_stock(&1, %{}))", [@forecast]},
+       "update_in([:market, :stock], &add_stock(&1, e.replenishment))",
+       "update_in([:market, :stock], &add_stock(&1, %{}))", [@forecast]},
       {"B14 an accepted dessert may reuse an existing order ID (domain guard removed)",
        "lib/feud_hall/domain/hall/admission.ex",
        "with :ok <- ensure(not Map.has_key?(state.orders, order_id), :order_id_taken),", "with :ok <- :ok,", [@tray]},
@@ -189,7 +209,15 @@ defmodule MutationCohort do
     if bad != [], do: System.halt(1)
   end
 
-  def run([work]) do
+  def run([work]), do: run_cohort(work, mutants())
+
+  def run([work, "--match", fragment]) when byte_size(fragment) > 0 do
+    selected = Enum.filter(mutants(), fn {name, _, _, _, _} -> String.contains?(name, fragment) end)
+    if selected == [], do: abort("no mutants match #{inspect(fragment)}")
+    run_cohort(work, selected)
+  end
+
+  defp run_cohort(work, cohort) do
     src = File.cwd!()
     unless File.exists?(Path.join(src, "mix.exs")), do: abort("run from server/")
     if File.exists?(work) and File.ls!(work) != [], do: abort("work dir must be empty or absent")
@@ -199,14 +227,15 @@ defmodule MutationCohort do
 
     for entry <- File.ls!(src),
         entry not in ["cover", "scripts"],
+        not String.starts_with?(entry, ".env"),
         do: File.cp_r!(Path.join(src, entry), Path.join(dir, entry))
 
-    selected = mutants() |> Enum.flat_map(&elem(&1, 4)) |> Enum.uniq()
+    selected = cohort |> Enum.flat_map(&elem(&1, 4)) |> Enum.uniq()
     IO.puts("baseline (#{length(selected)} focused files)...")
     baseline!(dir, selected)
 
     results =
-      for {name, file, from, to, tests} <- mutants() do
+      for {name, file, from, to, tests} <- cohort do
         path = Path.join(dir, file)
         original = File.read!(path)
         started = System.monotonic_time(:millisecond)

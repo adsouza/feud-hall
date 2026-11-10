@@ -2,6 +2,7 @@ defmodule FeudHall.Application.DiagnosticsTest do
   use ExUnit.Case, async: false
 
   alias FeudHall.Application.{CommandWorkflow, Diagnostics, Recovery}
+  alias FeudHall.Domain.Identity
   alias FeudHall.MexicanFixture
   alias FeudHall.Infrastructure.Diagnostics.{Exporter, MemorySink}
   alias FeudHall.Infrastructure.InMemoryEventStore
@@ -75,6 +76,50 @@ defmodule FeudHall.Application.DiagnosticsTest do
     refute dump =~ "sentinel"
     refute dump =~ "alice-secret-id"
     assert Enum.any?(outcomes(sink), &(&1.actor_kind == :principal))
+  end
+
+  test "identity and management command kinds are logged while unknown input is redacted", %{sink: sink} do
+    rt = open(diagnostics: {MemorySink, sink})
+    device = "owner-device"
+
+    assert {:accepted, _, rt} =
+             CommandWorkflow.execute(rt, env("managed", {:system, :admin}, {:enable_management, %{}}))
+
+    assert {:accepted, _, rt} =
+             CommandWorkflow.execute(
+               rt,
+               env("profile", {:device, device}, {:bootstrap_guest, %{device: device, name: "Owner"}})
+             )
+
+    principal = Identity.principal_for_device(Identity.get(rt.control), device)
+
+    assert {:accepted, _, rt} =
+             CommandWorkflow.execute(
+               rt,
+               env("seed", {:system, :admin}, {:seed_owner, %{principal: principal, reviewer?: true}})
+             )
+
+    assert {:accepted, _, rt} =
+             CommandWorkflow.execute(
+               rt,
+               env("presence", {:principal, principal}, {:report_owner_presence, %{present: true}})
+             )
+
+    assert {:error, :unknown_command, ^rt} =
+             CommandWorkflow.execute(rt, env("bad-kind", {:principal, principal}, {"untrusted-value", %{}}))
+
+    records = MemorySink.records(sink)
+
+    for {id, kind, outcome} <- [
+          {"profile", :bootstrap_guest, :accepted},
+          {"presence", :report_owner_presence, :accepted},
+          {"bad-kind", :unknown, :rejected}
+        ] do
+      assert [
+               %{name: :command_attempted, fields: %{kind: ^kind}},
+               %{name: :command_outcome, fields: %{kind: ^kind, outcome: ^outcome}}
+             ] = Enum.filter(records, &(&1.fields[:command_id] == id))
+    end
   end
 
   test "accepted is emitted only after the append; failures map to unavailable and commit_unknown", %{sink: sink} do

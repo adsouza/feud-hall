@@ -22,10 +22,12 @@ defmodule FeudHall.Infrastructure.Diagnostics.Exporter do
   @free 1
   @dropped 2
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
 
   @impl FeudHall.Application.Diagnostics
   def emit(exporter, record) do
+    exporter = GenServer.whereis(exporter)
+
     case Registry.lookup(@registry, exporter) do
       [{^exporter, credits}] ->
         if :atomics.sub_get(credits, @free, 1) >= 0 do

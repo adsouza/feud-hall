@@ -163,6 +163,12 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   @spec execute(GenServer.server(), map()) :: tuple()
   def execute(pid, envelope), do: GenServer.call(pid, {:execute, envelope}, @call_timeout)
 
+  def management_execute(pid, device, request),
+    do: GenServer.call(pid, {:management_execute, device, request}, @call_timeout)
+
+  def management_view(pid, device), do: GenServer.call(pid, {:management_view, device}, @call_timeout)
+  def management_quote(pid, device, params), do: GenServer.call(pid, {:management_quote, device, params}, @call_timeout)
+
   @doc "The committed head the authority holds."
   @spec state(GenServer.server()) :: %{
           hall: map() | nil,
@@ -260,6 +266,19 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   def handle_call(:tick, _from, s), do: s |> run_tick() |> reply(&tick_reply/1)
 
   def handle_call({:execute, envelope}, _from, s), do: s |> run_execute(envelope) |> reply(& &1)
+
+  def handle_call({:management_execute, device, request}, _from, s) do
+    case FeudHall.Application.Management.envelope(s.runtime.control, device, request) do
+      {:ok, envelope} -> s |> run_execute(envelope) |> reply(& &1)
+      {:error, reason} -> {:reply, {:error, reason}, s}
+    end
+  end
+
+  def handle_call({:management_view, device}, _from, s),
+    do: {:reply, FeudHall.Application.Management.view(s.runtime, device), s}
+
+  def handle_call({:management_quote, device, params}, _from, s),
+    do: {:reply, FeudHall.Application.Management.quote(s.runtime, device, params), s}
 
   def handle_call(:state, _from, %{runtime: rt} = s) do
     {:reply,
@@ -503,7 +522,10 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     hall = s.runtime.state
 
     with {:ok, slot} when slot != nil <-
-           guarded(fn -> Planner.choose_slot(PublicView.build(hall), hall.layout, profile) end),
+           guarded(fn ->
+             layout = Map.reject(hall.layout, fn {sid, _} -> FeudHall.Domain.Hall.Management.reserved?(hall, sid) end)
+             Planner.choose_slot(PublicView.build(hall), layout, profile)
+           end),
          {:ok, cuisine} <- starter do
       payload = %{restaurant_id: "npc-#{op}", stall_id: slot, name: "NPC #{op}", cuisine: cuisine}
       npc_command(s, {op, :create}, %{command_id: id, actor: {:npc, op}, command: {:create_restaurant, payload}})
@@ -541,12 +563,19 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     with {:ok, profile} <- npc_profile(hall, npc),
          {:ok, own} <- fetch_restaurant(hall, npc.restaurant_id),
          {:ok, {actions, rng}} <-
-           guarded(fn -> Planner.plan(PublicView.build(hall), own, profile, hall.catalog, npc.rng) end) do
+           guarded(fn -> plan_npc_actions(hall, own, profile, npc.rng) end) do
       plan = %{operator: op, slot: slot, actions: actions, rng: rng}
       npc_command(s, {op, :plan}, %{command_id: id, actor: {:npc, op}, command: {:npc_plan, plan}}, slot)
     else
       {:error, reason} -> {:cont, {:ok, npc_failed(s, {op, :plan}, id, reason, slot)}}
     end
+  end
+
+  defp plan_npc_actions(hall, own, profile, rng) do
+    view = PublicView.build(hall)
+    stall = Enum.find(view.stalls, &(&1.restaurant_id == own.id))
+    lease = if stall, do: get_in(hall, [:management, :leases, stall.stall_id])
+    Planner.plan(view, Map.put(own, :lease, lease), profile, hall.catalog, rng)
   end
 
   # Ruling R4: an NPC's profile is the one whose ID is its operator ID.

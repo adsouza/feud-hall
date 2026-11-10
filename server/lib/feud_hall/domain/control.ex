@@ -19,6 +19,9 @@ defmodule FeudHall.Domain.Control do
   nil before any event.
   """
 
+  alias FeudHall.Domain.Identity
+  alias FeudHall.Domain.Hall.Management
+
   @type state :: %{current_epoch: String.t() | nil, epochs: [String.t()], reconciled: MapSet.t()} | nil
 
   @doc "Decides a control command; only the authority capability may issue them."
@@ -48,7 +51,7 @@ defmodule FeudHall.Domain.Control do
         {:ok,
          %{
            control: [%{type: :availability_resumed, recovery_id: id, hall_ms: hall.now}],
-           hall: [%{type: :hall_resumed, recovery_id: id}]
+           hall: [%{type: :hall_resumed, recovery_id: id} | Management.recovery_events(hall)]
          }}
     end
   end
@@ -63,6 +66,8 @@ defmodule FeudHall.Domain.Control do
 
   def evolve(state, %{type: :availability_resumed, recovery_id: id}),
     do: %{state | reconciled: MapSet.put(state.reconciled, id)}
+
+  def evolve(state, event), do: Map.put(state, :identity, Identity.evolve(Identity.get(state), event))
 
   @doc "Folds control events from genesis (or a snapshot state)."
   def replay(events, state \\ nil), do: Enum.reduce(events, state, &evolve(&2, &1))

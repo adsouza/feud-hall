@@ -8,11 +8,43 @@ defmodule FeudHall.App do
 
     children = [
       FeudHall.Infrastructure.Repo,
+      {Phoenix.PubSub, name: FeudHall.PubSub},
+      FeudHall.Web.RateLimit,
       {Registry, keys: :unique, name: FeudHall.Infrastructure.Diagnostics.Exporter.Registry},
       {DynamicSupervisor, name: FeudHall.AuthoritySupervisor, strategy: :one_for_one}
     ]
 
+    children = if Application.get_env(:feud_hall, :serve, false), do: children ++ live_children(), else: children
     Supervisor.start_link(children, strategy: :one_for_one, name: FeudHall.Supervisor)
+  end
+
+  defp live_children do
+    alias FeudHall.Infrastructure.{HallAuthority, PostgresEventStore, Repo, SystemClock}
+    alias FeudHall.Infrastructure.Diagnostics.Exporter
+    scope = Application.fetch_env!(:feud_hall, :hall_id)
+
+    [
+      {Exporter,
+       [
+         name: FeudHall.LiveDiagnostics,
+         max_queue: 256,
+         batch: 16,
+         timeout_ms: 2_000,
+         export: &FeudHall.Web.Diagnostics.export/1
+       ]},
+      {HallAuthority,
+       [
+         name: FeudHall.LiveAuthority,
+         owner: "web",
+         diagnostics: {Exporter, FeudHall.LiveDiagnostics},
+         scope: scope,
+         store_mod: PostgresEventStore,
+         store: PostgresEventStore.new(Repo, scope),
+         clock: {SystemClock, nil}
+       ]},
+      {FeudHall.Web.Bootstrap, scope},
+      FeudHall.Web.Endpoint
+    ]
   end
 
   @doc """

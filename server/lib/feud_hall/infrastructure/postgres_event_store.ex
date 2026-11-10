@@ -312,7 +312,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   defp content_hash(body), do: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
 
-  defp actor_label({kind, id}) when kind in [:principal, :npc, :system], do: "#{kind}:#{id}"
+  defp actor_label({kind, id}) when kind in [:principal, :npc, :system, :device], do: "#{kind}:#{id}"
   defp actor_label(other), do: inspect(other)
 
   # Rows apply in order (later rows for the same key win), so they are folded

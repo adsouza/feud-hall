@@ -14,8 +14,9 @@ defmodule FeudHall.Domain.Hall.Decider do
   """
 
   alias FeudHall.Domain.{Clock, Content, Market, Money, Random, Substitution}
-  alias FeudHall.Domain.Hall.{Admission, Advance, Evolver, Settlement, SimulationUpgrade}
+  alias FeudHall.Domain.Hall.{Admission, Advance, Evolver, Management, OperatingPolicy, Settlement, SimulationUpgrade}
 
+  @management_commands Management.commands()
   @max_qty 1_000_000
   @max_price 1_000_000
   # Purchase price limits are compared, never multiplied; the bound keeps them small integers.
@@ -24,15 +25,23 @@ defmodule FeudHall.Domain.Hall.Decider do
   @max_seed 18_446_744_073_709_551_615
 
   # The owner commands an NPC plan may contain; anything else is refused inside the plan.
-  @plan_actions ~w(open_stall close_stall unlock_recipe set_menu_price remove_menu_item set_substitution_policy
+  @plan_actions ~w(open_stall close_stall set_staff_schedule unlock_recipe set_menu_price remove_menu_item set_substitution_policy
                    submit_purchase_request cancel_purchase_request)a
   @max_plan_actions 256
 
   def decide(nil, {:initialize_hall, %{hall_id: hall_id, catalog: catalog} = p}, %{actor: {:system, :admin}})
       when is_binary(hall_id) do
     case Content.validate(catalog) do
-      :ok -> initialize_events(hall_id, catalog, Map.get(p, :seed, catalog.rules.seed))
-      {:error, problems} -> {:error, {:invalid_content, problems}}
+      :ok ->
+        with {:ok, events} <- initialize_events(hall_id, catalog, Map.get(p, :seed, catalog.rules.seed)) do
+          managed =
+            if Map.get(p, :managed) == true, do: [%{type: :management_started, rules: Management.rules()}], else: []
+
+          {:ok, events ++ managed}
+        end
+
+      {:error, problems} ->
+        {:error, {:invalid_content, problems}}
     end
   end
 
@@ -54,6 +63,9 @@ defmodule FeudHall.Domain.Hall.Decider do
     if target < state.now, do: {:error, :clock_cannot_move_backwards}, else: {:ok, Advance.run(state, target)}
   end
 
+  def decide(state, {kind, _} = command, ctx) when kind in @management_commands,
+    do: Management.decide(state, command, ctx)
+
   def decide(state, {:create_restaurant, p}, %{actor: {kind, owner}}) when kind in [:principal, :npc] do
     catalog = state.catalog
 
@@ -61,19 +73,40 @@ defmodule FeudHall.Domain.Hall.Decider do
       catalog.recipes |> Map.values() |> Enum.find(&(&1.starter and &1.cuisine == Map.get(p, :cuisine)))
 
     cond do
-      not (id?(p[:restaurant_id]) and id?(p[:stall_id]) and name?(p[:name])) -> {:error, :invalid_payload}
-      Map.has_key?(state.owners, {kind, owner}) -> {:error, :venture_already_active}
-      Map.has_key?(state.restaurants, p.restaurant_id) -> {:error, :duplicate_restaurant}
-      not Map.has_key?(state.layout, p.stall_id) -> {:error, :unknown_slot}
-      Map.has_key?(state.stalls, p.stall_id) -> {:error, :stall_taken}
-      starter == nil -> {:error, :unknown_cuisine}
-      true -> {:ok, create_restaurant_events(state, p, kind, owner, starter)}
+      not (id?(p[:restaurant_id]) and id?(p[:stall_id]) and name?(p[:name])) ->
+        {:error, :invalid_payload}
+
+      Map.has_key?(state.owners, {kind, owner}) ->
+        {:error, :venture_already_active}
+
+      Map.has_key?(state.restaurants, p.restaurant_id) ->
+        {:error, :duplicate_restaurant}
+
+      not Map.has_key?(state.layout, p.stall_id) ->
+        {:error, :unknown_slot}
+
+      Map.has_key?(state.stalls, p.stall_id) ->
+        {:error, :stall_taken}
+
+      starter == nil ->
+        {:error, :unknown_cuisine}
+
+      Management.allow_lease(state, p.stall_id, kind, owner) != :ok ->
+        {:error, :slot_unavailable}
+
+      true ->
+        events = create_restaurant_events(state, p, kind, owner, starter)
+        {:ok, events ++ Management.lease_events(state, p.stall_id, p.restaurant_id, kind, owner)}
     end
   end
 
   def decide(state, {:open_stall, %{stall_id: s}}, ctx) do
     with {:ok, _stall} <- owned_stall(state, s, ctx) do
-      {:ok, [%{type: :stall_opened, stall_id: s}]}
+      if Management.enabled?(state) and state.access == :cleaning do
+        {:ok, [%{type: :stall_opening_queued, stall_id: s}]}
+      else
+        with :ok <- Management.allow_open(state, s), do: {:ok, [%{type: :stall_opened, stall_id: s}]}
+      end
     end
   end
 
@@ -88,7 +121,10 @@ defmodule FeudHall.Domain.Hall.Decider do
         |> Enum.sort_by(& &1.id)
         |> Enum.map(&Settlement.finalize_event(state1, &1, :dessert_offer_withdrawn))
 
-      {:ok, [%{type: :stall_closed, stall_id: s} | withdrawn]}
+      {:ok,
+       Management.end_stall_shift(state, s, :stall_closed) ++
+         OperatingPolicy.cancel_open_requests(state, s) ++
+         [%{type: :stall_closed, stall_id: s} | withdrawn]}
     end
   end
 
@@ -97,7 +133,7 @@ defmodule FeudHall.Domain.Hall.Decider do
          {:ok, recipe} <- fetch(state.catalog.recipes, id, :unknown_recipe),
          :ok <- ensure(recipe.cuisine == restaurant.cuisine, :wrong_cuisine),
          :ok <- ensure(id not in restaurant.unlocked, :already_unlocked),
-         :ok <- ensure(restaurant.ledger.cash >= recipe.unlock_cost, :insufficient_cash) do
+         :ok <- ensure(Management.available_cash(state, r) >= recipe.unlock_cost, :insufficient_cash) do
       {:ok, [%{type: :recipe_unlocked, restaurant_id: r, recipe_id: id, cost: recipe.unlock_cost}]}
     end
   end

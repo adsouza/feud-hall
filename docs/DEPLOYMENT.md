@@ -207,3 +207,38 @@ Keep production checks observational where
 possible and use isolated test environments for seeded scenarios, failure
 injection, and destructive restore exercises. Update this document with verified
 procedures rather than treating these planned steps as evidence they ran.
+
+## Local management game
+
+Use the existing PostgreSQL server and a dedicated database for the managed
+hall. A managed hall pins its operating rules at genesis. The endpoint expects
+a managed hall and refuses to enable management implicitly on an occupied
+Milestone 2 hall.
+
+From `web/`, run `bun install --frozen-lockfile` and `bun run build`. The
+build writes the client into `server/priv/static`. From `server/`, set these
+variables for the local process:
+
+```sh
+export FEUD_HALL_SERVE=1
+export FEUD_HALL_DB=feud_hall_management
+export FEUD_HALL_ORIGIN=http://localhost:4000
+export FEUD_HALL_SECRET="$(openssl rand -hex 32)"
+export FEUD_HALL_ADMIN_KEY="$(openssl rand -hex 32)"
+mix ecto.create
+mix ecto.migrate
+mix run --no-halt
+```
+
+Keep the signing secret stable across restarts. The endpoint listens on loopback
+for HTTP development. A non-loopback origin requires HTTPS. Use the configured
+origin in the browser. For hosted configuration, the runtime also accepts
+`DATABASE_URL` and `PORT`.
+
+Create a visitor profile in the UI. Retrieve its principal ID from that device's
+authorized `GET /api/state` response, then issue one protected operator request
+to `POST /api/operator/seed` using the configured key as a Bearer credential
+and JSON fields `command_id` and `principal`. The seed account receives its
+three invitations and the explicit reviewer capability through the same event
+store as other accounts. Unset the operator key and restart after seeding
+when the endpoint is no longer required. Use the seeded account to issue codes.

@@ -20,3 +20,9 @@ The [event-sourcing ADR](docs/decisions/0001-event-sourcing.md) records the pers
 The [artwork sources and export guide](assets/branding/README.md) include SVG icons, a wordmark, and a social/banner composition.
 
 Coding agents should start with [AGENTS.md](AGENTS.md) for repository conventions and verification policy.
+
+## Run the management game locally
+
+Build the Svelte client, then start the Phoenix server against a dedicated local
+PostgreSQL database. See [local setup](docs/DEPLOYMENT.md#local-management-game)
+for configuration and initial owner seeding.

@@ -33,13 +33,18 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   alias FeudHall.Application.{Diagnostics, Replay}
   alias FeudHall.Application.Projections.Balances
-  alias FeudHall.Domain.{Clock, Control, Hall}
+  alias FeudHall.Domain.{Clock, Control, Hall, Identity}
 
+  alias FeudHall.Domain.Hall.Management
+
+  @management_commands Management.commands()
   @commands ~w(initialize_hall upgrade_simulation advance_clock create_restaurant open_stall close_stall unlock_recipe
                set_menu_price remove_menu_item set_substitution_policy submit_purchase_request
                cancel_purchase_request grant_allowance admit_visit cancel_tray accept_dessert decline_dessert
                cancel_dessert npc_plan)a
+  @identity_commands Identity.commands()
   @control_commands ~w(start_availability reconcile_recovery)a
+  @known_commands @commands ++ @control_commands ++ @identity_commands ++ @management_commands
 
   defstruct store_mod: nil,
             store: nil,
@@ -156,7 +161,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   defp envelope_fields(%{command_id: id, actor: actor, command: {kind, _}}),
     do: %{
       command_id: id,
-      kind: if(kind in @commands or kind in @control_commands, do: kind, else: :unknown),
+      kind: if(kind in @known_commands, do: kind, else: :unknown),
       actor_kind: Diagnostics.actor_kind(actor)
     }
 
@@ -229,12 +234,23 @@ defmodule FeudHall.Application.CommandWorkflow do
   defp validate(%{command_id: id, actor: actor, command: {kind, payload}})
        when is_binary(id) and byte_size(id) in 1..64 and is_map(payload) do
     cond do
-      not String.printable?(id) -> {:error, :malformed_command_id}
-      kind not in @commands and kind not in @control_commands -> {:error, :unknown_command}
-      not valid_actor?(actor) -> {:error, :unauthenticated}
-      minted_id?(id) -> {:error, :reserved_command_id}
-      reserved_prefix?(id) and not reserved_allowed?(id, actor) -> {:error, :reserved_command_id}
-      true -> :ok
+      not String.printable?(id) ->
+        {:error, :malformed_command_id}
+
+      kind not in @known_commands ->
+        {:error, :unknown_command}
+
+      not valid_actor?(actor) ->
+        {:error, :unauthenticated}
+
+      minted_id?(id) ->
+        {:error, :reserved_command_id}
+
+      reserved_prefix?(id) and not reserved_allowed?(id, actor) ->
+        {:error, :reserved_command_id}
+
+      true ->
+        :ok
     end
   end
 
@@ -278,6 +294,8 @@ defmodule FeudHall.Application.CommandWorkflow do
   defp reserved_allowed?(_id, {:system, _}), do: true
   defp reserved_allowed?(id, {:npc, _}), do: String.starts_with?(id, "npc:")
   defp reserved_allowed?(_id, _actor), do: false
+
+  defp valid_actor?({:device, id}), do: is_binary(id) and byte_size(id) in 1..64 and String.printable?(id)
 
   defp valid_actor?({:principal, id}), do: is_binary(id) and byte_size(id) in 1..64
 
@@ -400,6 +418,13 @@ defmodule FeudHall.Application.CommandWorkflow do
     end
   end
 
+  defp decide(runtime, {kind, _} = command, ctx) when kind in @identity_commands do
+    now = if runtime.state, do: runtime.state.now, else: 0
+
+    with {:ok, events} <- Identity.decide(Identity.get(runtime.control), now, command, ctx),
+         do: {:ok, [], events}
+  end
+
   # Control commands see the hall state (nil before initialisation) read-only;
   # hall commands never touch the control stream.
   defp decide(runtime, {kind, _} = command, ctx) when kind in @control_commands do
@@ -409,8 +434,25 @@ defmodule FeudHall.Application.CommandWorkflow do
   end
 
   defp decide(runtime, command, ctx) do
-    with {:ok, events} <- Hall.decide(runtime.state, command, ctx), do: {:ok, events, []}
+    with :ok <- authorize_management(runtime, command, ctx),
+         {:ok, events} <- Hall.decide(runtime.state, command, ctx) do
+      identity = Identity.get(runtime.control)
+      {:ok, events, Identity.observe(identity, runtime.state, events)}
+    end
   end
+
+  defp authorize_management(runtime, {:create_restaurant, _}, %{actor: {:principal, id}}) do
+    if Management.enabled?(runtime.state) and not Identity.owner?(Identity.get(runtime.control), id),
+      do: {:error, :owner_required},
+      else: :ok
+  end
+
+  defp authorize_management(runtime, {kind, _}, %{actor: {:principal, id}})
+       when kind in @management_commands do
+    if Identity.principal(Identity.get(runtime.control), id), do: :ok, else: {:error, :unknown_principal}
+  end
+
+  defp authorize_management(_runtime, _command, _ctx), do: :ok
 
   defp append_request(runtime, envelope, events, control_events, receipt, candidate) do
     %{

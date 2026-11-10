@@ -26,6 +26,9 @@ defmodule FeudHall.MixProject do
 
   defp deps do
     [
+      {:phoenix, "1.8.16"},
+      {:bandit, "1.14.1"},
+      {:jason, "~> 1.4"},
       {:ecto_sql, "~> 3.14"},
       {:postgrex, "~> 0.22"},
       {:stream_data, "~> 1.4", only: :test}

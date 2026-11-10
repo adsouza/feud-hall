@@ -200,6 +200,7 @@ defmodule FeudHall.Domain.NpcPlanTest do
         ~w(unknown_stall unknown_restaurant forbidden unknown_recipe wrong_cuisine already_unlocked
            insufficient_cash recipe_locked invalid_price not_on_menu unknown_line invalid_policy
            no_approved_substitute unknown_product invalid_quantity invalid_price_limit no_pending_request
+           staff_off_duty unpaid_rent owner_absent
            unauthorized_or_malformed malformed_command action_not_allowed malformed_action
            unrecognised_reason)a
 
@@ -212,7 +213,14 @@ defmodule FeudHall.Domain.NpcPlanTest do
         outcomes: for(r <- reasons, do: %{action: :set_menu_price, result: :rejected, reason: r})
       }
 
-      assert {:ok, ^event} = event |> EventCodec.encode!() |> EventCodec.decode()
+      encoded =
+        try do
+          EventCodec.encode!(event)
+        rescue
+          error in ArgumentError -> flunk("a valid NPC outcome could not be encoded: #{Exception.message(error)}")
+        end
+
+      assert {:ok, ^event} = EventCodec.decode(encoded)
     end
 
     test "(Review Focus 4) an NPC with no cash and no stock commits its plan; what it cannot pay for is refused with reasons" do

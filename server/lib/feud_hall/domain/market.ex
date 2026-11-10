@@ -22,6 +22,7 @@ defmodule FeudHall.Domain.Market do
   """
 
   alias FeudHall.Domain.{Inventory, Money}
+  alias FeudHall.Domain.Hall.{Management, OperatingPolicy}
 
   @doc """
   Whether the hall clears the market at all: its catalog's `clear_every_hall_ms` is a positive
@@ -149,19 +150,26 @@ defmodule FeudHall.Domain.Market do
 
       requests
       |> Enum.sort_by(& &1.product)
-      |> Enum.map_reduce({restaurant.ledger.cash, room}, &fund(&1, &2, prices, state.catalog))
+      |> Enum.map_reduce({Management.available_cash(state, restaurant.id), room}, &fund(&1, &2, prices, state))
       |> elem(0)
     end)
   end
 
-  defp fund(request, {cash, room}, prices, catalog) do
+  defp fund(request, {cash, room}, prices, state) do
     price = Map.fetch!(prices, request.product)
 
     if price > request.max_price_per_kunit do
       {shape(request, 0, :price_above_limit), {cash, room}}
     else
+      catalog = state.catalog
       per_kunit = catalog.products[request.product].storage_per_kunit
-      by_cash = div(cash * 1000, price)
+
+      permitted_cash =
+        if Map.get(request, :automated),
+          do: OperatingPolicy.automation_cash(state, request.restaurant_id, cash),
+          else: cash
+
+      by_cash = div(permitted_cash * 1000, price)
       by_room = if per_kunit == 0, do: request.qty, else: div(max(room, 0) * 1000, per_kunit)
       funded = min(request.qty, min(by_cash, by_room))
 

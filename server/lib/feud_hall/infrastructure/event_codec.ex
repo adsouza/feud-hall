@@ -14,6 +14,24 @@ defmodule FeudHall.Infrastructure.EventCodec do
   @schema 1
 
   @atoms ~w(
+    recovery_code_issued recovery_code_id device_restored
+    stall_opening_queued preserve_opening business_day_reviewed closing delta cash raw wip cost_of_sales waste capex operating_cost capital revenue
+    guest_profile_created device owner_admitted parent admission_route seed invitation license
+    reviewer? license_reviewer_changed device_revoked invitation_issued invitation_id invitation_released
+    status unused revoked expired invitation_redeemed redeemed invitation_trading_credited earned progress
+    license_eligibility_earned proof license_application_submitted application_id motivation
+    license_application_decided reviewer pending approved rejected withdrawn superseded
+    restock_policy_set pricing_policy_set restock_budget_reserved pricing_policy_applied
+    visitor_allowance_claimed management_started management_hour_closed management_resumed lease_rates setup_fee wage_rate employer_transfer_cap hall_transfer_cap
+    condition tired rested protective_break recovered
+    worker_id role prep_cook finish_cook counter
+    automated target daily_budget min_price max_price markup_permille interval_hours
+    staff_condition_changed worker_hired worker_scheduled worker_dismissed stall_draft_reserved stall_draft_released waitlist_joined waitlist_left tiers priority declined
+    stall_leased rent holding exposure start_hour end_hour staff_schedule_set helper_offer_policy_set
+    owner_presence_recorded unattended_policy_set cash_floor operating_costs_charged arrears rent_accrued wages_accrued
+    helper_shift_started helper_shift_ended helper_presence_recorded disconnect shift_id payment qualified tasks ended_at rate
+    helper_selection_opened helper_choice_selected helper_selection_closed helper_task_completed selection_id
+    stall_closed scheduled_end owner_ended actionable_idle reassigned recovery safety_stop left
     hall_initialized hall_simulation_upgraded clock_advanced hall_cleaning_started hall_cleaning_ended restaurant_created
     starter_grant_issued stall_opened stall_closed recipe_unlocked menu_price_set menu_item_removed
     substitution_policy_set stock_purchased stock_spoiled allowance_granted visit_admitted tray_accepted
@@ -51,8 +69,10 @@ defmodule FeudHall.Infrastructure.EventCodec do
     no_compatible_main nothing_affordable wait_too_long chose_to_leave admission_failed no_open_stall
     nothing_available
     npc_planned operator slot next_slot_at outcomes result accepted rejected action other
-    open_stall close_stall unlock_recipe set_menu_price remove_menu_item set_substitution_policy
+    open_stall close_stall set_staff_schedule unlock_recipe set_menu_price remove_menu_item set_substitution_policy
     submit_purchase_request cancel_purchase_request
+    staff_off_duty unpaid_rent owner_absent
+    invalid_schedule invalid_management_command management_unavailable
     unknown_stall unknown_restaurant forbidden unknown_recipe wrong_cuisine already_unlocked recipe_locked
     invalid_price not_on_menu unknown_line invalid_policy no_approved_substitute unknown_product
     invalid_quantity invalid_price_limit no_pending_request unauthorized_or_malformed malformed_command

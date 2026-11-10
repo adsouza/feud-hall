@@ -27,6 +27,8 @@ defmodule FeudHall.Domain.Kitchen do
   is reused after finished orders leave live state.
   """
 
+  alias FeudHall.Domain.Hall.Management
+
   @stages [:queued_prep, :prep, :queued_finish, :finish, :ready]
 
   @doc "The live work stages, in order."
@@ -56,7 +58,7 @@ defmodule FeudHall.Domain.Kitchen do
   end
 
   defp estimate_at(state, stall_id, new_components, now) do
-    %{prep_stations: prep_n, finish_stations: finish_n} = state.catalog.rules.kitchen
+    {prep_n, finish_n} = Management.capacity(state, stall_id)
     handover = state.catalog.rules.handover_ms
     orders = live_orders(state, stall_id)
     next = next_seq(state)
@@ -155,33 +157,42 @@ defmodule FeudHall.Domain.Kitchen do
   work and ask again until `nil`.
   """
   def next_start(state, stall_id) do
-    %{prep_stations: prep_n, finish_stations: finish_n} = state.catalog.rules.kitchen
+    {prep_n, finish_n} = Management.capacity(state, stall_id)
     orders = live_orders(state, stall_id)
     count = fn status -> Enum.count(orders, &(&1.status == status)) end
 
     cond do
-      count.(:prep) < prep_n and count.(:queued_prep) > 0 ->
+      count.(:prep) < prep_n and count.(:queued_prep) > 0 and Management.stage_available?(state, stall_id, :prep_cook) ->
         {:prep, head(orders, :queued_prep).id}
 
-      count.(:finish) < finish_n and count.(:queued_finish) > 0 ->
+      count.(:finish) < finish_n and count.(:queued_finish) > 0 and
+          Management.stage_available?(state, stall_id, :finish_cook) ->
         {:finish, head(orders, :queued_finish).id}
 
-      Map.get(state.stalls[stall_id], :counter) == nil ->
-        orders
-        |> Enum.group_by(&item_key/1)
-        |> Enum.filter(fn {_key, os} -> Enum.all?(os, &(&1.status == :ready)) end)
-        |> Enum.map(fn {key, os} ->
-          %{key: key, ready: os |> Enum.map(& &1.ready_at) |> Enum.max(), seq: min_seq(os)}
-        end)
-        |> fifo(& &1.ready)
-        |> case do
-          [first | _] -> {:handover, first.key}
+      Map.get(state.stalls[stall_id], :counter) == nil and
+        get_in(state, [:management, :selections, stall_id]) == nil and
+          Management.stage_available?(state, stall_id, :counter) ->
+        case ready_items(state, stall_id) do
+          [first | _] -> {:handover, first}
           [] -> nil
         end
 
       true ->
         nil
     end
+  end
+
+  @doc "Ready counter items in the automatic service order."
+  def ready_items(state, stall_id) do
+    state
+    |> live_orders(stall_id)
+    |> Enum.group_by(&item_key/1)
+    |> Enum.filter(fn {_key, orders} -> Enum.all?(orders, &(&1.status == :ready)) end)
+    |> Enum.map(fn {key, orders} ->
+      %{key: key, ready: orders |> Enum.map(& &1.ready_at) |> Enum.max(), seq: min_seq(orders)}
+    end)
+    |> fifo(& &1.ready)
+    |> Enum.map(& &1.key)
   end
 
   @doc "Stall IDs holding live kitchen work, sorted."

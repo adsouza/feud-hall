@@ -72,6 +72,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   """
 
   alias FeudHall.Domain.{Clock, Demand, Inventory, Market}
+  alias FeudHall.Domain.Hall.Management
 
   @spec check(map() | nil) :: :ok | {:error, [term()]}
   def check(nil), do: :ok
@@ -81,7 +82,8 @@ defmodule FeudHall.Domain.Hall.Invariants do
            trays(state) ++
            orders(state) ++
            retired(state) ++
-           access(state) ++ market(state) ++ arrivals(state) ++ stats(state) ++ npcs(state) ++ kitchen(state) do
+           access(state) ++
+           market(state) ++ arrivals(state) ++ stats(state) ++ npcs(state) ++ kitchen(state) ++ management(state) do
       [] -> :ok
       problems -> {:error, problems}
     end
@@ -97,7 +99,8 @@ defmodule FeudHall.Domain.Hall.Invariants do
       reserved = Map.get(claims, rid, %{})
 
       balance = [
-        {l.cash + l.raw + l.wip + l.cost_of_sales + l.waste + l.capex == l.capital + l.revenue, :trial_balance},
+        {l.cash + l.raw + l.wip + l.cost_of_sales + l.waste + l.capex + Map.get(l, :operating_cost, 0) ==
+           l.capital + l.revenue, :trial_balance},
         {l.cash >= 0, :negative_cash},
         {Inventory.storage_used(r.batches, state.catalog) <= state.catalog.rules.storage_capacity,
          :storage_over_capacity}
@@ -330,6 +333,36 @@ defmodule FeudHall.Domain.Hall.Invariants do
 
     length(occupants) > limit and
       (stage != :finish or Enum.any?(occupants, &(&1.estimated_completion != nil)))
+  end
+
+  defp management(state) do
+    if Management.enabled?(state) do
+      m = state.management
+      active = for {id, %{status: :active} = shift} <- m.shifts, into: %{}, do: {id, shift}
+      by_stall = Map.new(active, fn {id, shift} -> {shift.stall_id, id} end)
+      by_principal = Map.new(active, fn {id, shift} -> {shift.principal, id} end)
+
+      held =
+        Enum.reduce(active, %{}, fn {_, shift}, totals ->
+          amount = Enum.sum(Map.values(shift.payment))
+          Map.update(totals, shift.restaurant_id, amount, &(&1 + amount))
+        end)
+
+      escrow = for {rid, amount} <- held, amount > state.restaurants[rid].ledger.cash, do: {:unfunded_payroll, rid}
+      indexed_drafts = Map.new(m.drafts, fn {id, draft} -> {draft.stall_id, id} end)
+      occupied = for sid <- Map.keys(indexed_drafts), Map.has_key?(state.stalls, sid), do: {:leased_draft, sid}
+
+      escrow ++
+        occupied ++
+        problems([
+          {map_size(active) == map_size(by_stall) and m.shift_by_stall == by_stall, :invalid_helper_stall_index},
+          {map_size(active) == map_size(by_principal) and m.shift_by_principal == by_principal,
+           :invalid_helper_principal_index},
+          {map_size(indexed_drafts) == map_size(m.drafts) and m.draft_by_stall == indexed_drafts, :invalid_draft_index}
+        ])
+    else
+      []
+    end
   end
 
   defp counters(state) do

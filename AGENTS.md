@@ -12,8 +12,9 @@ recipes. New halls use the selected versioned catalog and bootstrap NPCs
 across its starter cuisines.
 The local [Project C report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md)
 records the original single-cuisine 150-stall measurement. Tests and the
-benchmark start authorities. Phoenix, production authority wiring, and the
-frontend are later work. Inspect
+benchmark start authorities. The management slice adds a Phoenix endpoint and
+the Bun/Svelte client under `web/`. Use a dedicated database for a managed hall.
+See [local setup](docs/DEPLOYMENT.md#local-management-game). Inspect
 the current tree before choosing commands. Update this guide with verified entry points as code
 lands; do not describe planned features or checks as already working. Verified
 backend entry points (run from `server/`) are listed in
@@ -204,8 +205,11 @@ Consult the full design for conditions and tuning; these are common failure poin
   `mix.lock`; see [Testing](docs/TESTING.md#implemented-backend-entry-points).
   `mix test` with no file argument is the full suite: run focused files locally
   and leave the full suite and mutation cohort to hosted CI unless the owner
-  approves otherwise. No frontend manifests exist yet; do not invent passing
-  build/test claims or assume a default script is safe.
+  approves otherwise. Inspect the frontend manifest before running any script.
+- For browser regressions, use `bun run test:browser --grep '<scenario>'` from
+  `web/` after building the client. The harness starts its own Phoenix endpoint
+  and disposable PostgreSQL database. See
+  [Management and web checks](docs/TESTING.md#management-and-web-checks).
 - Verify meaningful behavior at the layer changed. Documentation/artwork changes
   need appropriate link, format, or render checks rather than a game test suite.
   Run configured format/lint checks only after inspecting their command chain.

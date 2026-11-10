@@ -101,7 +101,7 @@ suite or any indirect `tsc` execution.
 | TypeScript types | Native `bun check` | Local and hosted CI; check the whole configured project, not just changed files. |
 | Svelte diagnostics | `bun run check:svelte` | After coverage qualification; document the script/tool. Local use must avoid `tsc` and respect memory limits. |
 | Frontend unit/property test | `bun test <test-file>` | Focused locally after command inspection; bounded suite in hosted CI. |
-| Browser/component tests | Bun-invoked scripts | Pin the browser/component harness when added; use actual browser/webview checks for interaction, IME, and rendering. |
+| Browser tests | `bun run test:browser --grep '<scenario>'` | Focused Playwright regression against a disposable hall. See [Management and web checks](#management-and-web-checks). |
 | Backend unit/property test | `mix test <test-file>` | Focused ExUnit/StreamData or equivalent; inspect Mix aliases and setup first. |
 | SQL, replay, mutation, load, package checks | Dedicated scripts/jobs | Implement explicit bounded entry points; run broad/heavy work in hosted CI. |
 
@@ -131,7 +131,7 @@ disposable databases.
 | Model-based property (pure) | `mix test test/feud_hall/properties/hall_trace_property_test.exs --max-cases 1` | Pure; 100 runs, at most 70 generated actions plus the closing service; the oracle checks every accepted command. Includes a deterministic example that the bare closing service alone reaches every structural floor (the case shrinking collapses to). About 130 MB peak RSS locally (measured at Milestone 1). |
 | Model-based property (PostgreSQL) | `mix test test/feud_hall/properties/postgres_trace_property_test.exs --max-cases 1` | Replays pure traces through `CommandWorkflow` on PostgreSQL with snapshots, restarts, aborted commits, and lost replies, and an observed-clock arm that folds every other advance into its successor's catch-up batch (with lost replies and aborted commits on the catch-up append); structural floors on injections, catch-ups, and served trays; checks projection rebuild and genesis replay at the end. |
 | Full suite | `mix test --max-cases 1 [--seed N]` | Locally permitted only because the owner gave advance permission on 2026-11-09, serially, with combined `beam.smp` and `postgres` RSS sampled every second and the run killed above 2 GiB. Otherwise hosted CI. |
-| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>`; `elixir scripts/mutation_cohort.exs --check` | 45 patches (27 for the economic core and storage, 17 `B*` for the shared simulation, `R1` for retiring finished work from live state). Copies the project into `<empty-dir>`, never edits the checkout, and runs mutants with `MIX_ENV=test` against `feud_hall_mutation`; one worker and a recorded seed, focused files per mutant, baseline verified before and after, each patched file restored even on an exception. A structured ExUnit formatter distinguishes named behavioral assertions from setup and runtime failures. `--check` only verifies every source string still matches exactly once and runs nothing; run it after changing source a patch touches. Hosted CI job; about 2 minutes locally at roughly 0.5 GB peak combined RSS (one local run of the 43-patch cohort, not a measured average). |
+| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>`; `elixir scripts/mutation_cohort.exs --check` | 49 patches including NPC refusal serialization, premature handover credit, and device revocation. Copies the project into `<empty-dir>`, never edits the checkout, and runs mutants with `MIX_ENV=test` against `feud_hall_mutation`. One worker runs focused files per mutant with a recorded seed and verifies the baseline before and after. A structured ExUnit formatter separates behavioral assertions from setup and runtime failures. `--check` verifies that every patch matches exactly once. Append `--match '<name fragment>'` to an isolated run to select a bounded subset. Hosted CI runs the cohort. |
 | Projection rebuild (maintenance) | `PostgresEventStore.rebuild_projections/1`, `Postgres.DailyActivityProjector.rebuild/1` | Recompute derived tables from the log. Not a Mix task and exercised by tests only; never point it at a live hall without an operations procedure. |
 | Project C capacity measurement | `python3 scripts/capacity_bench.py --output /tmp/feud-hall-capacity.json` | Standalone, serial benchmark on local PostgreSQL 18. Creates and drops `feud_hall_bench` and refuses an existing database of that name. Defaults to three complete game days, with `--days` accepting one through seven. Stops above 2 GiB combined RSS. |
 
@@ -332,3 +332,62 @@ separate planned, run, passing, failing, and unverified checks. A linter score,
 coverage percentage, successful bundle, or screenshot does not alone prove types,
 translation quality, economic correctness, or capacity. No fluent Japanese review
 is required; localization qualification uses the documented automated checks.
+
+## Management and web checks
+
+Run `mix test test/feud_hall/application/management_test.exs --max-cases 1`
+and `mix test test/feud_hall/domain/identity_property_test.exs --max-cases 1`
+from `server/` against a disposable test database. The management regression
+crosses stall setup, staff-controlled handover, funded wages, eligibility,
+reviewer approval and replay. A bounded management property retries a tray choice
+before, at, and after its deadline and checks that cleaning leaves one served
+tray, one wage settlement, the expected handover credit, and equivalent replay.
+The allowance property generates timed command sequences across three principals
+and four credentials. An independent model checks daily limits, shared fund and
+wallet conservation, receipt reuse and conflicts, and agreement with replay.
+The mutation cohort bypasses the daily claim limit and skips midnight
+replenishment to check that the property detects both faults.
+The stall-allocation property generates direct reservations, waitlist entries,
+releases, expiries, and leases across three owners and two location tiers.
+It compares the holds and available slots against an independent allocation
+model after each step and checks that committed history replays.
+The identity property checks cumulative earning against an independent quota oracle.
+
+The web workflow runs frozen Bun install, Prettier, Oxlint, native `bun check`,
+and a Vite production build. It also runs a one-worker Chromium suite for
+changes to the web client, server, or branding assets. The suite exercises
+dining, helper handover, invitation and cuisine selection, and NPC startup
+recovery through the built client, Phoenix, and disposable PostgreSQL databases.
+The test harness advances the server's manual clock over stdin. Playwright
+controls browser timers separately and can hold back a view or drop a command
+reply to test the client while the server keeps its committed outcome.
+Alongside the real-server journeys, the generated dining check exercises the
+built client against controlled quotes and views. It varies draft edits, lost
+eligibility, and the order of successful and refused replies, checking which
+confirmation the player sees and which terms the client submits. Keep browser
+models focused on observable contracts and use the real-server journeys to
+verify compatibility with Phoenix and PostgreSQL. The generated case is bounded
+to 12 runs and varies its seed across CI runs. To replay a shrunk failure, pass
+the reported seed and path as `FEUD_HALL_BROWSER_SEED` and
+`FEUD_HALL_BROWSER_PATH` to the focused `--grep 'generated dining edits'` run.
+A second generated browser check varies which license applications are edited,
+then changes the queue and verifies that each draft and decision stays with
+its own application. Replay it with `--grep 'generated review edits'`.
+CI retains failure traces and hall logs. A separate Svelte template type-check
+and broader cross-browser coverage remain release qualification work.
+
+For a focused local browser run, fetch the locked Mix dependencies from
+`server/`. From `web/`, run `bun install --frozen-lockfile`, `bun run playwright
+install chromium`, `bun run --bun build`, and `bun run test:browser --grep
+'<scenario>'`. Use local PostgreSQL with a role that can create and drop test
+databases. Each scenario uses its own loopback port and creates and drops a
+`feud_hall_browser_*` database. The runner supplies its own signing key and
+starts the test endpoint without the live hall environment file. Respect the
+local worker and memory limits above.
+
+To regenerate the internal cuisine map after changing its
+source footprints, run `bun scripts/build-map.js` from `web/`. The equal-area
+view uses D3's Equal Earth projection and [Natural Earth public-domain land
+geometry](https://www.naturalearthdata.com/about/terms-of-use/) distributed by
+[World Atlas](https://github.com/topojson/world-atlas). The highlighted areas are
+approximate cultural locator footprints for the internal catalog.

@@ -15,6 +15,8 @@ defmodule FeudHall.Domain.Offers do
 
   alias FeudHall.Domain.{Clock, Dietary, Inventory, Kitchen, Money, Substitution}
 
+  alias FeudHall.Domain.Hall.Management
+
   @doc """
   Quotes an initial main/optional-drink tray for a stall.
 
@@ -29,7 +31,7 @@ defmodule FeudHall.Domain.Offers do
          available = Substitution.subtract(available, Substitution.demand(main.lines)),
          committed = committed + (main.carbs_mg || 0),
          {:ok, drink} <- maybe_drink(state, restaurant, drink_id, visit.requirement, committed, available),
-         components = Enum.reject([main, drink], &is_nil/1),
+         components = [main, drink] |> Enum.reject(&is_nil/1) |> Enum.map(&Management.adapt_course(state, stall_id, &1)),
          {:ok, timing} <- timing(state, stall.id, components) do
       {:ok,
        Map.merge(timing, %{
@@ -51,6 +53,7 @@ defmodule FeudHall.Domain.Offers do
          committed = visit.carbs_reserved + visit.carbs_served,
          {:ok, dessert} <-
            quote_course(state, restaurant, dessert_id, :dessert, visit.requirement, committed, available),
+         dessert = Management.adapt_course(state, stall.id, dessert),
          {:ok, timing} <- timing(state, stall.id, [dessert]) do
       {:ok,
        Map.merge(timing, %{
@@ -102,10 +105,17 @@ defmodule FeudHall.Domain.Offers do
   @doc "Shared stall eligibility for new customer orders (main trays and desserts)."
   def open_stall(state, stall_id) do
     case state.stalls[stall_id] do
-      nil -> {:error, :unknown_stall}
-      _ when state.access != :open -> {:error, :hall_cleaning}
-      %{mode: :open} = stall -> {:ok, stall, state.restaurants[stall.restaurant]}
-      _ -> {:error, :stall_not_accepting_orders}
+      nil ->
+        {:error, :unknown_stall}
+
+      _ when state.access != :open ->
+        {:error, :hall_cleaning}
+
+      %{mode: :open} = stall ->
+        with :ok <- Management.allow_open(state, stall_id), do: {:ok, stall, state.restaurants[stall.restaurant]}
+
+      _ ->
+        {:error, :stall_not_accepting_orders}
     end
   end
 
@@ -177,6 +187,7 @@ defmodule FeudHall.Domain.Offers do
 
   @doc "Start intervals [from, to) during which a stocked main meets both service deadlines."
   def main_start_ranges(state, stall_id, course, to, busy?) do
+    course = Management.adapt_course(state, stall_id, course)
     cutoff = Clock.service_cutoff(state.now)
     window = state.catalog.rules.service_window_ms
 

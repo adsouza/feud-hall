@@ -1,0 +1,66 @@
+name: web
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", "server/**", "assets/branding/**", ".github/workflows/web.yml"]
+  pull_request:
+    paths: ["web/**", "server/**", "assets/branding/**", ".github/workflows/web.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGHOST: localhost
+      NODE_OPTIONS: --max-old-space-size=1536
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.0"
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun check
+      - run: bun run --bun build
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: server/.tool-versions
+          version-type: strict
+      - run: mix deps.get --check-locked && mix compile --warnings-as-errors
+        working-directory: server
+        env:
+          MIX_ENV: test
+      - run: bun run playwright install --with-deps chromium
+      - run: bun run test:browser
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failures
+          path: web/test-results/
+          if-no-files-found: ignore

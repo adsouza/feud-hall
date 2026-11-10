@@ -978,6 +978,34 @@ the picker or its list alternative.
 
 ## Implementation status
 
+The management slice adds service-wide identity facts to the existing control
+stream. Hall and control facts for an eligible helper completion append
+together. Only the active authority can accept a helper handover selection or
+settle its wages. The committed review decision links the sponsor and license
+to the same principal. Signed, purpose-bound device, invite, and recovery
+credentials resolve to public event identifiers. Signatures and the signing
+key stay outside the event log. Device revocation and code consumption are
+durable. Recovery currently uses single-use codes supplied by the player.
+
+Phoenix serves the Svelte client and a same-origin command and query interface.
+The transport resolves a credential before passing a command to the
+application boundary. Private reads use the current device and reviewer
+capability. HTTP polling reads committed projections and can resume with the
+original command ID after an uncertain reply. The management UI has English
+and Japanese catalogs, a responsive hall list, and an Equal Earth cuisine map
+with a synchronized radio list.
+
+The currently implemented workforce has explicit prep, finish, and counter
+assignments with paid duty windows. Managed leases pin published fees and
+accrue open rent or holding costs by interval. A draft holds a slot without
+granting capital. Under the recorded operating policy, a staff gap or owner
+absence closes trading, with bounded opt-in restocking and cost-plus pricing.
+Cleaning takes precedence over service, and a business review captures the
+settled ledger at 03:00. Fatigue slows new kitchen work and records an automatic protective break at the
+severe threshold. Email delivery and verification, cuisine skill effects, and
+broader operational qualification remain open.
+
+
 Milestone 1 (economic core) built an internal one-cuisine slice in `server/`;
 Milestone 2A added durable PostgreSQL storage for it, and Milestone 2B (Project
 B, the shared simulation) adds the batched wholesale market, simulated diners,

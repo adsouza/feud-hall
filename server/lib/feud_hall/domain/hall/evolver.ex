@@ -35,11 +35,11 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
   alias FeudHall.Domain.{Demand, Inventory, Market, Random}
 
-  alias FeudHall.Domain.Hall.SimulationUpgrade
+  alias FeudHall.Domain.Hall.{Management, SimulationUpgrade}
 
   @ledger %{cash: 0, raw: 0, wip: 0, cost_of_sales: 0, waste: 0, capex: 0, capital: 0, revenue: 0}
 
-  def ledger_accounts, do: Map.keys(@ledger)
+  def ledger_accounts, do: [:operating_cost | Map.keys(@ledger)]
 
   def evolve(nil, %{type: :hall_initialized} = e) do
     # Events recorded before the shared simulation carry no layout, seed, market, or demand.
@@ -92,6 +92,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
   # the interval credits the last recorded list (empty until one is recorded,
   # so events written before the list existed observe nothing).
   def evolve(state, %{type: :clock_advanced, to: to} = e) when to >= state.now do
+    state = Management.accrue(state, to - state.now)
     state = update_in(state, [:demand], &Demand.observe_interval(&1, e, to - state.now))
     %{state | now: to}
   end
@@ -100,7 +101,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
   def evolve(state, %{type: :day_closed} = e) do
     state = Map.update!(state, :demand, &Demand.close(&1, e, state.catalog))
-    update_in(state, [:market, :stock], &add_stock(&1, e.replenishment))
+    state |> update_in([:market, :stock], &add_stock(&1, e.replenishment)) |> Management.reset_allowances()
   end
 
   # A simulated arrival: the recorded draws and PRNG continuation are taken as
@@ -160,8 +161,14 @@ defmodule FeudHall.Domain.Hall.Evolver do
   def evolve(state, %{type: :starter_grant_issued, restaurant_id: r, amount: a}),
     do: post(state, r, cash: a, capital: a)
 
-  def evolve(state, %{type: :stall_opened, stall_id: s}), do: put_in(state, [:stalls, s, :mode], :open)
-  def evolve(state, %{type: :stall_closed, stall_id: s}), do: put_in(state, [:stalls, s, :mode], :closed)
+  def evolve(state, %{type: :stall_opened, stall_id: s}),
+    do: state |> put_in([:stalls, s, :mode], :open) |> Management.opening_requested(s, true)
+
+  def evolve(state, %{type: :stall_closed, stall_id: s} = event),
+    do:
+      state
+      |> put_in([:stalls, s, :mode], :closed)
+      |> Management.opening_requested(s, Map.get(event, :preserve_opening, false))
 
   def evolve(state, %{type: :recipe_unlocked} = e) do
     state
@@ -187,7 +194,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
   def evolve(state, %{type: :purchase_requested} = e) do
     request =
       e
-      |> Map.take([:restaurant_id, :product, :qty, :max_price_per_kunit])
+      |> Map.take([:restaurant_id, :product, :qty, :max_price_per_kunit, :automated])
       |> Map.put(:submitted_at, state.now)
 
     Map.update!(state, :market, &Market.put_request(&1, e.request_id, request))
@@ -319,7 +326,12 @@ defmodule FeudHall.Domain.Hall.Evolver do
   end
 
   def evolve(state, %{type: :handover_started, item: item} = e),
-    do: put_in(state, [:stalls, e.stall_id, :counter], %{item: counter_item(item), done_at: e.done_at})
+    do:
+      put_in(
+        state,
+        [:stalls, e.stall_id, :counter],
+        Map.merge(%{item: counter_item(item), done_at: e.done_at}, Map.take(e, [:shift_id]))
+      )
 
   # Milestone 1 kitchen commands, kept for historical replay: the combined
   # preparation occupies the finishing stage until `ready_not_before`.
@@ -347,6 +359,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
     state
     |> put_in([:trays, e.tray_id, :status], :served)
+    |> Management.record_sale(tray.restaurant, state.visits[tray.visit].source)
     |> update_in([:demand], &Demand.count_tray_served/1)
     |> release_counter(tray.stall, {:tray, e.tray_id})
   end
@@ -422,6 +435,13 @@ defmodule FeudHall.Domain.Hall.Evolver do
   # components and dessert). Nothing live refers to them any more: their
   # reservations, funding, counter claims and costs settled before
   # finalization, and the finalization event records their outcomes.
+  @management_events ~w(stall_opening_queued business_day_reviewed restock_policy_set pricing_policy_set restock_budget_reserved pricing_policy_applied
+    visitor_allowance_claimed management_started stall_leased staff_condition_changed worker_hired worker_scheduled worker_dismissed stall_draft_reserved stall_draft_released waitlist_joined waitlist_left staff_schedule_set helper_offer_policy_set
+    owner_presence_recorded unattended_policy_set operating_costs_charged helper_shift_started helper_shift_ended helper_presence_recorded
+    helper_selection_opened helper_choice_selected helper_selection_closed helper_task_completed management_hour_closed management_resumed)a
+
+  def evolve(state, %{type: type} = event) when type in @management_events, do: Management.evolve(state, event)
+
   defp retire_visit(state, visit) do
     tray = visit.tray && state.trays[visit.tray]
     order_ids = if(tray, do: tray.components, else: []) ++ List.wrap(visit.dessert_order)
