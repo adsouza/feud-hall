@@ -52,8 +52,61 @@ defmodule FeudHall.Infrastructure.EventFixturesTest do
 
         %{pre: pre} = Map.fetch!(@entries, unquote(name))
         evolved = Evolver.evolve(pre, event)
-        assert evolved != pre or event.type in [:stock_purchased, :hall_initialized]
+        assert evolved != pre
       end
+    end
+  end
+
+  # The decider no longer emits these, so their evolution is pinned field by field. Entries are
+  # built at run time here, so the compile-time type checker does not see every fixture's shape.
+  defp entry(name), do: Enum.find(EventFixtureScenarios.entries(), &(&1.name == name))
+
+  describe "historical events evolve with their Milestone 1 effects" do
+    test "stock_purchased receives a lot at its recorded cost, paid from cash" do
+      %{event: e, pre: pre} = entry("stock_purchased")
+      post = Evolver.evolve(pre, e)
+      before = pre.restaurants[e.restaurant_id]
+      after_ = post.restaurants[e.restaurant_id]
+
+      refute Map.has_key?(before.batches, e.batch_id)
+
+      assert after_.batches[e.batch_id] == %{
+               id: e.batch_id,
+               product: e.product,
+               product_version: e.product_version,
+               qty: e.qty,
+               reserved: 0,
+               cost: e.cost,
+               expires_at: e.expires_at
+             }
+
+      assert e.cost > 0
+      assert after_.ledger.cash == before.ledger.cash - e.cost
+      assert after_.ledger.raw == before.ledger.raw + e.cost
+    end
+
+    test "preparation_started consumes the claims into work in progress until ready_not_before" do
+      %{event: e, pre: pre} = entry("preparation_started")
+      post = Evolver.evolve(pre, e)
+      cost = e.consumed |> Enum.map(& &1.cost) |> Enum.sum()
+
+      assert %{status: :queued_prep, consumed_cost: 0} = pre.orders[e.order_id]
+      assert %{status: :finish, reservations: [], consumed_cost: ^cost} = post.orders[e.order_id]
+      assert post.orders[e.order_id].stage_done_at == e.ready_not_before
+      rid = pre.visits[pre.orders[e.order_id].visit].restaurant
+      assert cost > 0
+      assert post.restaurants[rid].ledger.wip == pre.restaurants[rid].ledger.wip + cost
+      assert post.restaurants[rid].ledger.raw == pre.restaurants[rid].ledger.raw - cost
+    end
+
+    test "preparation_completed makes the order ready now, until expires_at" do
+      %{event: e, pre: pre} = entry("preparation_completed")
+      post = Evolver.evolve(pre, e)
+
+      assert pre.orders[e.order_id].status == :finish
+      assert %{status: :ready, stage_done_at: nil} = post.orders[e.order_id]
+      assert post.orders[e.order_id].ready_at == pre.now
+      assert post.orders[e.order_id].ready_expires_at == e.expires_at
     end
   end
 

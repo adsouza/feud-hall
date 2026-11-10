@@ -466,6 +466,8 @@ defmodule FeudHall.Application.RecoveryTest do
       assert rem(mid.hall.now, Clock.hour()) == 120_000
       assert map_size(mid.hall.market.requests) > 0
       assert live_orders(mid.hall) != []
+      # An order at a station, so the snapshot really carries kitchen stage fields.
+      assert Enum.any?(live_orders(mid.hall), &(&1.status in [:prep, :finish] and is_integer(&1.stage_done_at)))
       assert mid.hall.demand.arrival_seq > 0 and mid.hall.demand.next_arrival_at > mid.hall.now
       assert mid.hall.stats.arrivals_simulated > 0
       assert map_size(mid.hall.npcs) == 3

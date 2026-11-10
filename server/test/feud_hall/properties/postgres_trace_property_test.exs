@@ -3,10 +3,13 @@ defmodule FeudHall.Properties.PostgresTraceTest do
   Model-based property: pure hall traces replayed through the command workflow
   on PostgreSQL, with authority restarts and injected commit failures.
 
-  Each run generates trace actions (`FeudHall.HallTrace`), appends a closing
-  service (leave or avoid the cleaning window, request stock and advance to
-  the market clearing that fills it, reopen the stall, admit a simulated
-  visit, run a service cycle) so trays are served, runs the trace against the pure hall, and then generates
+  Each run generates trace actions (`FeudHall.HallTrace`), appends the
+  closing service (`HallTrace.closing/0`: reopen the stall, a lunch peak, an
+  NPC planning slot), runs the trace against the pure hall (whose setup
+  creates the catalog's NPC restaurants, so NPC creation and plans are
+  recorded commands too), checks that the run reached the structural floors
+  of `HallTrace.floors/1` (a clearing with a fill, a stream arrival admitted
+  and one that left, a served tray, an NPC plan), and then generates
   injection points for the recorded commands. It sends every recorded
   command, in order, through `CommandWorkflow` on an emptied database. An
   injection names a command by its index in the recorded list (generated
@@ -55,7 +58,8 @@ defmodule FeudHall.Properties.PostgresTraceTest do
   with lost replies and before-commit failures on their appends.
 
   Budgets: 15 runs, traces of at most 40 generated actions (plus the closing
-  service), at most 4 + 12 injections per run.
+  service), at most 4 + 12 injections per run; the test's ExUnit timeout is
+  the default 60 seconds.
   """
 
   use FeudHall.PostgresCase
@@ -75,27 +79,8 @@ defmodule FeudHall.Properties.PostgresTraceTest do
 
   @kinds [:snapshot, :restart, :before_commit, :lost_reply]
 
-  # Move clear of the cleaning window when service could not finish before it, restock bean
-  # tacos' ingredients (cilantro and salsa spoil within a trace; indices into the sorted product
-  # list: black_beans_dried, cilantro, corn_tortilla, onion, salsa_roja) and advance to the
-  # market clearing that fills them, reopen the stall (a
-  # random action may have closed it), admit an unrestricted simulated diner for bean tacos, and
-  # run one service cycle long enough to cook it.
-  @closing [
-    {:clear_of_cleaning, 2 * Clock.hour()},
-    {:purchase, 1, 600},
-    {:purchase, 4, 200},
-    {:purchase, 6, 600},
-    {:purchase, 14, 300},
-    {:purchase, 21, 600},
-    :clearing,
-    {:stall, :open_stall},
-    {:sim_visit, 0, nil, 0, 4_000},
-    {:cycle, 20_000, false}
-  ]
-
   # The fixed part targets gameplay commands (indices `setup..count - 1`); the closing service
-  # guarantees at least three, so a snapshot index below the last leaves room for a later restart.
+  # always records at least three, so a snapshot index below the last leaves room for a later restart.
   defp injections(setup, count) do
     gen all(
           snapshot <- integer(setup..(count - 2)),
@@ -129,7 +114,7 @@ defmodule FeudHall.Properties.PostgresTraceTest do
 
     check all(
             actions <- list_of(HallTrace.action(), max_length: @max_actions),
-            trace = HallTrace.run(actions ++ @closing),
+            trace = HallTrace.run(actions ++ HallTrace.closing()),
             count = length(trace.commands),
             injections <- injections(trace.setup_count, count),
             parity <- integer(0..1),
@@ -137,6 +122,10 @@ defmodule FeudHall.Properties.PostgresTraceTest do
             max_runs: @runs,
             initial_size: 30
           ) do
+      # Structural floors: every run reaches the market, diners, kitchen, and NPCs.
+      floors = HallTrace.floors(trace)
+      assert Enum.all?(floors, fn {_key, n} -> n >= 1 end), "run below a structural floor: #{inspect(floors)}"
+
       # Many runs share this one test: each starts from an emptied database.
       PostgresCase.reset!()
 

@@ -2,14 +2,25 @@ defmodule FeudHall.Properties.HallTraceTest do
   @moduledoc """
   Model-based property: random command traces against the pure hall.
 
-  Budgets are explicit (runs, trace length, advance sizes). The generator and
-  interpreter live in `FeudHall.HallTrace`: symbolic actions pick concrete
-  targets from current state by index, so shrinking removes actions without
-  leaving dangling IDs, and after every accepted command the independent
-  oracle must report no violations. At the end, genesis replay,
+  The generator and interpreter live in `FeudHall.HallTrace`: symbolic
+  actions pick concrete targets from current state by index, so shrinking
+  removes actions without leaving dangling IDs, and after every accepted
+  command the independent oracle (`FeudHall.Oracle`) must report no
+  violations. The traced hall includes the catalog's NPC restaurants, and
+  every trace ends with `HallTrace.closing/0`. At the end, genesis replay,
   snapshot-plus-tail replay, and a JSON codec round trip must reproduce the
   live state exactly, and splitting the final clock advance must not change
-  the outcome. Aggregate progress counters guard against vacuous passes.
+  the outcome.
+
+  Non-vacuity: each run must reach the structural floors of
+  `HallTrace.floors/1` (a clearing with a fill, a stream arrival admitted and
+  one that left, a served tray, an NPC plan), and aggregate progress counters
+  across runs guard the rarer lifecycles.
+
+  Budgets: 100 runs; at most 70 generated actions per trace (initial size
+  40) plus the three closing macros; generated advances of at most 60
+  available-service seconds, waits of at most 20, and macro waits bounded by
+  their step counts; the test's ExUnit timeout is the default 60 seconds.
   """
 
   use ExUnit.Case, async: false
@@ -36,7 +47,8 @@ defmodule FeudHall.Properties.HallTraceTest do
       trace_fills: 0,
       requests_cancelled: 0,
       arrivals_admitted: 0,
-      arrivals_left: 0
+      arrivals_left: 0,
+      npc_plans: 0
     })
 
     # A large initial size yields long traces while still letting shrinking
@@ -48,8 +60,13 @@ defmodule FeudHall.Properties.HallTraceTest do
             max_runs: @runs,
             initial_size: 40
           ) do
-      %{state: state, batches: batches, events: events, stats: stats} = HallTrace.run(actions)
+      trace = HallTrace.run(actions ++ HallTrace.closing())
+      %{state: state, batches: batches, events: events, stats: stats} = trace
       bump(:stale_rejected, stats.stale_rejected)
+
+      # Structural floors: every run reaches the market, diners, kitchen, and NPCs.
+      floors = HallTrace.floors(trace)
+      assert Enum.all?(floors, fn {_key, n} -> n >= 1 end), "run below a structural floor: #{inspect(floors)}"
 
       # Genesis replay.
       assert Hall.replay(events) == state
@@ -91,7 +108,7 @@ defmodule FeudHall.Properties.HallTraceTest do
     # Non-vacuity: the generated traces must exercise the lifecycles we claim.
     for {key, min} <- [
           served_trays: 25,
-          desserts_served: 3,
+          desserts_served: 100,
           cleanings: 10,
           cancellations: 10,
           spoiled: 10,
@@ -99,7 +116,8 @@ defmodule FeudHall.Properties.HallTraceTest do
           trace_fills: 25,
           requests_cancelled: 5,
           arrivals_admitted: 100,
-          arrivals_left: 1_000
+          arrivals_left: 1_000,
+          npc_plans: 100
         ] do
       assert progress[key] >= min, "too little #{key} across runs: #{inspect(progress)}"
     end
@@ -113,6 +131,7 @@ defmodule FeudHall.Properties.HallTraceTest do
     bump(:cancellations, count.(:tray_cancelled) + count.(:dessert_cancelled))
     bump(:spoiled, count.(:stock_spoiled))
     bump(:requests_cancelled, count.(:purchase_request_cancelled))
+    bump(:npc_plans, count.(:npc_planned))
 
     # Simulated arrivals from the demand stream (the trace catalog has demand rules).
     arrived = for %{type: :diner_arrived, outcome: outcome} <- events, do: outcome

@@ -8,6 +8,19 @@ defmodule FeudHall.HallTrace do
   shrinking removes actions without leaving dangling IDs. After every accepted
   command the independent oracle must report no violations.
 
+  The hall starts from the `stocked_world` fixture (alice's restaurant `r1`
+  at `s001`, stocked and open, with the arrival stream on) plus the catalog's
+  NPC restaurants, created as the authority bootstraps them. Besides single
+  owner, guest, simulated-diner and clock commands, the vocabulary includes
+  market actions (`{:request, idx, qty}`, `{:cancel_request, idx}`), and
+  macros that finish lifecycles random steps rarely complete:
+  `{:market_clear}` (advance to the next clearing), `{:meal_peak}` (through
+  12:00 to 13:00 with a restock and NPC plans), `{:npc_slot}` (to the next
+  hour boundary, then each due NPC's plan through `Planner.plan/5`, submitted
+  as `{:npc, op}` with ID `npc:<op>:<slot>`), `{:dessert_course, guest}` (a
+  guest's whole main-then-dessert visit), `{:cycle, ms, desserts}`, and
+  `{:regret, ...}`.
+
   `run/2` also records every decided command (the `stocked_world` setup, then
   each accepted, rejected, or expected-rejection decision of the trace) as
   `{command, ctx}` in order, with the pure outcome of each in `outcomes`
@@ -20,8 +33,9 @@ defmodule FeudHall.HallTrace do
   import StreamData
   import FeudHall.Fixtures, only: [stocked_world_steps: 1, ctx: 2]
 
-  alias FeudHall.Domain.{Clock, Dietary, Hall, Offers}
+  alias FeudHall.Domain.{Clock, Dietary, Hall, Offers, PublicView}
   alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.Domain.Npc.Planner
   alias FeudHall.Oracle
 
   @stall "s001"
@@ -43,9 +57,12 @@ defmodule FeudHall.HallTrace do
     frequency([
       {4, tuple({constant(:advance), integer(1..60_000)})},
       {1, tuple({constant(:advance_to), member_of([:cleaning_start, :cleaning_end]), integer(-2..2)})},
-      {4, tuple({constant(:purchase), integer(0..24), integer(50..600)})},
-      {1, tuple({constant(:cancel_request), integer(0..24)})},
-      {2, constant(:clearing)},
+      {4, tuple({constant(:request), integer(0..24), integer(50..600)})},
+      {2, tuple({constant(:cancel_request), integer(0..24)})},
+      {2, constant({:market_clear})},
+      {1, constant({:meal_peak})},
+      {2, constant({:npc_slot})},
+      {2, tuple({constant(:dessert_course), integer(0..2)})},
       {1,
        tuple(
          {constant(:policy), integer(0..4), integer(0..4),
@@ -67,6 +84,33 @@ defmodule FeudHall.HallTrace do
       {1, tuple({constant(:stall), member_of([:open_stall, :open_stall, :close_stall])})},
       {1, tuple({constant(:intrude), integer(0..3)})}
     ])
+  end
+
+  @doc """
+  The closing service both properties append to every generated trace, so each
+  run reaches the structural floors of `floors/1`: reopen alice's stall, run
+  a lunch peak (restock and clearing fills, stream arrivals admitted and
+  leaving, trays served by the automatic kitchen, NPC plans), then one more
+  NPC planning slot.
+  """
+  def closing, do: [{:stall, :open_stall}, {:meal_peak}, {:npc_slot}]
+
+  @doc """
+  Structural progress of one run, counted over the trace's events after the
+  fixture setup: market clearings with a fill, stream arrivals admitted and
+  left, trays served, and NPC plans committed. Each must be at least one.
+  """
+  def floors(%{batches: [_setup | trace]}) do
+    events = Enum.concat(trace)
+    arrived = for %{type: :diner_arrived, outcome: outcome} <- events, do: outcome
+
+    %{
+      clearings_with_fill: Enum.count(events, &match?(%{type: :market_cleared, fills: [_ | _]}, &1)),
+      arrivals_admitted: Enum.count(arrived, &(&1 == :admitted)),
+      arrivals_left: Enum.count(arrived, &(&1 == :left)),
+      trays_served: Enum.count(events, &(&1.type == :tray_served)),
+      npc_plans: Enum.count(events, &(&1.type == :npc_planned))
+    }
   end
 
   @doc """
@@ -118,6 +162,7 @@ defmodule FeudHall.HallTrace do
   defp setup(catalog) do
     [catalog: catalog]
     |> stocked_world_steps()
+    |> Kernel.++(npc_create_steps(catalog))
     |> Enum.reduce({{nil, []}, []}, fn step, {{state, log}, recorded} ->
       {command, actor, id} = step.(state)
       context = ctx(actor, id)
@@ -145,29 +190,72 @@ defmodule FeudHall.HallTrace do
         acc = record(acc, cmd, ctx(actor, id), {:rejected, reason})
         {state, batches, n + 1, %{acc | stale_rejected: acc.stale_rejected + 1}}
 
+      # Each part is planned against the state the earlier parts reached; its
+      # moves are numbered `<id>.<m>` unless the move names its own ID.
       {:sequence, parts} ->
-        Enum.reduce(parts, {state, batches, n + 1, acc}, fn part, {st, bs, m, acc} ->
-          moves =
-            case part do
-              {:action, action} ->
-                List.wrap(command(st, action, id))
-
-              :desserts ->
-                dessert_answers(st)
-
-              {:wait, ms} ->
-                [{{:advance_clock, %{to_service_ms: Clock.service_ms(st.now) + ms}}, {:system, :scheduler}}]
-            end
-
-          Enum.reduce(moves, {st, bs, m, acc}, fn {cmd, actor}, {st2, bs2, m2, acc2} ->
-            apply_command(st2, bs2, m2 + 1, acc2, cmd, actor, "#{id}.#{m2}")
-          end)
-        end)
+        Enum.reduce(parts, {state, batches, n + 1, acc}, &run_part(&1, &2, id))
 
       {cmd, actor} ->
         apply_command(state, batches, n + 1, acc, cmd, actor, id)
     end
   end
+
+  defp run_part({:action, action}, {st, _bs, _m, _acc} = run, id) do
+    case command(st, action, id) do
+      nil -> run
+      {cmd, actor} -> move(run, cmd, actor, id)
+    end
+  end
+
+  defp run_part(:desserts, {st, _bs, _m, _acc} = run, id),
+    do: Enum.reduce(dessert_answers(st), run, fn {cmd, actor}, run -> move(run, cmd, actor, id) end)
+
+  defp run_part({:wait, ms}, {st, _bs, _m, _acc} = run, id),
+    do: move(run, advance_by(st, ms), {:system, :scheduler}, id)
+
+  defp run_part({:advance_to_hall, at_fun}, {st, _bs, _m, _acc} = run, id) do
+    case at_fun.(st) do
+      at when at > st.now -> move(run, advance_to_hall(at), {:system, :scheduler}, id)
+      _ -> run
+    end
+  end
+
+  defp run_part({:restock, recipes, portions}, {st, _bs, _m, _acc} = run, id),
+    do: Enum.reduce(restock(st, recipes, portions), run, fn {cmd, actor}, run -> move(run, cmd, actor, id) end)
+
+  # Each due NPC's plan, decided against the state the previous NPC's plan reached.
+  defp run_part(:npc_plans, {st, _bs, _m, _acc} = run, _id) do
+    st.npcs
+    |> Map.keys()
+    |> Enum.sort()
+    |> Enum.reduce(run, fn op, {st, _bs, _m, _acc} = run ->
+      case npc_plan(st, op) do
+        nil -> run
+        {cmd, actor, npc_id} -> move(run, cmd, actor, npc_id, :own_id)
+      end
+    end)
+  end
+
+  # Advance in `step_ms` service steps, at most `max` times, until the guest's
+  # visit reaches `goal` (`:offered`: a dessert offer is open; `:done`: no
+  # active visit), the visit ends, or the hall closes for cleaning.
+  defp run_part({:until_guest, g, goal, step_ms, max}, {st, _bs, _m, _acc} = run, id) do
+    visit = st.visits[st.active_visits[Enum.at(@guests, g)]]
+
+    reached =
+      visit == nil or st.access == :cleaning or (goal == :offered and visit.dessert == :offered)
+
+    if reached or max == 0 do
+      run
+    else
+      run
+      |> move(advance_by(st, step_ms), {:system, :scheduler}, id)
+      |> then(&run_part({:until_guest, g, goal, step_ms, max - 1}, &1, id))
+    end
+  end
+
+  defp move({st, bs, m, acc}, cmd, actor, id), do: apply_command(st, bs, m + 1, acc, cmd, actor, "#{id}.#{m}")
+  defp move({st, bs, m, acc}, cmd, actor, own_id, :own_id), do: apply_command(st, bs, m + 1, acc, cmd, actor, own_id)
 
   defp apply_command(state, batches, n, acc, cmd, actor, id) do
     case Hall.decide(state, cmd, ctx(actor, id)) do
@@ -198,22 +286,20 @@ defmodule FeudHall.HallTrace do
     {{:advance_clock, %{to_service_ms: target}}, {:system, :scheduler}}
   end
 
-  defp command(state, {:purchase, idx, qty}, _id) do
+  defp command(state, {:request, idx, qty}, _id) do
     product = state.catalog.products |> Map.keys() |> Enum.sort() |> Enum.at(idx)
     scale = if state.catalog.products[product].unit == :each, do: max(div(qty, 20), 1), else: qty
-
-    {{:submit_purchase_request,
-      %{restaurant_id: "r1", product: product, qty: scale, max_price_per_kunit: 1_000_000_000}}, {:principal, "alice"}}
+    {request(product, scale), {:principal, "alice"}}
   end
 
   # A full market clearing: advance to the next clearing instant, which fills or
   # expires every pending purchase request.
-  defp command(state, :clearing, _id),
-    do: {{:advance_clock, %{to_service_ms: Clock.service_ms(state.market.next_clear_at)}}, {:system, :scheduler}}
+  defp command(state, {:market_clear}, _id),
+    do: {advance_to_hall(state.market.next_clear_at), {:system, :scheduler}}
 
   # Cancel one of alice's pending requests (by index over pending products).
   defp command(state, {:cancel_request, idx}, _id) do
-    case state.market.by_key |> Map.keys() |> Enum.sort() do
+    case state.market.by_key |> Map.keys() |> Enum.filter(&(elem(&1, 0) == "r1")) |> Enum.sort() do
       [] ->
         nil
 
@@ -221,6 +307,51 @@ defmodule FeudHall.HallTrace do
         {"r1", product} = Enum.at(keys, rem(idx, length(keys)))
         {{:cancel_purchase_request, %{restaurant_id: "r1", product: product}}, {:principal, "alice"}}
     end
+  end
+
+  # Through the next lunch peak (12:00 to 13:00 hall time; from now if the
+  # peak is under way): advance to its start, restock alice's three mains,
+  # run the due NPC plans, then advance to 13:00. Stream arrivals choose,
+  # are admitted or leave, and the automatic kitchen cooks and serves them;
+  # the restock fills at the first clearing of the peak.
+  defp command(_state, {:meal_peak}, _id) do
+    {:sequence,
+     [
+       {:advance_to_hall, &peak_start/1},
+       {:restock, @mains, 12},
+       :npc_plans,
+       {:advance_to_hall, &(Clock.day_of(&1.now) * Clock.day() + 13 * Clock.hour())}
+     ]}
+  end
+
+  # To the next hour boundary, then each due NPC's plan through the planner,
+  # submitted as the authority would (actor `{:npc, op}`, ID `npc:<op>:<slot>`).
+  defp command(_state, {:npc_slot}, _id) do
+    {:sequence,
+     [
+       {:advance_to_hall, &((div(&1.now, Clock.hour()) + 1) * Clock.hour())},
+       :npc_plans
+     ]}
+  end
+
+  # A whole guest dessert course, so desserts are served in most runs rather
+  # than only when random steps line up: clear of cleaning, open and restock
+  # alice's stall for bean tacos and arroz con leche, fill at a clearing, fund
+  # and seat the guest, wait for the dessert offer, accept it, and wait until
+  # the visit is finalized.
+  defp command(_state, {:dessert_course, g}, _id) do
+    {:sequence,
+     [
+       {:action, {:clear_of_cleaning, 2 * Clock.hour()}},
+       {:action, {:stall, :open_stall}},
+       {:restock, ["bean_tacos", "arroz_con_leche"], 4},
+       {:action, {:market_clear}},
+       {:action, {:grant, g, 2_500}},
+       {:action, {:guest_visit, g, 0, nil, 0, false}},
+       {:until_guest, g, :offered, 2_000, 60},
+       :desserts,
+       {:until_guest, g, :done, 2_000, 60}
+     ]}
   end
 
   defp command(state, {:policy, r, l, policy}, _id) do
@@ -414,5 +545,62 @@ defmodule FeudHall.HallTrace do
         _ -> []
       end
     end)
+  end
+
+  # -- macro helpers ----------------------------------------------------------------
+
+  defp advance_by(state, ms), do: {:advance_clock, %{to_service_ms: Clock.service_ms(state.now) + ms}}
+
+  # Hall instants used here (clearings, whole hours) are whole service milliseconds.
+  defp advance_to_hall(at), do: {:advance_clock, %{to_service_ms: Clock.service_ms(at)}}
+
+  defp request(product, qty),
+    do:
+      {:submit_purchase_request, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
+
+  # One request per primary product of `recipes`, for `portions` of each.
+  defp restock(state, recipes, portions) do
+    recipes
+    |> Enum.flat_map(&state.catalog.recipes[&1].lines)
+    |> Enum.reduce(%{}, fn line, acc -> Map.update(acc, line.product, line.qty, &(&1 + line.qty)) end)
+    |> Enum.sort()
+    |> Enum.map(fn {product, qty} -> {request(product, qty * portions), {:principal, "alice"}} end)
+  end
+
+  defp peak_start(state) do
+    day = Clock.day_of(state.now)
+
+    if Clock.time_of_day(state.now) < 13 * Clock.hour(),
+      do: day * Clock.day() + 12 * Clock.hour(),
+      else: (day + 1) * Clock.day() + 12 * Clock.hour()
+  end
+
+  # The authority's plan for a due NPC: the planner on the public view, its own
+  # restaurant, its profile and its PRNG state, for the latest whole-hour slot.
+  defp npc_plan(state, op) do
+    npc = state.npcs[op]
+
+    if npc.next_slot_at <= state.now do
+      slot = div(state.now, Clock.hour()) * Clock.hour()
+      profile = Enum.find(state.catalog.npc_profiles, &(&1.id == npc.profile_id))
+      own = state.restaurants[npc.restaurant_id]
+      {actions, rng} = Planner.plan(PublicView.build(state), own, profile, state.catalog, npc.rng)
+      plan = %{operator: op, slot: slot, actions: actions, rng: rng}
+      {{:npc_plan, plan}, {:npc, op}, "npc:#{op}:#{slot}"}
+    end
+  end
+
+  # The authority's NPC bootstrap: one restaurant per catalog NPC profile, in ID
+  # order, at the slot the planner chooses, with the first starter recipe's cuisine.
+  defp npc_create_steps(catalog) do
+    cuisine = catalog.recipes |> Map.values() |> Enum.filter(& &1.starter) |> Enum.min_by(& &1.id) |> Map.get(:cuisine)
+
+    for profile <- Enum.sort_by(catalog.npc_profiles, & &1.id) do
+      fn state ->
+        slot = Planner.choose_slot(PublicView.build(state), state.layout, profile)
+        payload = %{restaurant_id: "npc-#{profile.id}", stall_id: slot, name: "NPC #{profile.id}", cuisine: cuisine}
+        {{:create_restaurant, payload}, {:npc, profile.id}, "npc:#{profile.id}:create"}
+      end
+    end
   end
 end

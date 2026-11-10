@@ -169,8 +169,9 @@ defmodule FeudHall.Domain.Hall.Invariants do
 
   # Simulated arrivals are counted both in the cumulative stats and in the day's sequence.
   defp stats(%{stats: stats, demand: demand, visits: visits}) do
-    arrived = Map.get(stats, :arrivals_simulated)
-    admitted = Map.get(stats, :admitted_simulated)
+    # A missing count reads as zero, so a damaged state reports a mismatch rather than raising.
+    arrived = Map.get(stats, :arrivals_simulated, 0)
+    admitted = Map.get(stats, :admitted_simulated, 0)
     left = stats |> Map.get(:left_simulated, %{}) |> Map.values() |> Enum.sum()
     simulated_visits = Enum.count(visits, fn {_id, v} -> v.source == :simulated end)
 

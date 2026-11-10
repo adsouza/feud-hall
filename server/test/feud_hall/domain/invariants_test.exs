@@ -222,6 +222,26 @@ defmodule FeudHall.Domain.InvariantsTest do
       assert {:error, [{:admitted_beyond_visits, 1, 0}]} = Invariants.check(admitted)
     end
 
+    test "a missing simulated count is reported as a mismatch rather than raising" do
+      state = quiet_state()
+
+      no_admitted =
+        state |> put_in([:stats, :arrivals_simulated], 1) |> update_in([:stats], &Map.delete(&1, :admitted_simulated))
+
+      assert {:error, [{:simulated_stats_mismatch, 1, 0}]} = Invariants.check(no_admitted)
+
+      no_arrivals =
+        state
+        |> put_in([:stats, :left_simulated], %{wait_too_long: 2})
+        |> update_in([:stats], &Map.delete(&1, :arrivals_simulated))
+
+      assert {:error, [{:simulated_stats_mismatch, 0, 2}]} = Invariants.check(no_arrivals)
+
+      # Control: with both counts missing and nothing left, the counts still add up.
+      both = update_in(state, [:stats], &Map.drop(&1, [:arrivals_simulated, :admitted_simulated]))
+      assert Invariants.check(both) == :ok
+    end
+
     test "a day closed without its arrivals is loud at recovery" do
       {state, log} = stocked_world() |> advance_hall(Clock.day() + 24)
       assert Enum.any?(log, &(&1.type == :diner_arrived))
@@ -348,6 +368,19 @@ defmodule FeudHall.Domain.InvariantsTest do
       [first | _] = state.trays[tray_id].components
       unfinished = put_in(state, [:orders, first, :status], :finish)
       assert {:counter_item_not_ready, "s001"} in problems_of(Invariants.check(unfinished))
+
+      # A dessert on the counter must be ready too (an order copied as a dessert stands in for one).
+      dessert = %{state.orders[first] | id: "DS:k1", kind: :dessert, tray: nil}
+
+      on_counter = fn status ->
+        state
+        |> put_in([:orders, "DS:k1"], %{dessert | status: status})
+        |> put_in([:stalls, "s001", :counter, :item], {:dessert, "DS:k1"})
+      end
+
+      refute {:counter_item_not_ready, "s001"} in problems_of(Invariants.check(on_counter.(:ready)))
+      assert {:counter_item_not_ready, "s001"} in problems_of(Invariants.check(on_counter.(:finish)))
+      assert {:counter_item_not_ready, "s001"} in problems_of(Invariants.check(on_counter.(:queued_prep)))
 
       overdue = put_in(state, [:stalls, "s001", :counter, :done_at], state.now - 1)
       assert {:counter_overdue, "s001"} in problems_of(Invariants.check(overdue))
