@@ -61,11 +61,12 @@ frameworks are implementation options, not prerequisites of the selected approac
 
 ## Qualification and reconsideration
 
-The choice is plausible for this design; no implementation or capacity result has
-yet established viability. Qualify correctness, crash recovery, historical
-compatibility, retained-history cost, and the 150-stall workload early, using the
-[architecture qualification plan](../ARCHITECTURE.md#early-qualification-and-ongoing-tests).
-The proposed 450-session workload and recovery targets remain unmeasured.
+The internal slice has PostgreSQL event storage, crash recovery, and replay
+coverage. Project C records append, storage, and recovery measurements for the
+150-stall internal workload. [Project C capacity report](../superpowers/reports/2026-11-10-milestone-2c-capacity.md).
+Release qualification covers the 450-session workload, recovery on the selected
+server, and retained-history cost.
+[Architecture qualification plan](../ARCHITECTURE.md#early-qualification-and-ongoing-tests).
 
 If qualification fails, first measure and adjust event granularity, batching,
 indexes, snapshots, and projector placement. If the costs remain unacceptable,

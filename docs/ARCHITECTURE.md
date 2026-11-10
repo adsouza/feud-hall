@@ -983,8 +983,9 @@ Milestone 2A added durable PostgreSQL storage for it, and Milestone 2B (Project
 B, the shared simulation) adds the batched wholesale market, simulated diners,
 the automatic kitchen, and basic NPC owners on top. Together they qualify the
 event-store, recovery, fencing, and projection contracts above for that slice.
-They do not qualify capacity (Project C has not run), the staffed kitchen, or any
-online surface.
+Project C measured the shared simulation with 150 occupied stalls over three
+accelerated game days. The owner accepted the measurement on 2026-11-10,
+completing Milestone 2. [Project C capacity report](superpowers/reports/2026-11-10-milestone-2c-capacity.md).
 
 | Layer | Modules |
 | --- | --- |
@@ -1142,13 +1143,11 @@ Not yet implemented, and therefore not qualified:
   remaining cuisines belong to later milestones; Project B's builder's calls
   are recorded, pending owner confirmation, in the
   [Milestone 2 design](superpowers/specs/2026-11-09-milestone-2-design.md#decisions-recorded-during-project-b).
-- Project C: the 150-stall capacity and latency measurements; no performance
-  claim exists yet.
 - The outbox delivery worker (intents are committed atomically but nothing
   delivers them) and production wiring of authorities: the application
-  supervises the `Repo` and an empty authority `DynamicSupervisor`, but nothing
-  starts a `HallAuthority` outside tests, and owner-name allocation is
-  unspecified.
+  supervises the `Repo` and an empty authority `DynamicSupervisor`. Tests and
+  the capacity benchmark start their own authorities. Production owner-name
+  allocation remains unspecified.
 - Identity, invitations, licensing, Phoenix, Channels, deployment on Render,
   and every client.
 

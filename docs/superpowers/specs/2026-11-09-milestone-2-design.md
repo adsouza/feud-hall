@@ -1,9 +1,9 @@
 # Milestone 2: Durable Shared Simulation — Implementation Design
 
-Status: approved by the owner, 2026-11-09; revised 2026-11-09 after Project A
-was built and the design was reviewed for consistency and completeness.
-Project A is implemented on branch `milestone-2a-durable-storage`; Projects B
-and C are not.
+**Complete as of 2026-11-10.** Projects A and B are implemented, and the owner
+accepted Project C's local 150-stall results. [Capacity report](../reports/2026-11-10-milestone-2c-capacity.md).
+The owner approved the design on 2026-11-09, and it was revised that day after
+Project A was built and reviewed.
 
 This document scopes Milestone 2 of the
 [implementation sequence](../../GAME_DESIGN.md#implementation-sequence) as a
@@ -490,9 +490,13 @@ game days, and writes a report for the owner to judge (see Goals).
 
 - **Workload (builder's call).** 150 restaurants with one stall each (expansion
   is Milestone 4), all operated by NPC actors cycling the three planner
-  profiles, so about 13,500 potential arrivals per game day. The workload
-  includes main-only trays, trays with drinks, desserts, meal peaks, cleaning,
-  and market contention. No sessions or helpers yet.
+  profiles. The benchmark catalog holds the demand floor at 150 business
+  equivalents for 13,500 scheduled arrivals per game day and scales the
+  wholesale replenishment caps by the same factor. This keeps demand pressure
+  through cold start and stock-outs. Replenishment, purchases, and service
+  still use the ordinary simulation. The workload includes main-only trays,
+  trays with drinks, desserts, meal peaks, cleaning, and market contention.
+  Sessions and helpers arrive in later milestones.
 - **Report.** Per-append latency percentiles; per-wake-up processing time
   (decide, evolve, append) against the one-second wake-up and the five-second
   gap threshold; sustained throughput; events and bytes per second and per

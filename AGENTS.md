@@ -6,10 +6,11 @@ Feud Hall is a persistent online restaurant-management game. This repository
 contains the design, artwork, and the server under `server/`: the pure Elixir
 economic core (Milestone 1), durable PostgreSQL event storage, recovery, and
 projections (Milestone 2A), and the shared simulation (Milestone 2B: batched
-wholesale market, simulated diners, automatic kitchen, and basic NPC owners;
-Project C's 150-stall measurement has not run). There is no Phoenix endpoint, no
-authority wiring outside tests, and no frontend yet. Inspect the current tree
-before choosing commands. Update this guide with verified entry points as code
+wholesale market, simulated diners, automatic kitchen, and basic NPC owners).
+The local [Project C report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md)
+records the 150-stall measurement. Tests and the benchmark start authorities.
+Phoenix, production authority wiring, and the frontend are later work. Inspect
+the current tree before choosing commands. Update this guide with verified entry points as code
 lands; do not describe planned features or checks as already working. Verified
 backend entry points (run from `server/`) are listed in
 [Testing](docs/TESTING.md#implemented-backend-entry-points).
