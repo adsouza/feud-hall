@@ -1,11 +1,31 @@
 defmodule FeudHall.Domain.Hall.OperatingPolicy do
   @moduledoc "Hourly bounded policies. Every generated purchase and price uses the owner rules."
   alias FeudHall.Domain.{Clock, Inventory, Market, Money}
-  alias FeudHall.Domain.Hall.{Decider, Evolver, Management}
+  alias FeudHall.Domain.Hall.{Decider, Evolver, Management, Progression}
 
-  def starter_stock_offer(state, rid) do
+  def starter_stock_offer(state, rid, stall_id \\ nil) do
     restaurant = state.restaurants[rid]
-    recipe = state.catalog.recipes |> Map.values() |> Enum.find(&(&1.cuisine == restaurant.cuisine and &1.starter))
+    stall = state.stalls[stall_id]
+
+    cond do
+      Progression.distressed?(state, rid) ->
+        %{items: [], budget: 0}
+
+      stall_id != nil and not match?(%{restaurant: ^rid}, stall) ->
+        %{items: [], budget: 0}
+
+      Progression.enabled?(state) and Progression.stalls(state, rid) == [] ->
+        %{items: [], budget: 0}
+
+      true ->
+        cuisine = if stall, do: Progression.cuisine(stall, restaurant), else: restaurant.cuisine
+        recipe = Enum.find(Map.values(state.catalog.recipes), &(&1.cuisine == cuisine and &1.starter))
+        stock_for_recipe(state, restaurant, recipe)
+    end
+  end
+
+  defp stock_for_recipe(state, restaurant, recipe) do
+    rid = restaurant.id
     available = Inventory.availability(restaurant.batches, state.now)
 
     items =
@@ -27,10 +47,10 @@ defmodule FeudHall.Domain.Hall.OperatingPolicy do
     %{items: items, budget: total}
   end
 
-  def decide(state, {:request_starter_stock, %{restaurant_id: id, budget: budget}}, ctx) do
+  def decide(state, {:request_starter_stock, %{restaurant_id: id, budget: budget} = payload}, ctx) do
     with %{owner_kind: kind, owner: owner} <- state.restaurants[id],
          true <- ctx.actor == {kind, owner},
-         %{budget: total, items: [_ | _] = items} <- starter_stock_offer(state, id),
+         %{budget: total, items: [_ | _] = items} <- starter_stock_offer(state, id, payload[:stall_id]),
          true <- Money.non_negative?(budget) and total <= budget and total <= Management.available_cash(state, id) do
       events =
         items
@@ -214,8 +234,18 @@ defmodule FeudHall.Domain.Hall.OperatingPolicy do
   def cancel_open_requests(state, stall) do
     rid = state.stalls[stall].restaurant
 
-    for {id, %{restaurant_id: ^rid, automated: true}} <- Enum.sort(state.market.requests),
-        do: %{type: :purchase_request_cancelled, request_id: id}
+    another_location? =
+      Enum.any?(state.stalls, fn {sid, location} ->
+        sid != stall and location.restaurant == rid and location.mode == :open and
+          Management.allow_open(state, sid) == :ok
+      end)
+
+    if another_location? do
+      []
+    else
+      for {id, %{restaurant_id: ^rid, automated: true}} <- Enum.sort(state.market.requests),
+          do: %{type: :purchase_request_cancelled, request_id: id}
+    end
   end
 
   defp automation_cash(state, rid), do: automation_cash(state, rid, Management.available_cash(state, rid))

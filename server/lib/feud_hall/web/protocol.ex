@@ -9,7 +9,7 @@ defmodule FeudHall.Web.Protocol do
     profile_id main drink confirmed content_hash requirement excludes carb_ceiling_mg components
     kind recipe_version variant lines carbs_mg line_id substituted penalty deadline visit_id tray_id
     enabled start_hour end_hour cash_floor expires_at quoted_at rate shift_id selection_id item_id recipes present
-    worker_id role target budget daily_budget min_price max_price markup_permille interval_hours
+    worker_id batch_id technique role target budget max_cost daily_budget min_price max_price markup_permille interval_hours
     application_id decision reason motivation policy invitation_id code tiers)a
   @by_key Map.new(@keys, &{Atom.to_string(&1), &1})
   @enums ~w(main drink dessert plant mineral meat fish dairy egg honey gelatin animal_rennet animal_fat_stock
@@ -60,7 +60,17 @@ defmodule FeudHall.Web.Protocol do
   defp protected_fields(_action, fields), do: {:ok, fields}
 
   defp field(key, value)
-       when key in [:price, :max_price_per_kunit, :cash_floor, :rate, :budget, :daily_budget, :min_price, :max_price],
+       when key in [
+              :price,
+              :max_price_per_kunit,
+              :cash_floor,
+              :max_cost,
+              :rate,
+              :budget,
+              :daily_budget,
+              :min_price,
+              :max_price
+            ],
        do: Money.parse(value)
 
   defp field(key, value) when key in [:kind, :decision, :policy, :role], do: Map.fetch(@by_value, value)

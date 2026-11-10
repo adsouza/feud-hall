@@ -96,6 +96,39 @@ test("visitor can dine and sees why ordering is unavailable", async ({
     (1200n - BigInt(quote.total)).toString(),
   );
 
+  const history = page.getByRole("heading", { name: "Dining receipts" });
+  await expect(history).toBeVisible();
+  const receipt = page.locator("details").filter({ hasText: "Charged" });
+  await expect(receipt).toHaveCount(1);
+  await receipt.locator("summary").click();
+  await expect(receipt).toContainText("Falafel wrap");
+  await expect(receipt).toContainText("Served");
+  const historyUrl = new URL("/api/dining-history", hall.origin).href;
+  const historyResponse = await page.request.get(historyUrl);
+  expect(historyResponse.ok()).toBe(true);
+  expect(await historyResponse.json()).toMatchObject({
+    before: null,
+    receipts: [
+      {
+        total: quote.total,
+        courses: [
+          {
+            recipe_id: "falafel_wrap",
+            outcome: "served",
+            charged: quote.total,
+          },
+        ],
+      },
+    ],
+  });
+  const stranger = await page.context().browser()!.newContext();
+  try {
+    const unauthorized = await stranger.request.get(historyUrl);
+    expect(await unauthorized.json()).toEqual({ error: "unauthenticated" });
+  } finally {
+    await stranger.close();
+  }
+
   const closed = await state(page);
   for (const stall of closed.hall.stalls) stall["open?"] = false;
   const serveClosed = (route: import("@playwright/test").Route) =>

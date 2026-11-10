@@ -64,7 +64,8 @@ defmodule FeudHall.Domain.Content do
         market_problems(catalog, get(rules, :market)) ++
         demand_problems(catalog, get(rules, :demand)) ++
         layout_problems(get(catalog, :layout)) ++
-        npc_problems(get(catalog, :npc_profiles))
+        npc_problems(get(catalog, :npc_profiles)) ++
+        progression_problems(catalog, get(rules, :progression))
 
     if problems == [], do: choice_weight_problems(rules), else: problems
   end
@@ -74,6 +75,29 @@ defmodule FeudHall.Domain.Content do
 
   defp pos_int?(v), do: is_integer(v) and v > 0
   defp nonneg_int?(v), do: is_integer(v) and v >= 0
+
+  @techniques ~w(steam simmer griddle roast wok fry cold brew)
+
+  defp progression_problems(_catalog, nil), do: []
+
+  defp progression_problems(catalog, rules) do
+    positive =
+      ~w(setup_ms distress_ms dormancy_ms equipment_cost award_days award_visits reliable_meals waste_min_sales)a
+
+    techniques = get(rules, :starter_techniques)
+    starters = for {_, %{starter: true} = recipe} <- catalog.recipes, do: recipe.cuisine
+
+    valid = [
+      {Enum.all?(positive, &pos_int?(get(rules, &1))), :invalid_duration_or_limit},
+      {get(rules, :stall_limit) in 1..3, :invalid_stall_limit},
+      {get(rules, :award_score) in 1..10_000 and get(rules, :award_bonus) in 0..150, :invalid_award_tuning},
+      {get(rules, :reliable_rate) in 1..1_000 and get(rules, :waste_share) in 0..1_000, :invalid_milestone_tuning},
+      {is_map(techniques) and Enum.all?(starters, &(Map.get(techniques, &1) in @techniques)),
+       :invalid_starter_equipment}
+    ]
+
+    for {false, problem} <- valid, do: {:progression, problem}
+  end
 
   defp seed_problems(seed),
     do: if(is_integer(seed) and seed in 0..@max_seed//1, do: [], else: [{:seed, :bad_seed}])
@@ -294,7 +318,8 @@ defmodule FeudHall.Domain.Content do
         {Enum.all?([r.prep_ms, r.finish_ms, r.holding_ms], &(is_integer(&1) and &1 > 0)), :bad_duration},
         {Money.menu_price?(get(r, :suggested_price)), :bad_suggested_price},
         {is_integer(r.unlock_cost) and r.unlock_cost >= 0, :bad_unlock_cost},
-        {not r.starter or r.kind == :main, :non_main_starter}
+        {not r.starter or r.kind == :main, :non_main_starter},
+        {is_nil(get(r, :technique)) or get(r, :technique) in @techniques, :invalid_technique}
       ]
       |> Enum.flat_map(fn {ok, problem} -> if ok, do: [], else: [{:recipe, r.id, problem}] end)
 

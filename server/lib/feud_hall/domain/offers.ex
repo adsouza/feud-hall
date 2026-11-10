@@ -15,7 +15,7 @@ defmodule FeudHall.Domain.Offers do
 
   alias FeudHall.Domain.{Clock, Dietary, Inventory, Kitchen, Money, Substitution}
 
-  alias FeudHall.Domain.Hall.Management
+  alias FeudHall.Domain.Hall.{Management, Progression}
 
   @doc """
   Quotes an initial main/optional-drink tray for a stall.
@@ -112,7 +112,11 @@ defmodule FeudHall.Domain.Offers do
         {:error, :hall_cleaning}
 
       %{mode: :open} = stall ->
-        with :ok <- Management.allow_open(state, stall_id), do: {:ok, stall, state.restaurants[stall.restaurant]}
+        with :ok <- Management.allow_open(state, stall_id) do
+          business = state.restaurants[stall.restaurant]
+          menu = Progression.stall_menu(state, stall, business)
+          {:ok, stall, %{business | cuisine: Progression.cuisine(stall, business), menu: menu}}
+        end
 
       _ ->
         {:error, :stall_not_accepting_orders}

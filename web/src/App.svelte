@@ -9,12 +9,13 @@
     clock,
     command,
     getQuote,
+    getDiningHistory,
     getView,
     newDevice,
     send,
     serviceDuration,
   } from "./api";
-  import type { Page, Pending, Quote, View } from "./api";
+  import type { DiningHistory, Page, Pending, Quote, View } from "./api";
   import { refusalMessage } from "./refusals";
   import { contentLabel, label } from "./i18n";
   import type { Key, Locale } from "./i18n";
@@ -34,6 +35,10 @@
   let restaurantName = $state("");
   let chosenCuisine = $state("");
   let chosenSlot = $state("");
+  let ownerStallId = $state("");
+  let expansionStallId = $state("");
+  let expansionCuisine = $state("");
+  let refitCuisine = $state("");
   let stallId = $state("");
   let main = $state("");
   let drink = $state("");
@@ -63,13 +68,49 @@
   let recoveryCode = $state("");
   let motivation = $state("");
   let reviewReasons = $state<Partial<Record<string, string>>>({});
+  let receipts = $state<DiningHistory | null>(null);
+  let receiptError = $state(false);
+  let receiptLoading = $state(false);
+  let receiptRequest = 0;
   let composing = false;
   let refreshRunning = false;
   let selectedLanding = false;
 
   let profile = $derived(view?.profile ?? null);
+  let receiptScope = $derived(
+    page === "visit" && profile
+      ? JSON.stringify([profile.account.id, profile.visit?.id])
+      : "",
+  );
   let restaurant = $derived(profile?.restaurant ?? null);
-  let ownerStall = $derived(restaurant?.stalls[0]);
+  let ownerStall = $derived(
+    restaurant?.stalls.find((stall) => stall.id === ownerStallId) ??
+      restaurant?.stalls[0],
+  );
+  let ownerMenu = $derived(ownerStall?.menu ?? restaurant?.menu ?? {});
+  let starterStock = $derived(
+    ownerStall?.starter_stock ?? restaurant?.starter_stock,
+  );
+  let expansionSlot = $derived(
+    profile?.draft ??
+      profile?.slots.find((slot) => slot.stall_id === expansionStallId),
+  );
+  let expansionEstimate = $derived.by(() => {
+    const forecast = view?.hall.lease_forecast;
+    if (!forecast || !expansionSlot || !expansionCuisine) return null;
+    const margin = BigInt(forecast.starter_margins[expansionCuisine] ?? "0");
+    const open = BigInt(forecast.trading_hours);
+    const rent =
+      (BigInt(expansionSlot.rent) * open +
+        BigInt(expansionSlot.holding) * (24n - open)) /
+      24n;
+    const overhead = rent + BigInt(forecast.wages);
+    return {
+      overhead: overhead.toString(),
+      meals:
+        margin > 0n ? ((overhead + margin - 1n) / margin).toString() : null,
+    };
+  });
   let selectedStall = $derived(
     view?.hall.stalls.find((stall) => stall.stall_id === stallId),
   );
@@ -171,6 +212,36 @@
   $effect(() => {
     document.documentElement.lang = locale;
   });
+
+  $effect(() => {
+    if (receiptScope) void loadReceipts();
+    return () => {
+      receiptRequest++;
+      receipts = null;
+      receiptError = false;
+      receiptLoading = false;
+    };
+  });
+
+  async function loadReceipts(before?: string) {
+    const request = ++receiptRequest;
+    receiptLoading = true;
+    receiptError = false;
+    try {
+      const next = await getDiningHistory(before);
+      if (request === receiptRequest)
+        receipts = {
+          ...next,
+          receipts: before
+            ? [...(receipts?.receipts ?? []), ...next.receipts]
+            : next.receipts,
+        };
+    } catch {
+      if (request === receiptRequest) receiptError = true;
+    } finally {
+      if (request === receiptRequest) receiptLoading = false;
+    }
+  }
 
   $effect(() => {
     if (quoteRequest && !isCurrentQuoteRequest(quoteRequest)) {
@@ -486,7 +557,16 @@
         <article class="stall">
           <p class="eyebrow">{stall.stall_id} · {title(stall.tier)}</p>
           <h2>{stall.name}</h2>
-          <p>{title(stall.cuisine)}</p>
+          <p>
+            {title(stall.cuisine)}{stall.npc
+              ? " · " + t("npcOperator")
+              : ""}{stall.retiring ? " · " + t("npcRetiring") : ""}
+          </p>
+          {#each stall.awards ?? [] as award}
+            {#if !award.cuisine || award.cuisine === stall.cuisine}
+              <small>{title(award.distinction)}</small>
+            {/if}
+          {/each}
           <span class:good={stall["open?"] && view.hall.access === "open"}
             >{t(
               stall["open?"] && view.hall.access === "open" ? "open" : "closed",
@@ -498,6 +578,24 @@
         </article>
       {:else}<p>{t("emptyHall")}</p>{/each}
     </div>
+    {#if view.hall.failed_ventures?.length}
+      <details>
+        <summary>{t("businessHistory")}</summary>
+        <ul>
+          {#each view.hall.failed_ventures as venture (venture.id)}
+            <li>
+              {venture.name}{venture.owner_name
+                ? " · " + venture.owner_name
+                : ""} · {venture.cuisines.map(title).join(", ")} ·
+              {t("bankrupt")} · {t("diningDay").replace(
+                "{day}",
+                String(Math.floor(venture.ended_at / 86_400_000)),
+              )}
+            </li>
+          {/each}
+        </ul>
+      </details>
+    {/if}
   {:else if page === "business"}
     <h1>{restaurant?.name ?? t("createRestaurant")}</h1>
     {#if !profile?.account["owner?"]}<p>{t("needsLicense")}</p>
@@ -530,6 +628,7 @@
             cuisines={view.hall.cuisines}
             bind:value={chosenCuisine}
             label={t("cuisine")}
+            overlapLabel={t("overlappingCuisines")}
             {title}
           />
         {:else}
@@ -575,7 +674,281 @@
           >{t(profile.waitlisted ? "leaveWaitlist" : "joinWaitlist")}</button
         >
       {/if}
+    {:else if restaurant.distress_deadline != null}
+      <section>
+        <h2>{t("businessDistress")}</h2>
+        <p>{t("distressHint")}</p>
+        <p>
+          {t("unpaidCharges")}
+          {cash(restaurant.unpaid ?? "0")} ·
+          {t("recoveryEnds")}
+          {serviceDuration(restaurant.distress_deadline - view.hall.now)}
+        </p>
+        <ul>
+          {#each restaurant.salvage ?? [] as lot (lot.id)}
+            <li>
+              {title(lot.product)} · {lot.qty} · {cash(lot.amount)}
+              <button
+                {disabled}
+                onclick={() =>
+                  submit("salvage_stock", {
+                    restaurant_id: restaurant?.id,
+                    batch_id: lot.id,
+                  })}
+              >
+                {t("salvage")}
+              </button>
+            </li>
+          {/each}
+        </ul>
+        <ul>
+          {#each restaurant.equipment_salvage ?? [] as asset (asset.stall_id + asset.technique)}
+            <li>
+              {asset.stall_id} · {title(asset.technique)} · {cash(asset.amount)}
+              <button
+                {disabled}
+                onclick={() =>
+                  submit("salvage_equipment", {
+                    restaurant_id: restaurant?.id,
+                    stall_id: asset.stall_id,
+                    technique: asset.technique,
+                  })}>{t("salvageEquipment")}</button
+              >
+            </li>
+          {/each}
+        </ul>
+        {#if restaurant.stalls.length}
+          <p>{t("surrenderDistressHint")}</p>
+          <ul>
+            {#each restaurant.stalls as stall (stall.id)}
+              <li>
+                {stall.id}
+                <button
+                  {disabled}
+                  onclick={() =>
+                    submit("surrender_location", {
+                      restaurant_id: restaurant?.id,
+                      stall_id: stall.id,
+                    })}>{t("surrenderLocation")}</button
+                >
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <button
+          {disabled}
+          onclick={() =>
+            submit("pay_arrears", { restaurant_id: restaurant?.id })}
+        >
+          {t("payArrears")}
+        </button>
+        <details>
+          <summary>{t("acceptBankruptcy")}</summary>
+          <button
+            {disabled}
+            onclick={() =>
+              submit("accept_bankruptcy", { restaurant_id: restaurant?.id })}
+          >
+            {t("bankruptcyConfirm")}
+          </button>
+        </details>
+      </section>
     {:else}
+      {#if restaurant.stall_limit}
+        <section>
+          <h2>{t("currentLocations")}</h2>
+          {#if ownerStall}
+            <label
+              >{t("location")}
+              <select
+                value={ownerStall.id}
+                onchange={(event) => {
+                  ownerStallId = event.currentTarget.value;
+                  refitCuisine = "";
+                }}
+              >
+                {#each restaurant.stalls as stall (stall.id)}
+                  <option value={stall.id}
+                    >{stall.id} · {title(
+                      stall.cuisine ?? restaurant.cuisine,
+                    )}</option
+                  >
+                {/each}
+              </select>
+            </label>
+            {#if ownerStall.ready_at && ownerStall.ready_at > view.hall.now}
+              <p>
+                {t("readyIn")}
+                {serviceDuration(ownerStall.ready_at - view.hall.now)}
+              </p>
+            {/if}
+            {#if ownerStall.mode === "closed"}
+              <details>
+                <summary>{t("refitLocation")}</summary>
+                <form
+                  onsubmit={(event) => {
+                    event.preventDefault();
+                    if (restaurant && ownerStall && refitCuisine)
+                      void submit("refit_location", {
+                        restaurant_id: restaurant.id,
+                        stall_id: ownerStall.id,
+                        cuisine: refitCuisine,
+                      });
+                  }}
+                >
+                  <CuisinePicker
+                    cuisines={view.hall.cuisines.filter(
+                      (cuisine) => cuisine !== ownerStall?.cuisine,
+                    )}
+                    bind:value={refitCuisine}
+                    label={t("chooseCuisine")}
+                    overlapLabel={t("overlappingCuisines")}
+                    {title}
+                  />
+                  <button
+                    disabled={disabled ||
+                      !refitCuisine ||
+                      refitCuisine === ownerStall.cuisine}
+                  >
+                    {t("refitLocation")} · {cash(ownerStall.refit_cost ?? "0")}
+                  </button>
+                </form>
+              </details>
+              <p>{t("closedLocationHint")}</p>
+              <button
+                {disabled}
+                onclick={() =>
+                  submit("surrender_location", {
+                    restaurant_id: restaurant?.id,
+                    stall_id: ownerStall?.id,
+                  })}
+              >
+                {t("surrenderLocation")}
+              </button>
+            {/if}
+          {/if}
+          {#if restaurant.stalls.length >= restaurant.stall_limit}
+            <p>{t("noMoreLocations")}</p>
+          {:else if profile.draft || profile.slots.length}
+            <details>
+              <summary
+                >{t(
+                  restaurant.stalls.length
+                    ? "expandLocation"
+                    : "reopenLocation",
+                )}</summary
+              >
+              <form
+                onsubmit={(event) => {
+                  event.preventDefault();
+                  if (restaurant && expansionSlot && expansionCuisine)
+                    void submit("lease_location", {
+                      restaurant_id: restaurant.id,
+                      stall_id: expansionSlot.stall_id,
+                      cuisine: expansionCuisine,
+                    });
+                }}
+              >
+                {#if !profile.draft}
+                  <label
+                    >{t("location")}
+                    <select bind:value={expansionStallId} required>
+                      <option value="">—</option>
+                      {#each profile.slots as slot (slot.stall_id)}
+                        <option value={slot.stall_id}
+                          >{slot.stall_id} · {title(slot.tier)} · {cash(
+                            slot.rent,
+                          )}</option
+                        >
+                      {/each}
+                    </select>
+                  </label>
+                {/if}
+                {#if expansionSlot}
+                  <p>
+                    {expansionSlot.stall_id} · {t("exposure")}
+                    {expansionSlot.exposure / 1000}× ·
+                    {t("rent")}
+                    {cash(expansionSlot.rent)} · {t("holding")}
+                    {cash(expansionSlot.holding)} ·
+                    {t("setupFee")}
+                    {cash(expansionSlot.setup_fee)}
+                  </p>
+                {/if}
+                <CuisinePicker
+                  cuisines={view.hall.cuisines}
+                  bind:value={expansionCuisine}
+                  label={t("chooseCuisine")}
+                  overlapLabel={t("overlappingCuisines")}
+                  {title}
+                />
+                {#if expansionEstimate}
+                  <p>
+                    {t("dailyOverheadEstimate")}
+                    {cash(expansionEstimate.overhead)}
+                  </p>
+                  {#if expansionEstimate.meals}
+                    <p>
+                      {t("breakEvenMeals").replace(
+                        "{meals}",
+                        expansionEstimate.meals,
+                      )}
+                    </p>
+                  {:else}
+                    <p>{t("noStarterMargin")}</p>
+                  {/if}
+                {/if}
+                <button
+                  disabled={disabled || !expansionSlot || !expansionCuisine}
+                  >{t("leaseLocation")}</button
+                >
+              </form>
+            </details>
+          {/if}
+          {#if !restaurant.stalls.length && !profile.draft && (profile.waitlisted || !profile.slots.length)}
+            <button
+              {disabled}
+              onclick={() =>
+                profile?.waitlisted
+                  ? submit("leave_waitlist")
+                  : submit("join_waitlist", {
+                      tiers: ["quiet", "standard", "busy", "prime"],
+                    })}
+            >
+              {t(profile.waitlisted ? "leaveWaitlist" : "joinWaitlist")}
+            </button>
+          {/if}
+        </section>
+        <section>
+          <h2>{t("recognition")}</h2>
+          <p>{t("reputation")} {(restaurant.reputation ?? 0) / 100}%</p>
+          {#if restaurant.award_review_at != null}
+            <p>
+              {t("nextReview")}
+              {t("diningDay").replace(
+                "{day}",
+                String(Math.floor(restaurant.award_review_at / 86_400_000)),
+              )}
+            </p>
+          {/if}
+          <h3>{t("milestones")}</h3>
+          <ul>
+            {#each restaurant.milestones ?? [] as milestone (milestone.milestone)}
+              <li>{title(milestone.milestone)}</li>
+            {/each}
+          </ul>
+          <h3>{t("awards")}</h3>
+          <ul>
+            {#each restaurant.awards ?? [] as award}
+              <li>
+                {title(award.distinction)}{award.cuisine
+                  ? " · " + title(award.cuisine)
+                  : ""}
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
       <div class="business-grid">
         <section>
           <h2>{t("viewMenu")}</h2>
@@ -584,28 +957,43 @@
             <strong>{cash(restaurant.available_cash)}</strong>
           </p>
           <ul>
-            {#each Object.values(view.hall.recipes).filter((r) => r.cuisine === restaurant?.cuisine) as recipe (recipe.id)}
+            {#each Object.values(view.hall.recipes).filter((r) => r.cuisine === (ownerStall?.cuisine ?? restaurant?.cuisine)) as recipe (recipe.id)}
+              {@const offer = ownerStall?.unlock_offers?.[recipe.id]}
               <li>
                 {title(recipe.id)}
-                {#if restaurant.menu[recipe.id]}
-                  <strong>{cash(restaurant.menu[recipe.id])}</strong>
+                {#if ownerMenu[recipe.id]}
+                  <strong>{cash(ownerMenu[recipe.id])}</strong>
                   <button
                     {disabled}
                     onclick={() =>
                       submit("remove_menu_item", {
                         restaurant_id: restaurant?.id,
+                        stall_id: ownerStall?.id,
                         recipe_id: recipe.id,
                       })}>{t("remove")}</button
                   >
-                {:else if !restaurant.unlocked.includes(recipe.id)}
+                {/if}
+                {#if offer}
                   <button
                     {disabled}
                     onclick={() =>
                       submit("unlock_recipe", {
                         restaurant_id: restaurant?.id,
+                        stall_id: ownerStall?.id,
                         recipe_id: recipe.id,
-                      })}>{t("learn")}</button
+                        max_cost: offer.cost,
+                      })}
                   >
+                    {t(offer.known ? "installEquipment" : "learn")} · {cash(
+                      offer.cost,
+                    )}
+                  </button>
+                  {#if offer.technique && offer.equipment !== "0"}
+                    <small
+                      >{t("equipmentCost")}
+                      {title(offer.technique)} · {cash(offer.equipment)}</small
+                    >
+                  {/if}
                 {/if}
               </li>
             {/each}
@@ -615,6 +1003,7 @@
               e.preventDefault();
               void submit("set_menu_price", {
                 restaurant_id: restaurant?.id,
+                stall_id: ownerStall?.id,
                 recipe_id: recipeId,
                 price,
               });
@@ -641,16 +1030,13 @@
         </section>
         <section>
           <h2>{t("supply")}</h2>
-          {#if restaurant.starter_stock.items.length > 0}
+          {#if starterStock && starterStock.items.length > 0}
             <details>
               <summary
-                >{t("starterStock")} · {cash(
-                  restaurant.starter_stock.budget,
-                )}</summary
+                >{t("starterStock")} · {cash(starterStock.budget)}</summary
               >
               <ul>
-                {#each restaurant.starter_stock.items as item (item.product)}<li
-                  >
+                {#each starterStock.items as item (item.product)}<li>
                     {title(item.product)} · {item.qty}
                   </li>{/each}
               </ul>
@@ -660,7 +1046,8 @@
                   restaurant &&
                   submit("request_starter_stock", {
                     restaurant_id: restaurant.id,
-                    budget: restaurant.starter_stock.budget,
+                    stall_id: ownerStall?.id,
+                    budget: starterStock.budget,
                   })}>{t("buy")}</button
               >
             </details>
@@ -1084,6 +1471,55 @@
         >
       </section>
     {/if}
+    {#if profile}
+      <section>
+        <h2>{t("diningHistory")}</h2>
+        {#if receipts}
+          {#each receipts.receipts as receipt (receipt.visit_id)}
+            <details>
+              <summary>
+                {receipt.stall_id} · {t("diningDay").replace(
+                  "{day}",
+                  String(Math.floor(receipt.at / 86_400_000)),
+                )}
+                {clock(receipt.at)} ·
+                {t("diningCharged")}
+                {cash(receipt.total)}
+              </summary>
+              <ul>
+                {#each receipt.courses as course (course.kind)}
+                  <li>
+                    {title(course.recipe_id)} ·
+                    {t(
+                      course.outcome === "served"
+                        ? "courseServed"
+                        : "courseUnserved",
+                    )} ·
+                    {cash(course.charged)}
+                  </li>
+                {/each}
+              </ul>
+            </details>
+          {:else}<p>{t("diningHistoryEmpty")}</p>{/each}
+          {#if receipts.before}
+            <button
+              disabled={receiptLoading}
+              onclick={() => loadReceipts(receipts?.before ?? undefined)}
+            >
+              {t("diningHistoryOlder")}
+            </button>
+          {/if}
+        {/if}
+        {#if receiptError}
+          <p role="status">{t("diningHistoryUnavailable")}</p>
+          {#if !receipts}
+            <button onclick={() => loadReceipts()}
+              >{t("diningHistoryRetry")}</button
+            >
+          {/if}
+        {/if}
+      </section>
+    {/if}
   {:else if page === "work"}
     <h1>{t("work")}</h1>
     <p>{t("workHint")}</p>
@@ -1246,6 +1682,26 @@
       </section>
     {:else}
       <h2>{profile.account.name}</h2>
+      {#if profile.ventures?.length}
+        <section>
+          <h3>{t("businessHistory")}</h3>
+          {#each profile.ventures as venture (venture.id)}
+            <details>
+              <summary>{venture.name} · {t("bankrupt")}</summary>
+              <p>
+                {venture.cuisines.map(title).join(", ")} · {t("unpaidCharges")}
+                {cash(venture.unpaid ?? "0")}
+              </p>
+              <dl>
+                {#each Object.entries(venture.final_ledger ?? {}) as [key, value] (key)}
+                  <dt>{title(key)}</dt>
+                  <dd>{cash(value)}</dd>
+                {/each}
+              </dl>
+            </details>
+          {/each}
+        </section>
+      {/if}
       <div class="business-grid">
         <section>
           <h3>{t("invitation")}</h3>

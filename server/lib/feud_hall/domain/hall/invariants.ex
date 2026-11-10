@@ -83,7 +83,8 @@ defmodule FeudHall.Domain.Hall.Invariants do
            orders(state) ++
            retired(state) ++
            access(state) ++
-           market(state) ++ arrivals(state) ++ stats(state) ++ npcs(state) ++ kitchen(state) ++ management(state) do
+           market(state) ++
+           arrivals(state) ++ stats(state) ++ npcs(state) ++ kitchen(state) ++ management(state) ++ progression(state) do
       [] -> :ok
       problems -> {:error, problems}
     end
@@ -364,6 +365,24 @@ defmodule FeudHall.Domain.Hall.Invariants do
       []
     end
   end
+
+  defp progression(%{progression: progression} = state) do
+    active = MapSet.new(Map.keys(state.restaurants))
+    leased = MapSet.new(Map.keys(state.stalls))
+
+    problems([
+      {active == MapSet.new(Map.keys(progression.ventures)), :invalid_active_ventures},
+      {leased == MapSet.new(Map.keys(state.management.leases)), :invalid_location_lease_index},
+      {Enum.all?(state.stalls, fn {_, stall} -> MapSet.member?(active, stall.restaurant) end), :orphaned_location},
+      {Enum.all?(state.owners, fn {_, id} -> MapSet.member?(active, id) end), :orphaned_owner},
+      {MapSet.disjoint?(active, MapSet.new(Map.keys(progression.history))), :bankrupt_venture_active},
+      {Enum.all?(Map.keys(progression.distress), &MapSet.member?(active, &1)), :orphaned_distress},
+      {Enum.all?(Map.keys(progression.population.closing), &match?(%{owner_kind: :npc}, state.restaurants[&1])),
+       :invalid_npc_retirement}
+    ])
+  end
+
+  defp progression(_state), do: []
 
   defp counters(state) do
     held = for {sid, %{counter: %{} = counter}} <- Enum.sort(state.stalls), do: {sid, counter}

@@ -192,7 +192,11 @@ defmodule FeudHall.Domain.Choice do
         distinct = eligible |> Enum.map(& &1.main_id) |> Enum.uniq() |> length()
         variety = rules.demand.variety_weight * min(distinct - 1, rules.demand.variety_cap)
         exposure = Map.get(rules.exposure_permille, state.stalls[best.stall_id].tier, 0)
-        {{:stall, best.stall_id, best.main_id, best.drink_id}, div((best_score + variety) * exposure, 1000)}
+        restaurant = state.stalls[best.stall_id].restaurant
+        cuisine = state.catalog.recipes[best.main_id].cuisine
+        recognition = FeudHall.Domain.Hall.Recognition.multiplier(state, restaurant, cuisine)
+        weight = div((best_score + variety) * exposure * recognition, 1_000_000)
+        {{:stall, best.stall_id, best.main_id, best.drink_id}, weight}
     end
   end
 

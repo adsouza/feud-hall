@@ -4,8 +4,8 @@ defmodule FeudHall.Application.Projections.Balances do
 
   `changes/3` compares the hall state before and after one batch and returns
   only the rows that differ: one `:balance` row per changed ledger account and
-  one `:stock` row per product whose on-hand or reserved total changed, or a
-  `:delete_stock` row when a product has no batches left. Rows are derived
+  one `:stock` row per product whose on-hand or reserved total changed.
+  Deletions retire active accounts and stock rows when a venture terminates. Rows are derived
   from evolved state only; the adapter writes them in the same transaction as
   the batch and stamps them with the committed position. A `nil` before-state
   means nothing was projected yet, so every account and product is a change.
@@ -15,6 +15,7 @@ defmodule FeudHall.Application.Projections.Balances do
 
   @type row ::
           {:balance, restaurant_id :: String.t(), account :: atom(), amount :: integer()}
+          | {:delete_balance, restaurant_id :: String.t(), account :: atom()}
           | {:stock, restaurant_id :: String.t(), product :: String.t(), on_hand :: integer(), reserved :: integer()}
           | {:delete_stock, restaurant_id :: String.t(), product :: String.t()}
 
@@ -23,16 +24,29 @@ defmodule FeudHall.Application.Projections.Balances do
   def changes(before, after_state, _position) do
     before_restaurants = restaurants(before)
 
-    after_state
-    |> restaurants()
-    |> Enum.sort()
-    |> Enum.flat_map(fn {id, restaurant} ->
-      case Map.get(before_restaurants, id) do
-        nil -> restaurant_rows(id, nil, restaurant)
-        ^restaurant -> []
-        previous -> restaurant_rows(id, previous, restaurant)
-      end
-    end)
+    after_restaurants = restaurants(after_state)
+
+    changes =
+      after_restaurants
+      |> Enum.sort()
+      |> Enum.flat_map(fn {id, restaurant} ->
+        case Map.get(before_restaurants, id) do
+          nil -> restaurant_rows(id, nil, restaurant)
+          ^restaurant -> []
+          previous -> restaurant_rows(id, previous, restaurant)
+        end
+      end)
+
+    retired =
+      before_restaurants
+      |> Map.drop(Map.keys(after_restaurants))
+      |> Enum.sort()
+      |> Enum.flat_map(fn {id, restaurant} ->
+        accounts = for key <- Enum.sort(Map.keys(restaurant.ledger)), do: {:delete_balance, id, key}
+        accounts ++ stock_rows(id, restaurant.batches, %{})
+      end)
+
+    changes ++ retired
   end
 
   defp restaurants(nil), do: %{}

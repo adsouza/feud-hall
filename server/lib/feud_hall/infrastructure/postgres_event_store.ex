@@ -300,7 +300,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   # The catalog is stored once per content identity; the event references it.
   defp stored_payload(repo, %{type: type, catalog: catalog} = event)
-       when type in [:hall_initialized, :hall_simulation_upgraded] do
+       when type in [:hall_initialized, :hall_simulation_upgraded, :hall_catalog_expanded] do
     body = :erlang.term_to_binary(catalog, [:deterministic])
     ref = content_hash(body)
 
@@ -339,12 +339,22 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
             position: position
           })
 
+        {:delete_balance, r, account}, acc ->
+          Map.put(acc, {:balance, r, account}, :delete)
+
         {:delete_stock, r, product}, acc ->
           Map.put(acc, {:stock, r, product}, :delete)
       end)
 
     {deletes, upserts} = Enum.split_with(final, fn {_key, value} -> value == :delete end)
     {balances, stock} = Enum.split_with(upserts, fn {{table, _, _}, _} -> table == :balance end)
+
+    for {{:balance, r, account}, :delete} <- deletes do
+      repo.query!("delete from restaurant_balances where restaurant_id = $1 and account = $2", [
+        r,
+        Atom.to_string(account)
+      ])
+    end
 
     for {{:stock, r, product}, :delete} <- deletes do
       repo.query!("delete from restaurant_stock where restaurant_id = $1 and product = $2", [r, product])
@@ -430,6 +440,70 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   @impl true
   def read_from(store, after_position) do
     with {:ok, result} <- attempt(fn -> read_after(store.repo, after_position, nil) end), do: result
+  end
+
+  @impl true
+  def guest_visit_events(store, stream, principal, head, before, limit) do
+    with {:ok, %{rows: rows}} <-
+           attempt(fn ->
+             store.repo.query!(
+               """
+               select a.stream_version, a.payload, f.payload,
+                 coalesce(t.at, case when exists (
+                   select 1 from events c where c.position = f.position and c.type = 'clock_advanced'
+                 ) then coalesce(previous.hall_ms, 0) else f.hall_ms end),
+                 array(
+                   select p.payload from events p
+                   where p.stream = a.stream and p.type in ('tray_accepted', 'dessert_accepted')
+                     and p.payload::json #>> '{e,visit_id}' = a.payload::json #>> '{e,visit_id}'
+                     and p.stream_version between a.stream_version and f.stream_version
+                   order by p.stream_version
+                 )
+               from events a
+               join events f on f.stream = a.stream and f.type = 'visit_finalized'
+                 and f.payload::json #>> '{e,visit_id}' = a.payload::json #>> '{e,visit_id}'
+                 and f.stream_version between a.stream_version and $3
+               left join batches previous on previous.position = f.position - 1
+               left join lateral (
+                 select (c.payload::json #>> '{e,to}')::bigint as at
+                 from events c where c.position = f.position and c.type = 'clock_advanced'
+                   and c.batch_order < f.batch_order
+                 order by c.batch_order desc limit 1
+               ) t on true
+               where a.stream = $1 and a.type = 'visit_admitted'
+                 and a.payload::json #>> '{e,source,$a}' = 'guest'
+                 and a.payload::json #>> '{e,principal}' = $2
+                 and a.stream_version < $4 and a.stream_version <= $3
+               order by a.stream_version desc limit $5
+               """,
+               [stream, principal, head, before, limit],
+               timeout: 1_000
+             )
+           end) do
+      Enum.reduce_while(rows, {:ok, []}, fn [version, admit, final, at, accepted], {:ok, acc} ->
+        with {:ok, admitted} <- EventCodec.decode(admit),
+             {:ok, finalized} <- EventCodec.decode(final),
+             {:ok, orders} <- decode_accepted_orders(accepted) do
+          {:cont, {:ok, [%{version: version, admitted: admitted, finalized: finalized, at: at, orders: orders} | acc]}}
+        else
+          {:error, _} -> {:halt, {:error, :history_unavailable}}
+        end
+      end)
+      |> case do
+        {:ok, visits} -> {:ok, Enum.reverse(visits)}
+        error -> error
+      end
+    end
+  end
+
+  defp decode_accepted_orders(payloads) do
+    Enum.reduce_while(payloads, {:ok, []}, fn payload, {:ok, acc} ->
+      case EventCodec.decode(payload) do
+        {:ok, %{type: :tray_accepted, components: orders}} -> {:cont, {:ok, acc ++ orders}}
+        {:ok, %{type: :dessert_accepted, order: order}} -> {:cont, {:ok, acc ++ [order]}}
+        _ -> {:halt, {:error, :history_unavailable}}
+      end
+    end)
   end
 
   @doc """

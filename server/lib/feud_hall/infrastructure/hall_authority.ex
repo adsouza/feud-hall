@@ -167,6 +167,10 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     do: GenServer.call(pid, {:management_execute, device, request}, @call_timeout)
 
   def management_view(pid, device), do: GenServer.call(pid, {:management_view, device}, @call_timeout)
+
+  def dining_history(pid, device, before),
+    do: GenServer.call(pid, {:dining_history, device, before}, @call_timeout)
+
   def management_quote(pid, device, params), do: GenServer.call(pid, {:management_quote, device, params}, @call_timeout)
 
   @doc "The committed head the authority holds."
@@ -276,6 +280,9 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   def handle_call({:management_view, device}, _from, s),
     do: {:reply, FeudHall.Application.Management.view(s.runtime, device), s}
+
+  def handle_call({:dining_history, device, before}, _from, s),
+    do: {:reply, FeudHall.Application.DiningHistory.page(s.runtime, device, before), s}
 
   def handle_call({:management_quote, device, params}, _from, s),
     do: {:reply, FeudHall.Application.Management.quote(s.runtime, device, params), s}
@@ -510,10 +517,18 @@ defmodule FeudHall.Infrastructure.HallAuthority do
       cond do
         s.runtime.mode != :ready -> {:halt, {:ok, s}}
         Map.has_key?(s.runtime.state.owners, {:npc, profile.id}) -> {:cont, {:ok, s}}
+        npc_already_started?(s.runtime.state, profile.id) -> {:cont, {:ok, s}}
         Map.has_key?(s.npc_given_up, {profile.id, :create}) -> {:cont, {:ok, s}}
         true -> create_npc(s, profile, starter_cuisine(cuisines, index))
       end
     end)
+  end
+
+  defp npc_already_started?(state, operator) do
+    state
+    |> get_in([:progression, :history])
+    |> Kernel.||(%{})
+    |> Enum.any?(fn {_, record} -> record.owner_kind == :npc and record.owner == operator end)
   end
 
   defp create_npc(s, profile, starter) do
@@ -543,7 +558,12 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     slot = div(hall.now, Clock.hour()) * Clock.hour()
 
     hall.npcs
-    |> Enum.filter(fn {_op, npc} -> npc.next_slot_at <= hall.now end)
+    |> Enum.filter(fn {_op, npc} ->
+      npc.next_slot_at <= hall.now and
+        not FeudHall.Domain.Hall.Progression.distressed?(hall, npc.restaurant_id) and
+        not FeudHall.Domain.Hall.Population.closing?(hall, npc.restaurant_id) and
+        FeudHall.Domain.Hall.Progression.stalls(hall, npc.restaurant_id) != []
+    end)
     |> Enum.map(&elem(&1, 0))
     |> Enum.sort()
     |> Enum.reduce_while({:ok, s}, fn op, {:ok, s} ->

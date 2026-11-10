@@ -120,6 +120,26 @@ defmodule FeudHall.Domain.Hall.Settlement do
     }
   end
 
+  def cancel_location(state, stall_id, reason) do
+    state.visits
+    |> Enum.sort()
+    |> Enum.reduce({[], state}, fn
+      {_, %{stall: ^stall_id} = visit}, {events, current} ->
+        settlement =
+          case visit.dessert do
+            :offered -> [finalize_event(current, visit, :dessert_offer_withdrawn)]
+            :accepted -> cancel_dessert(current, current.orders[visit.dessert_order], reason)
+            _ -> cancel_tray(current, current.trays[visit.tray], reason)
+          end
+
+        {events ++ settlement, Enum.reduce(settlement, current, &Evolver.evolve(&2, &1))}
+
+      _, result ->
+        result
+    end)
+    |> elem(0)
+  end
+
   defp cancel_component(state, order_id) do
     o = state.orders[order_id]
     %{order_id: order_id, released: o.reservations, waste_cost: o.consumed_cost}

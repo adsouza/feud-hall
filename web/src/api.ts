@@ -15,6 +15,9 @@ export type Stall = {
   cuisine: string;
   menu: Record<string, Money>;
   "open?": boolean;
+  npc?: boolean;
+  retiring?: boolean;
+  awards?: Award[];
 };
 type Lease = {
   start_hour: number;
@@ -31,6 +34,9 @@ export type OwnerStall = {
   tier: string;
   mode: string;
   can_open: boolean;
+  ready_at?: number | null;
+  refit_cost?: Money;
+  cuisine?: string;
   lease: Lease;
 };
 export type Slot = {
@@ -41,10 +47,37 @@ export type Slot = {
   holding: Money;
   setup_fee: Money;
 };
+type Award = {
+  distinction: string;
+  cuisine: string | null;
+  expires_at: number;
+};
+type Milestone = { milestone: string; at: number };
+type VentureHistory = {
+  id: string;
+  name: string;
+  cuisines: string[];
+  owner_name?: string | null;
+  opened_at: number;
+  ended_at: number;
+  peak_stalls: number;
+  unpaid?: Money;
+  final_ledger?: Record<string, Money>;
+};
 export type Restaurant = {
   id: string;
   name: string;
   cuisine: string;
+  cuisines?: string[];
+  stall_limit?: number | null;
+  distress_deadline?: number | null;
+  reputation?: number;
+  unpaid?: Money;
+  award_review_at?: number | null;
+  awards?: Award[];
+  milestones?: Milestone[];
+  salvage?: { id: string; product: string; qty: number; amount: Money }[];
+  equipment_salvage?: { stall_id: string; technique: string; amount: Money }[];
   unlocked: string[];
   menu: Record<string, Money>;
   ledger: Record<string, Money>;
@@ -119,6 +152,7 @@ export type Profile = {
   reviewer_queue: Application[];
   invitations: { id: string; status: string; code?: string }[];
   recovery_codes: string[];
+  ventures?: VentureHistory[];
   notices: { code: string; status?: string; reason?: string }[];
 };
 export type View = {
@@ -130,6 +164,12 @@ export type View = {
     cuisines: string[];
     dietary_profiles?: string[];
     recipes: Record<string, Recipe>;
+    failed_ventures?: VentureHistory[];
+    lease_forecast?: {
+      trading_hours: number;
+      wages: Money;
+      starter_margins: Record<string, Money>;
+    } | null;
   };
   profile: Profile | null;
 };
@@ -137,6 +177,24 @@ export type Quote = {
   total: Money;
   earliest_completion: number;
   terms: Record<string, unknown>;
+};
+export type DiningHistory = {
+  before: string | null;
+  receipts: {
+    visit_id: string;
+    stall_id: string;
+    restaurant_id: string;
+    at: number;
+    reason: string;
+    total: Money;
+    courses: {
+      kind: "main" | "drink" | "dessert";
+      recipe_id: string;
+      outcome: string;
+      price: Money;
+      charged: Money;
+    }[];
+  }[];
 };
 export type Pending = {
   command_id: string;
@@ -176,6 +234,10 @@ async function read<T>(url: string): Promise<T> {
 }
 
 export const getView = () => read<View>("/api/state");
+export function getDiningHistory(before?: string) {
+  const query = before ? "?" + new URLSearchParams({ before }) : "";
+  return read<DiningHistory>("/api/dining-history" + query);
+}
 export function getQuote(fields: Record<string, string>) {
   return read<Quote>(`/api/quote?${new URLSearchParams(fields)}`);
 }

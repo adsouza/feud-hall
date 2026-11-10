@@ -2,7 +2,7 @@
 defmodule FeudHall.BrowserHall do
   alias FeudHall.Application.{CommandWorkflow, Recovery}
   alias FeudHall.Domain.Clock
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.Domain.Content.{LaunchCatalog, SliceCatalog}
   alias FeudHall.Infrastructure.{HallAuthority, ManualClock, PostgresEventStore, Repo}
   alias FeudHall.Web.{Bootstrap, Diagnostics, Endpoint, Router, Token}
 
@@ -58,7 +58,7 @@ defmodule FeudHall.BrowserHall do
       advance(clock, 10_000)
     end
 
-    {:ok, _} = Bootstrap.start_link(@scope)
+    {:ok, _} = Bootstrap.start_link(@scope, catalog())
 
     {:ok, _} =
       Endpoint.start_link(
@@ -154,7 +154,11 @@ defmodule FeudHall.BrowserHall do
   end
 
   defp init_payload,
-    do: %{hall_id: @scope, managed: true, catalog: FeudHall.Fixtures.quiet_catalog(SliceCatalog.catalog())}
+    do: %{hall_id: @scope, managed: true, catalog: FeudHall.Fixtures.quiet_catalog(catalog())}
+
+  defp catalog do
+    if System.get_env("FEUD_HALL_BROWSER_LAUNCH") == "1", do: LaunchCatalog.catalog(), else: SliceCatalog.catalog()
+  end
 
   defp envelope(id, actor, kind, payload), do: %{command_id: id, actor: actor, command: {kind, payload}}
   defp hall, do: HallAuthority.state(@authority).hall

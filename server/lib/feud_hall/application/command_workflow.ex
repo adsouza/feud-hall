@@ -35,10 +35,10 @@ defmodule FeudHall.Application.CommandWorkflow do
   alias FeudHall.Application.Projections.Balances
   alias FeudHall.Domain.{Clock, Control, Hall, Identity}
 
-  alias FeudHall.Domain.Hall.Management
+  alias FeudHall.Domain.Hall.{Management, Progression}
 
-  @management_commands Management.commands()
-  @commands ~w(initialize_hall upgrade_simulation advance_clock create_restaurant open_stall close_stall unlock_recipe
+  @management_commands Management.commands() ++ Progression.commands()
+  @commands ~w(initialize_hall upgrade_simulation expand_catalog advance_clock create_restaurant open_stall close_stall unlock_recipe
                set_menu_price remove_menu_item set_substitution_policy submit_purchase_request
                cancel_purchase_request grant_allowance admit_visit cancel_tray accept_dessert decline_dessert
                cancel_dessert npc_plan)a
@@ -437,9 +437,24 @@ defmodule FeudHall.Application.CommandWorkflow do
     with :ok <- authorize_management(runtime, command, ctx),
          {:ok, events} <- Hall.decide(runtime.state, command, ctx) do
       identity = Identity.get(runtime.control)
-      {:ok, events, Identity.observe(identity, runtime.state, events)}
+      activity = venture_activity(runtime.state, command, ctx)
+      {:ok, events ++ activity, Identity.observe(identity, runtime.state, events)}
     end
   end
+
+  @activity_commands ~w(open_stall close_stall unlock_recipe set_menu_price remove_menu_item set_substitution_policy
+    submit_purchase_request cancel_purchase_request set_staff_schedule hire_staff set_worker_schedule dismiss_staff
+    set_helper_offers set_restock_policy set_pricing_policy request_starter_stock set_unattended_policy)a
+
+  defp venture_activity(%{progression: _} = state, {kind, _}, %{actor: {:principal, principal}})
+       when kind in @activity_commands do
+    case state.owners[{:principal, principal}] do
+      nil -> []
+      id -> [Progression.activity_event(id, state.now)]
+    end
+  end
+
+  defp venture_activity(_state, _command, _context), do: []
 
   defp authorize_management(runtime, {:create_restaurant, _}, %{actor: {:principal, id}}) do
     if Management.enabled?(runtime.state) and not Identity.owner?(Identity.get(runtime.control), id),

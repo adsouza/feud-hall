@@ -32,7 +32,11 @@ defmodule FeudHall.Infrastructure.EventCodec do
     helper_shift_started helper_shift_ended helper_presence_recorded disconnect shift_id payment qualified tasks ended_at rate
     helper_selection_opened helper_choice_selected helper_selection_closed helper_task_completed selection_id
     stall_closed scheduled_end owner_ended actionable_idle reassigned recovery safety_stop left
-    hall_initialized hall_simulation_upgraded clock_advanced hall_cleaning_started hall_cleaning_ended restaurant_created
+    npc_population_changed npc_retirement_scheduled npc_retirement_finished retirement restoration npc_retired npc_retiring award_reviewed next_review awarded distinction awards milestone_earned milestone visits milestones
+    location_equipped equipment_salvaged technique basis from_storage keep_equipment
+    location_added location_refitted location_refitting ready_at location_released released_debt distress_started distress_cleared venture_activity_recorded stock_salvaged
+    business_bankrupted record cuisines opened_at ended_at peak_stalls final_ledger unpaid bankruptcy business_distressed
+    hall_initialized hall_simulation_upgraded hall_catalog_expanded clock_advanced hall_cleaning_started hall_cleaning_ended restaurant_created
     starter_grant_issued stall_opened stall_closed recipe_unlocked menu_price_set menu_item_removed
     substitution_policy_set stock_purchased stock_spoiled allowance_granted visit_admitted tray_accepted
     reservation_replaced preparation_started preparation_completed tray_served tray_cancelled

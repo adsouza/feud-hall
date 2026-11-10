@@ -616,6 +616,29 @@ and settlement identity form one atomic batch. Replay reconstructs funding
 lineage, raw/work-in-progress/served/waste costs, assignments, generations, and
 partial wages without paying again or reopening an ended shift.
 
+The [Milestone 5 counter interactions](GAME_DESIGN.md#milestone-5-counter-helper-interactions)
+extend this boundary. Workforce owns the staging task and exclusive worker
+claim. The stall owns at most one prepared pickup place. Starting, yielding,
+completing, and invalidating staging use the current position and task
+generations. Starting staging must respect known service deadlines and the
+cleaning cutoff. Commit setup completion only after actual covered work.
+A handover start may consume the prepared place in the same batch as its
+counter claim. Consumption is final even if that handover later fails.
+A staged place can subtract only the recorded setup portion from one
+handover. Ordinary freshness, capacity, funding, fallback, and payroll
+rules still apply. Preparation estimates, wait times, and the automatic
+next choice are authorized read models. Keep customer identities and
+private restaurant state out of the helper projection.
+
+The [diner comparison and tracking views](GAME_DESIGN.md#milestone-5-diner-interactions)
+use the same eligibility calculations as checkout and derive the private
+tasting list from committed served-main receipts and pinned cuisine data.
+Queries may rank offers by exact money or time but cannot reserve food,
+money, or a queue place. A rendered pickup, notification, or receipt click
+is a presentation action. Committed events drive service and the dessert
+offer clock. Both the HTML and 3D views invoke the same authorized use cases
+and share active visit and pending command identities.
+
 Successful shift completion and its server-owned task/end-time evidence grant
 service-level licensing eligibility in the same cross-stream batch as the hall's
 shift completion and final payroll settlement. Record semantic facts such as
@@ -977,6 +1000,27 @@ Installed clients must include the map assets; missing WebGL must not disable
 the picker or its list alternative.
 
 ## Implementation status
+
+The launch catalog adds 21 cuisines to the existing three. Fresh halls pin
+the launch catalog at initialization. A managed slice hall appends an
+additive catalog event with its own content identity. The event preserves
+existing recipes, stock, demand inputs, orders, and leases. New products use
+the regular market; equipment purchases install a paid capability at one
+physical location, and recipe knowledge, cash, and stock belong to the
+venture. Stall-level menu overrides do not affect sibling stalls.
+
+The dining receipt query pages committed guest admission and settlement
+events through the event-store read port. PostgreSQL indexes the scoped
+principal and visit IDs. The use case authorizes the current device and caps
+the read at the authority’s committed stream version. The query can reconstruct
+pre-upgrade receipts and does not retain completed orders in live state.
+
+The hall stream owns location releases, equipment transfers, distress and
+bankruptcy, NPC closing and restoration, and recognition. Bankruptcy freezes
+the final statement and deletes the active balance and inventory projections
+in the same commit. The calendar cuts award windows at midnight before
+same-instant service; NPC observation pauses during cleaning, and platform
+recovery clears presence eligibility while preserving scheduled closing.
 
 The management slice adds service-wide identity facts to the existing control
 stream. Hall and control facts for an eligible helper completion append

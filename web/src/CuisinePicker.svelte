@@ -5,22 +5,54 @@
     cuisines,
     value = $bindable(""),
     label,
+    overlapLabel = label,
     title,
   }: {
     cuisines: string[];
     value?: string;
     label: string;
+    overlapLabel?: string;
     title: (id: string) => string;
   } = $props();
 
   let hoveredCuisine = $state<string | null>(null);
   let focusedCuisine = $state<string | null>(null);
+  let overlapping = $state<string[]>([]);
   const regions: Record<string, string> = world.regions;
   function select(event: KeyboardEvent, id: string) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      value = id;
+      choose(id);
     }
+  }
+
+  function choose(id: string) {
+    value = id;
+    overlapping = [];
+  }
+
+  function selectPoint(event: MouseEvent, id: string) {
+    const target = event.currentTarget as SVGPathElement;
+    const svg = target.ownerSVGElement;
+    const matrix = svg?.getScreenCTM();
+    if (!svg || !matrix || event.detail === 0) {
+      choose(id);
+      return;
+    }
+
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(
+      matrix.inverse(),
+    );
+    const matches = [
+      ...svg.querySelectorAll<SVGPathElement>(".region"),
+    ].flatMap((path) =>
+      path.dataset.cuisine && path.isPointInFill(point)
+        ? [path.dataset.cuisine]
+        : [],
+    );
+
+    if (matches.length > 1) overlapping = matches;
+    else choose(id);
   }
 </script>
 
@@ -35,6 +67,7 @@
         <path
           d={regions[id]}
           class="region"
+          data-cuisine={id}
           class:selected={value === id}
           role="button"
           tabindex="0"
@@ -50,14 +83,20 @@
               : null;
           }}
           onblur={() => (focusedCuisine = null)}
-          onclick={() => {
-            value = id;
-          }}
+          onclick={(event) => selectPoint(event, id)}
           onkeydown={(event) => select(event, id)}
         />
       {/if}
     {/each}
   </svg>
+  {#if overlapping.length}
+    <div class="overlap" role="group" aria-label={overlapLabel}>
+      <p>{overlapLabel}</p>
+      {#each overlapping as id (id)}
+        <button type="button" onclick={() => choose(id)}>{title(id)}</button>
+      {/each}
+    </div>
+  {/if}
   <div class="choices">
     {#each cuisines as id (id)}
       <label class:highlighted={(hoveredCuisine ?? focusedCuisine) === id}
@@ -66,6 +105,7 @@
           name="cuisine"
           value={id}
           bind:group={value}
+          onchange={() => (overlapping = [])}
           required
         />
         {title(id)}</label

@@ -155,6 +155,9 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
         row = %{restaurant_id: r, product: product, on_hand: on_hand, reserved: reserved, position: position}
         %{acc | stock: Map.put(acc.stock, {r, product}, row)}
 
+      {:delete_balance, r, account}, acc ->
+        %{acc | balances: Map.delete(acc.balances, {r, account})}
+
       {:delete_stock, r, product}, acc ->
         %{acc | stock: Map.delete(acc.stock, {r, product})}
     end)

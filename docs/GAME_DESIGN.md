@@ -341,6 +341,39 @@ does not let the same visit accept a second main, drink, or dessert.
 
 All genuine guest sales contribute to cash flow, operating profit, and workload. For the first release, only simulated-customer outcomes contribute to demand-affecting reputation, award qualification/scoring, and the invitation activity gate. This prevents uninvited profile creation from directly manufacturing competitive recognition. Cosmetic milestones may explicitly count either source, using real completed orders and ledger profit; their eligibility is defined in content. Owners see separate source breakdowns, and empty simulated history retains neutral reputation rather than treating guest-only service as failure.
 
+#### Milestone 5 diner interactions
+
+Give the diner a short **browse, order, follow, and decide** loop from the
+same hall and visit screens.
+
+- **Compare a few viable orders.** Filter by dietary profile and budget, and
+  sort by estimated time to service or price. Offer a **New to me** view
+  based on the diner's own served mains. Show the same open stalls, resolved
+  dietary fit, current price, and estimated wait in the 3D inspector and
+  stall list. Include a selected drink in the comparison total. Estimates can
+  change with stock and demand. Reviewing an option holds no place or food.
+  The existing checkout quotes the exact tray again before confirmation.
+- **Follow the tray while exploring.** Show a compact status in Hall and
+  My visit for queued, preparing, at the counter, and served. Explain that a
+  revised estimate can reflect queue movement or a staffing change. Keep the
+  visit and its status available while the player browses. A diner can change
+  plans by canceling an eligible unstarted tray and confirming a new order
+  under the ordinary admission rules. An order already in preparation stays
+  bound to its confirmed terms.
+- **Receive the meal and choose what comes next.** Highlight the pickup
+  counter when service is committed. The diner can open the tray or receipt
+  from the scene or My visit, then see an eligible same-stall dessert's price,
+  wait, and remaining offer time, with clear accept and skip actions. Receipt
+  viewing and avatar movement never gate service, payment, or dessert
+  eligibility. A private tasting list built from served mains lets diners
+  decide which cuisines to try on a later visit. It grants no credit or
+  competitive recognition.
+
+These interactions use the same visit, queue place, allowance and wallet,
+and main/drink/dessert limits as ordinary dining. Preserve decisions and drafts
+across view switches and reconnects. Both languages and the keyboard- and
+touch-accessible HTML views show the same information and actions.
+
 ### Customer segments and decisions
 
 Customers vary in budget, cuisine preference, quality expectations, and patience. Initial segments are value seekers, time-sensitive diners, cuisine enthusiasts, and quality seekers. These describe buying preferences rather than demographic stereotypes.
@@ -607,6 +640,13 @@ All twenty-four confirmed cuisines are available as starting choices in the firs
 
 The following roster is proposed. Names are culinary inspirations; game ingredient quantities and production stages deliberately simplify real cooking. Content review should check names, descriptions, and art before publication.
 
+The versioned launch catalog compiles the [menu definitions](../server/priv/content/launch_menus.json)
+and [ingredient definitions](../server/priv/content/launch_products.json) with
+the existing slice recipes. The bilingual labels in those definitions are
+shared with the client. Proposed launch tuning allows three stalls per
+venture, uses one real minute for expansion and refit setup, and keeps paid
+equipment at its installed stall until it is salvaged or stored.
+
 | Cuisine | Savory starter | Other savory recipes | Dessert | Drink | Primary operational identity |
 | --- | --- | --- | --- | --- | --- |
 | Mughlai/Punjabi | Chole with rice | Butter chicken with naan; paneer tikka with naan | Gulab jamun | Sweet lassi | Affordable chickpea base; curry and tandoor progression; shared sauces, dairy/flatbread costs, and vegetarian/chicken alternatives. |
@@ -769,6 +809,40 @@ A ready counter item is an initial main tray (including its drink if ordered)
 or a later dessert. Helper matching shows every tray component and targets the
 shared handover, not a standalone drink. A main/drink tray produces one completed
 helper-selected task and one wage interval under the ordinary control rules.
+
+#### Milestone 5 counter-helper interactions
+
+Work shows approaching trays with estimated readiness and distinguishes them
+from selectable ready trays. For each ready tray, show its components, elapsed
+wait, and time until its current serve-by or freshness limit, whichever comes
+first. Identify the automatic FIFO choice so a helper can decide whether
+another ready tray is more urgent. Use anonymous tray identifiers. After
+selection, show which tray is going out, actual handover progress, and the
+result. The same task list and choices are available without moving an avatar.
+
+Add one optional quiet-period task, **stage pickup supplies**. An idle counter
+can prepare one reusable pickup place for a tray that is still in the kitchen.
+Staging uses the same support worker and moves a small, disclosed part of the
+ordinary handover setup earlier. The next handover consumes the staged place
+once. The counter can hold one staged place, and staging adds neither kitchen
+capacity nor another staff assignment. Starting the task requires an
+unprepared counter and no eligible ready tray or handover. If a tray becomes
+ready during staging, the helper can finish the short setup or yield to
+service. Yielding discards incomplete setup and immediately allows the normal
+selection phase. Yield automatically if continuing would conflict with a known
+service deadline. Completion can save at most the setup time already worked.
+If valid staging completion and tray readiness coincide, apply the completion
+before opening the selection phase. Expiry and cleaning retain their ordinary
+precedence. Automation can stage and serve under the same rules and yields to
+ready work when it interrupts staging. A stale choice, disconnect, or expiring
+task hands control back through the existing fallback. Closure and cleaning
+invalidate staging and its unused setup credit.
+
+Keep staging duration and its effect provisional until playtesting. Quiet
+shifts show whether work is expected and keep normal paid standby available.
+Staging can appear separately in work history. It earns the ordinary on-duty
+wage and does not count as the completed handover required for license
+eligibility.
 
 An offer is an expiring quote, not a payroll lock merely because somebody viewed it. Acceptance atomically rechecks the position/shift window, wage terms, owner opt-in, and available funds, then commits the maximum payroll for the accepted period. Reuse an existing reservation for that same position/time instead of reserving twice. Visitor-controlled on-duty coverage, including connected ready standby, earns dining credit at the posted rate; automatic coverage uses the ordinary wage sink. The visitor's limit ends at a scheduled worker break/end or earlier business stop even if the nominal offer was longer. The restaurant is never charged both recipients for the same position/time interval. Posted rates stay within the role's wage rules.
 
@@ -964,10 +1038,13 @@ the scene; a phone opens it as a detail screen with Back, rather than keeping
 the scene behind the form. Browsing requires no owner invitation or avatar
 travel, and never exposes private business controls.
 
-My visit contains main/optional-drink checkout, accepted-order tracking, and
-the later same-stall dessert offer. Work contains available offers, disclosed
-pay/duration and success criteria, and a focused counter view showing the ready
-tray's components, selection deadline, and actual handover progress. Profile
+My visit contains main/optional-drink checkout, accepted-order tracking,
+dining receipts, and the later same-stall dessert offer. The
+[diner interactions](#milestone-5-diner-interactions) link browsing and tray
+tracking across Hall and My visit. Work contains available offers, disclosed
+pay/duration and success criteria, and a focused
+[counter view](#milestone-5-counter-helper-interactions) for prioritizing ready
+trays and staging pickup supplies. Profile
 contains dining credit with available/reserved amounts, receipts/notices, work
 history, account access, and license eligibility/application status. A successful
 shift offers an explicit application; the pending view explains manual review
@@ -1340,6 +1417,8 @@ Proposed initial targets are sub-500 ms server-side acknowledgement for ordinary
 72. A new guest can discover dining, real helper work, and license admission without a tutorial or economic bypass. An admitted owner can understand readiness, inspect real costs, open when eligible, explain a sale/loss, and choose an absence policy using ordinary screens. Full halls, manual-review waits, no work/allowance, cleaning, distress, and recovery remain truthful; hints never grant assets, change permissions, or reset deadlines.
 73. All core role flows work at 320 CSS px and larger phone/tablet/desktop widths in English/Japanese, with touch, keyboard, zoom, and virtual keyboards. Responsive reflow/orientation, context-detail navigation and browser Back preserve scope, drafts, focus/IME, selected IDs, active work, and uncertain command identity. Essential prices, costs, clocks, and actions remain visible; no hover/drag/WebGL dependency blocks play.
 74. Large displays provide useful simultaneous business/hall/detail context without another simulation subscription, duplicated editor, or extra economic action. Phone backgrounding, network change, and resumption obey ordinary absence/recovery rules, keep stale views explicit, and cannot enable automation, resume a safety-stopped stall, or repeat a purchase. Reference-device rendering and input performance are measured rather than inferred from a desktop screenshot.
+75. A helper can prioritize a real ready tray with a visible wait and serve-by limit. Staging and service share one worker and counter. When readiness, staging, expiry, or closure coincide, at most one setup credit is earned and consumed, no service rule is bypassed, and wages and licensing proof follow the existing contracts.
+76. Diners can compare viable orders, track a tray while browsing, and act on an eligible dessert from either view. Filtering, changing views, and looking at a receipt or tasting list create no visits or charges. An absent diner, failed renderer, or repeated pickup interaction leaves committed service, charges, and offer deadlines identical.
 
 ### Property-based testing
 
@@ -1388,7 +1467,7 @@ Shipping just a 3D scene or just a collection of GenServers is not a playable ve
 | 2. Durable shared simulation | PostgreSQL event store, atomic stream append, receipts/fencing, snapshots/projections, markets/diners/jobs, basic NPC adapter, and early capacity proof | Human/NPC rules agree; crash and snapshot/genesis recovery preserve committed facts; recorded 150-stall append/replay measurements qualify the storage approach. |
 | 3. Management game | Invitation tree, owner/guest recovery, dining and helper shifts, payroll wallets, license applications/reviewer queue, starter setup using the three-cuisine backend catalog, menus/prices, market, staff, query offers, notices/reports, closure/cleaning/planning, automation, and English/Japanese text/layout | One human can manage against NPCs; a visitor can work, eat, and apply for a license; handover/payroll, admission/review/recovery races, and suggested-action outcomes are tested. |
 | 4. Progression and population | Add the remaining twenty-one cuisines to complete the twenty-four-cuisine roster, qualify optional main/drink trays and later-dessert flow across it, add dining receipt history in **My visit**, unlocks, expansion, NPCs/retirement, milestones, awards, distress/history | The solo-to-populated loop and fresh-start lifecycle work end to end. Players can review their own completed visits, including earlier visits retained in the event log, and see what they ordered, what was served, and what they were charged. |
-| 5. Hall presentation | Stateful 3D stalls/crowds, camera navigation, accessible list alternative, audio, reduced detail | Visual state matches the economy and management works during rendering failure. |
+| 5. Hall presentation and visitor play | Stateful 3D stalls/crowds, camera navigation, accessible list alternative, audio, reduced detail, [counter-helper decisions](#milestone-5-counter-helper-interactions), and [diner interactions](#milestone-5-diner-interactions) | Visual state matches the economy. Diners can compare meals and follow pickup and dessert. Helpers can prioritize service and stage supplies with bounded effects. Management and both visitor flows work during rendering failure. |
 | 6. Release qualification | Full 150-stall workload, historical-event compatibility, archive/projection restore, security checks, property corpus, mutation evidence, Render operation, and Linux/macOS packaging, including CI-generated Flatpak and `.deb` artifacts | Recorded recovery/retention measurements, acceptance results, reviewed mutation survivors/selection, and verified English/Japanese web/native flows, font/input behavior, and installation for both Linux package formats and the macOS client. |
 
 The initial backend slice used Mexican. The follow-up after Milestone 2 replaces

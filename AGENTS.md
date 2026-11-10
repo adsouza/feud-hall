@@ -7,9 +7,9 @@ contains the design, artwork, and the server under `server/`: the pure Elixir
 economic core (Milestone 1), durable PostgreSQL event storage, recovery, and
 projections (Milestone 2A), and the shared simulation (Milestone 2B: batched
 wholesale market, simulated diners, automatic kitchen, and basic NPC owners).
-The current internal catalog has Mughlai/Punjabi, Sichuan, and Levantine
-recipes. New halls use the selected versioned catalog and bootstrap NPCs
-across its starter cuisines.
+New managed halls use the 24-cuisine launch catalog. The three-cuisine slice
+remains available for replay and focused tests. Managed slice halls add launch
+content through a recorded upgrade that preserves existing recipes and stock.
 The local [Project C report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md)
 records the original single-cuisine 150-stall measurement. Tests and the
 benchmark start authorities. The management slice adds a Phoenix endpoint and

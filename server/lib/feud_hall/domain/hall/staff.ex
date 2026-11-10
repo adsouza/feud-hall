@@ -10,6 +10,7 @@ defmodule FeudHall.Domain.Hall.Staff do
 
   def hire_fee, do: @hire_fee
   def max_roster, do: @roster_limit
+  def starter_count, do: length(@roles)
 
   def worker(id, role, start, finish, starter?) do
     %{

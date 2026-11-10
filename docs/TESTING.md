@@ -189,6 +189,7 @@ and the test that killed it.
 | Main/drink trays | Every launch drink recipe, initial-only add-on, combined stock/funding/carbohydrate feasibility, one queue/helper handover, atomic paired acceptance/service/cancellation, component waste, freshness/cleaning cutoff, and all four main/drink/dessert combinations. |
 | Commands, permissions, resource lifetime | Wrapped use-case tests, retries/conflicts, current authorization, settled-state resource oracle, deferred settlement. |
 | Dining acceptance/cancellation | Confirmed-term mismatches, revised command IDs, one active visit with atomic main admission, pre-preparation cancellation races, exact funding/waste, and no cancellation of served courses. |
+| M5 diner and helper interactions | Compare real eligible offers and exact prices across views, preserve drafts and committed service on reconnect or renderer failure, and test private tasting history. Generate readiness, staging, yield, controller changes, expiry, and cleaning in varying orders. Check exclusive work, one-time setup credit, ordinary service and payroll, and no licensing proof for staging. |
 | Capacity/admission | Compatible FIFO offers, one active entry/draft, expiry/rejoin, dormant reopening, no direct/NPC bypass, and atomic confirmation under contention. |
 | Persistence/events/clocks | Disposable PostgreSQL transactions, failure injection, fencing, uncertain append responses, genesis/snapshot-tail comparison, historical fixtures, projection rebuild. |
 | Transport/credentials | Cross-origin/CSRF attempts, cookie/session/refresh revocation, queued private delivery after capability loss, protected native credential storage, and denied native IPC/navigation. |
@@ -353,11 +354,23 @@ It compares the holds and available slots against an independent allocation
 model after each step and checks that committed history replays.
 The identity property checks cumulative earning against an independent quota oracle.
 
+For progression, run `mix test test/feud_hall/application/progression_test.exs
+test/feud_hall/domain/launch_catalog_test.exs --max-cases 1` from `server/`.
+These checks exercise all 24 starter, drink, and dessert combinations with
+funded purchases and managed kitchen service. They also check a PostgreSQL
+catalog upgrade, scoped equipment and prices, expiry and fresh starts across
+clock partitions, receipt paging and authorization, award review eligibility,
+and NPC retirement and restoration. The mutation cohort includes the
+location limit, distress cost freeze, and guest exclusion from awards.
+
 The web workflow runs frozen Bun install, Prettier, Oxlint, native `bun check`,
 and a Vite production build. It also runs a one-worker Chromium suite for
 changes to the web client, server, or branding assets. The suite exercises
 dining, helper handover, invitation and cuisine selection, and NPC startup
 recovery through the built client, Phoenix, and disposable PostgreSQL databases.
+The launch journey also checks all 24 map choices, an equipment purchase, and
+leasing a second location. The dining journey reads a served order from the
+committed history and checks that an unauthenticated session is refused.
 The test harness advances the server's manual clock over stdin. Playwright
 controls browser timers separately and can hold back a view or drop a command
 reply to test the client while the server keeps its committed outcome.
@@ -385,9 +398,9 @@ databases. Each scenario uses its own loopback port and creates and drops a
 starts the test endpoint without the live hall environment file. Respect the
 local worker and memory limits above.
 
-To regenerate the internal cuisine map after changing its
+To regenerate the launch cuisine map after changing its
 source footprints, run `bun scripts/build-map.js` from `web/`. The equal-area
 view uses D3's Equal Earth projection and [Natural Earth public-domain land
 geometry](https://www.naturalearthdata.com/about/terms-of-use/) distributed by
 [World Atlas](https://github.com/topojson/world-atlas). The highlighted areas are
-approximate cultural locator footprints for the internal catalog.
+approximate cultural locator footprints for the launch catalog.

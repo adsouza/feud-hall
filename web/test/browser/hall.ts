@@ -19,9 +19,14 @@ type Hall = {
   logs: () => string;
 };
 
-export const test = base.extend<{ hall: Hall; restore: boolean }>({
+export const test = base.extend<{
+  hall: Hall;
+  restore: boolean;
+  launch: boolean;
+}>({
   restore: [false, { option: true }],
-  hall: async ({ restore }, use, testInfo) => {
+  launch: [false, { option: true }],
+  hall: async ({ restore, launch }, use, testInfo) => {
     const host = process.env.PGHOST ?? "localhost";
     if (host !== "localhost" && host !== "127.0.0.1")
       throw new Error("The browser suite requires local PostgreSQL");
@@ -35,6 +40,7 @@ export const test = base.extend<{ hall: Hall; restore: boolean }>({
       FEUD_HALL_SERVE: "0",
       FEUD_HALL_TEST_DB: database,
       FEUD_HALL_BROWSER_SECRET: secret,
+      FEUD_HALL_BROWSER_LAUNCH: launch ? "1" : "0",
     };
     delete env.DATABASE_URL;
     const mix = (args: string[]) =>

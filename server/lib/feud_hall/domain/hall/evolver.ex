@@ -92,10 +92,17 @@ defmodule FeudHall.Domain.Hall.Evolver do
   # the interval credits the last recorded list (empty until one is recorded,
   # so events written before the list existed observe nothing).
   def evolve(state, %{type: :clock_advanced, to: to} = e) when to >= state.now do
+    state =
+      FeudHall.Domain.Hall.Population.observe(state, to - state.now, Map.get(e, :operating, state.demand.operating))
+
+    state = FeudHall.Domain.Hall.Progression.observe_interval(state, to)
     state = Management.accrue(state, to - state.now)
     state = update_in(state, [:demand], &Demand.observe_interval(&1, e, to - state.now))
     %{state | now: to}
   end
+
+  def evolve(state, %{type: :hall_catalog_expanded} = event),
+    do: FeudHall.Domain.Hall.CatalogExpansion.evolve(state, event)
 
   def evolve(state, %{type: :hall_simulation_upgraded} = event), do: SimulationUpgrade.evolve(state, event)
 
@@ -175,6 +182,12 @@ defmodule FeudHall.Domain.Hall.Evolver do
     |> update_in([:restaurants, e.restaurant_id, :unlocked], &(&1 ++ [e.recipe_id]))
     |> post(e.restaurant_id, cash: -e.cost, capex: e.cost)
   end
+
+  def evolve(state, %{type: :menu_price_set, stall_id: sid} = e),
+    do: put_menu_override(state, sid, e.recipe_id, e.price)
+
+  def evolve(state, %{type: :menu_item_removed, stall_id: sid} = e),
+    do: put_menu_override(state, sid, e.recipe_id, nil)
 
   def evolve(state, %{type: :menu_price_set} = e),
     do: put_in(state, [:restaurants, e.restaurant_id, :menu, e.recipe_id], e.price)
@@ -360,6 +373,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
     state
     |> put_in([:trays, e.tray_id, :status], :served)
     |> Management.record_sale(tray.restaurant, state.visits[tray.visit].source)
+    |> FeudHall.Domain.Hall.Progression.track_activity(tray.restaurant, state.now)
     |> update_in([:demand], &Demand.count_tray_served/1)
     |> release_counter(tray.stall, {:tray, e.tray_id})
   end
@@ -426,6 +440,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
     end)
     |> update_in([:stats, :finalized_visits], &(&1 + 1))
     |> update_in([:demand], &Demand.count_finalized(&1, e))
+    |> FeudHall.Domain.Hall.Recognition.observe(visit, e)
     |> retire_visit(visit)
   end
 
@@ -435,6 +450,21 @@ defmodule FeudHall.Domain.Hall.Evolver do
   # components and dessert). Nothing live refers to them any more: their
   # reservations, funding, counter claims and costs settled before
   # finalization, and the finalization event records their outcomes.
+  def evolve(state, %{type: type} = event)
+      when type in [:npc_population_changed, :npc_retirement_scheduled, :npc_retirement_finished],
+      do: FeudHall.Domain.Hall.Population.evolve(state, event)
+
+  def evolve(state, %{type: type} = event) when type in [:award_reviewed, :milestone_earned],
+    do: FeudHall.Domain.Hall.Recognition.evolve(state, event)
+
+  def evolve(state, %{type: type} = event) when type in [:location_equipped, :equipment_salvaged],
+    do: FeudHall.Domain.Hall.Equipment.evolve(state, event)
+
+  @progression_events ~w(location_added location_refitted location_released distress_started distress_cleared venture_activity_recorded
+                          stock_salvaged business_bankrupted)a
+  def evolve(state, %{type: type} = event) when type in @progression_events,
+    do: FeudHall.Domain.Hall.Progression.evolve(state, event)
+
   @management_events ~w(stall_opening_queued business_day_reviewed restock_policy_set pricing_policy_set restock_budget_reserved pricing_policy_applied
     visitor_allowance_claimed management_started stall_leased staff_condition_changed worker_hired worker_scheduled worker_dismissed stall_draft_reserved stall_draft_released waitlist_joined waitlist_left staff_schedule_set helper_offer_policy_set
     owner_presence_recorded unattended_policy_set operating_costs_charged helper_shift_started helper_shift_ended helper_presence_recorded
@@ -522,6 +552,12 @@ defmodule FeudHall.Domain.Hall.Evolver do
   end
 
   # A purchased or filled lot enters the warehouse at its recorded cost.
+  defp put_menu_override(state, sid, recipe_id, value) do
+    update_in(state.stalls[sid], fn stall ->
+      Map.update(stall, :menu_overrides, %{recipe_id => value}, &Map.put(&1, recipe_id, value))
+    end)
+  end
+
   defp receive_stock(state, e) do
     batch = %{
       id: e.batch_id,
@@ -576,7 +612,10 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
     state
     |> post(rid, cash: order.price, revenue: order.price, wip: -order.consumed_cost, cost_of_sales: order.consumed_cost)
-    |> update_in([:orders, c.order_id], &%{&1 | status: :served})
+    |> update_in([:orders, c.order_id], fn order ->
+      order = %{order | status: :served}
+      if Map.has_key?(state, :progression), do: Map.put(order, :served_at, state.now), else: order
+    end)
     |> update_in([:visits, visit_id], fn v ->
       %{v | carbs_reserved: v.carbs_reserved - carbs, carbs_served: v.carbs_served + carbs}
     end)

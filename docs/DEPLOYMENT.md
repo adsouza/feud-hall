@@ -211,9 +211,12 @@ procedures rather than treating these planned steps as evidence they ran.
 ## Local management game
 
 Use the existing PostgreSQL server and a dedicated database for the managed
-hall. A managed hall pins its operating rules at genesis. The endpoint expects
-a managed hall and refuses to enable management implicitly on an occupied
-Milestone 2 hall.
+hall. New halls pin the launch catalog at genesis. After an upgrade, apply
+the database migrations and rebuild the web client before restarting the
+server. On startup, a managed slice hall records the launch catalog addition
+in its existing event stream. Keep its database and signing secret so current
+accounts, orders, and dining receipts remain available. An occupied
+Milestone 2 hall still needs an explicit transition to management.
 
 From `web/`, run `bun install --frozen-lockfile` and `bun run build`. The
 build writes the client into `server/priv/static`. From `server/`, set these

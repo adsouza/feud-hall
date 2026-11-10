@@ -14,9 +14,22 @@ defmodule FeudHall.Domain.Hall.Decider do
   """
 
   alias FeudHall.Domain.{Clock, Content, Market, Money, Random, Substitution}
-  alias FeudHall.Domain.Hall.{Admission, Advance, Evolver, Management, OperatingPolicy, Settlement, SimulationUpgrade}
+
+  alias FeudHall.Domain.Hall.{
+    Admission,
+    Advance,
+    CatalogExpansion,
+    Equipment,
+    Evolver,
+    Management,
+    OperatingPolicy,
+    Progression,
+    Settlement,
+    SimulationUpgrade
+  }
 
   @management_commands Management.commands()
+  @progression_commands Progression.commands()
   @max_qty 1_000_000
   @max_price 1_000_000
   # Purchase price limits are compared, never multiplied; the bound keeps them small integers.
@@ -54,6 +67,9 @@ defmodule FeudHall.Domain.Hall.Decider do
       else: {:error, :already_upgraded}
   end
 
+  def decide(state, {:expand_catalog, %{catalog: catalog}}, %{actor: {:system, :admin}}),
+    do: CatalogExpansion.decide(state, catalog)
+
   def decide(%{catalog: %{rules: rules}}, _command, _ctx) when not is_map_key(rules, :kitchen),
     do: {:error, :simulation_upgrade_required}
 
@@ -62,6 +78,9 @@ defmodule FeudHall.Domain.Hall.Decider do
     target = Clock.hall_at_service(to)
     if target < state.now, do: {:error, :clock_cannot_move_backwards}, else: {:ok, Advance.run(state, target)}
   end
+
+  def decide(state, {kind, _} = command, ctx) when kind in @progression_commands,
+    do: Progression.decide(state, command, ctx)
 
   def decide(state, {kind, _} = command, ctx) when kind in @management_commands,
     do: Management.decide(state, command, ctx)
@@ -79,7 +98,7 @@ defmodule FeudHall.Domain.Hall.Decider do
       Map.has_key?(state.owners, {kind, owner}) ->
         {:error, :venture_already_active}
 
-      Map.has_key?(state.restaurants, p.restaurant_id) ->
+      Map.has_key?(state.restaurants, p.restaurant_id) or Progression.retired?(state, p.restaurant_id) ->
         {:error, :duplicate_restaurant}
 
       not Map.has_key?(state.layout, p.stall_id) ->
@@ -101,7 +120,8 @@ defmodule FeudHall.Domain.Hall.Decider do
   end
 
   def decide(state, {:open_stall, %{stall_id: s}}, ctx) do
-    with {:ok, _stall} <- owned_stall(state, s, ctx) do
+    with {:ok, stall} <- owned_stall(state, s, ctx),
+         :ok <- ensure(not Progression.distressed?(state, stall.restaurant), :business_distressed) do
       if Management.enabled?(state) and state.access == :cleaning do
         {:ok, [%{type: :stall_opening_queued, stall_id: s}]}
       else
@@ -128,28 +148,47 @@ defmodule FeudHall.Domain.Hall.Decider do
     end
   end
 
-  def decide(state, {:unlock_recipe, %{restaurant_id: r, recipe_id: id}}, ctx) do
+  def decide(state, {:unlock_recipe, %{restaurant_id: r, recipe_id: id} = payload}, ctx) do
     with {:ok, restaurant} <- owned_restaurant(state, r, ctx),
          {:ok, recipe} <- fetch(state.catalog.recipes, id, :unknown_recipe),
-         :ok <- ensure(recipe.cuisine == restaurant.cuisine, :wrong_cuisine),
-         :ok <- ensure(id not in restaurant.unlocked, :already_unlocked),
-         :ok <- ensure(Management.available_cash(state, r) >= recipe.unlock_cost, :insufficient_cash) do
-      {:ok, [%{type: :recipe_unlocked, restaurant_id: r, recipe_id: id, cost: recipe.unlock_cost}]}
+         :ok <- ensure(recipe.cuisine in Progression.cuisines(state, restaurant), :wrong_cuisine),
+         :ok <- ensure(not Progression.distressed?(state, r), :business_distressed),
+         {:ok, equipment_cost, equipment} <- Equipment.quote(state, restaurant, payload[:stall_id], recipe),
+         unlocked? = id in restaurant.unlocked,
+         :ok <- ensure(not unlocked? or equipment != [], :already_unlocked),
+         cost = if(unlocked?, do: 0, else: recipe.unlock_cost),
+         :ok <-
+           ensure(
+             is_nil(payload[:max_cost]) or
+               (is_integer(payload.max_cost) and cost + equipment_cost <= payload.max_cost),
+             :stale_terms
+           ),
+         :ok <- ensure(Management.available_cash(state, r) >= cost + equipment_cost, :insufficient_cash) do
+      knowledge = if unlocked?, do: [], else: [%{type: :recipe_unlocked, restaurant_id: r, recipe_id: id, cost: cost}]
+      {:ok, knowledge ++ equipment}
     end
   end
 
-  def decide(state, {:set_menu_price, %{restaurant_id: r, recipe_id: id, price: price}}, ctx) do
+  def decide(state, {:set_menu_price, %{restaurant_id: r, recipe_id: id, price: price} = payload}, ctx) do
     with {:ok, restaurant} <- owned_restaurant(state, r, ctx),
+         :ok <- ensure(not Progression.distressed?(state, r), :business_distressed),
          :ok <- ensure(id in restaurant.unlocked, :recipe_locked),
-         :ok <- ensure(Money.menu_price?(price), :invalid_price) do
-      {:ok, [%{type: :menu_price_set, restaurant_id: r, recipe_id: id, price: price}]}
+         :ok <- ensure(Money.menu_price?(price), :invalid_price),
+         {:ok, scope} <- menu_scope(state, restaurant, payload[:stall_id], id) do
+      {:ok, [Map.merge(scope, %{type: :menu_price_set, restaurant_id: r, recipe_id: id, price: price})]}
     end
   end
 
-  def decide(state, {:remove_menu_item, %{restaurant_id: r, recipe_id: id}}, ctx) do
+  def decide(state, {:remove_menu_item, %{restaurant_id: r, recipe_id: id} = payload}, ctx) do
     with {:ok, restaurant} <- owned_restaurant(state, r, ctx),
-         :ok <- ensure(Map.has_key?(restaurant.menu, id), :not_on_menu) do
-      {:ok, [%{type: :menu_item_removed, restaurant_id: r, recipe_id: id}]}
+         {:ok, scope} <- menu_scope(state, restaurant, payload[:stall_id], id),
+         menu =
+           if(scope == %{},
+             do: restaurant.menu,
+             else: Progression.stall_menu(state, state.stalls[scope.stall_id], restaurant)
+           ),
+         :ok <- ensure(Map.has_key?(menu, id), :not_on_menu) do
+      {:ok, [Map.merge(scope, %{type: :menu_item_removed, restaurant_id: r, recipe_id: id})]}
     end
   end
 
@@ -178,6 +217,9 @@ defmodule FeudHall.Domain.Hall.Decider do
   # product: a new one replaces the pending one.
   def decide(state, {:submit_purchase_request, p}, ctx) do
     with {:ok, restaurant} <- owned_restaurant(state, p[:restaurant_id], ctx),
+         :ok <- ensure(not Progression.distressed?(state, restaurant.id), :business_distressed),
+         :ok <-
+           ensure(not Progression.enabled?(state) or Progression.stalls(state, restaurant.id) != [], :business_dormant),
          {:ok, product} <- fetch(state.catalog.products, p[:product], :unknown_product),
          :ok <- ensure(is_integer(p[:qty]) and p.qty > 0 and p.qty <= @max_qty, :invalid_quantity),
          limit = p[:max_price_per_kunit],
@@ -410,6 +452,22 @@ defmodule FeudHall.Domain.Hall.Decider do
       next_slot_at: (div(state.now, Clock.hour()) + 1) * Clock.hour(),
       rng: Random.new(Random.derive(state.seed, "npc:" <> operator))
     }
+  end
+
+  defp menu_scope(_state, _restaurant, nil, _recipe), do: {:ok, %{}}
+
+  defp menu_scope(state, restaurant, sid, id) do
+    if Progression.enabled?(state) do
+      with %{restaurant: rid} = stall when rid == restaurant.id <- state.stalls[sid],
+           %{cuisine: cuisine} <- state.catalog.recipes[id],
+           true <- cuisine == Progression.cuisine(stall, restaurant) do
+        {:ok, %{stall_id: sid}}
+      else
+        _ -> {:error, :wrong_cuisine}
+      end
+    else
+      {:ok, %{}}
+    end
   end
 
   defp owned_restaurant(state, r, %{actor: {kind, who}}) when kind in [:principal, :npc] do

@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.Hall.Management do
   @moduledoc "Managed leases, staffing windows, attendance and counter-helper coverage."
   alias FeudHall.Domain.{Clock, Kitchen, Money}
-  alias FeudHall.Domain.Hall.{Evolver, OperatingPolicy, Staff}
+  alias FeudHall.Domain.Hall.{Evolver, OperatingPolicy, Population, Progression, Staff}
 
   @shift_max Clock.service_duration(10 * 60 * 1_000)
   @shift_default Clock.service_duration(5 * 60 * 1_000)
@@ -54,7 +54,7 @@ defmodule FeudHall.Domain.Hall.Management do
        do: OperatingPolicy.decide(state, command, ctx)
 
   defp decide_managed(state, {:reserve_stall, %{stall_id: sid}}, %{actor: {:principal, id}}) do
-    with false <- Map.has_key?(state.owners, {:principal, id}),
+    with true <- first_location?(state, id),
          false <- Map.has_key?(state.management.drafts, id),
          %{} = quote <- lease_quote(state, sid) do
       {:ok, [draft(quote, id, state.now)]}
@@ -72,7 +72,7 @@ defmodule FeudHall.Domain.Hall.Management do
   defp decide_managed(state, {:join_waitlist, %{tiers: tiers}}, %{actor: {:principal, id}}) do
     allowed = [:quiet, :standard, :busy, :prime]
 
-    with false <- Map.has_key?(state.owners, {:principal, id}),
+    with true <- first_location?(state, id),
          false <- Map.has_key?(state.management.drafts, id),
          false <- Map.has_key?(state.management.waitlist, id),
          true <- is_list(tiers) and tiers != [] and Enum.all?(tiers, &(&1 in allowed)) do
@@ -343,6 +343,18 @@ defmodule FeudHall.Domain.Hall.Management do
     end
   end
 
+  def vacancy_events(state), do: offer_waitlist(state)
+
+  defp first_location?(state, id) do
+    case state.owners[{:principal, id}] do
+      nil ->
+        true
+
+      rid ->
+        Progression.enabled?(state) and not Progression.distressed?(state, rid) and Progression.stalls(state, rid) == []
+    end
+  end
+
   defp offer_waitlist(state) do
     state.management.waitlist
     |> Enum.sort_by(fn {_, entry} -> entry.priority end)
@@ -366,27 +378,27 @@ defmodule FeudHall.Domain.Hall.Management do
   def lease_events(state, sid, rid, kind, owner) do
     quote = if kind == :principal and enabled?(state), do: state.management.drafts[owner], else: lease_quote(state, sid)
 
-    case quote do
-      nil ->
-        []
+    if quote, do: [lease_event(state, quote, rid, kind, if(kind == :principal, do: owner))], else: []
+  end
 
-      quote ->
-        game_hour = div(rem(state.now, Clock.day()), Clock.hour())
-        start = if Clock.cleaning?(state.now), do: 5, else: game_hour
-        finish = rem(start + 12, 24)
+  def starter_schedule(now) do
+    hour = div(rem(now, Clock.day()), Clock.hour())
+    start = if Clock.cleaning?(now), do: 5, else: hour
+    {start, rem(start + 12, 24)}
+  end
 
-        [
-          Map.merge(Map.drop(quote, [:expires_at]), %{
-            type: :stall_leased,
-            restaurant_id: rid,
-            start_hour: start,
-            end_hour: finish,
-            enabled: kind == :npc,
-            principal: if(kind == :principal, do: owner),
-            at: state.now
-          })
-        ]
-    end
+  def lease_event(state, quote, rid, kind, principal) do
+    {start, finish} = starter_schedule(state.now)
+
+    Map.merge(Map.drop(quote, [:expires_at]), %{
+      type: :stall_leased,
+      restaurant_id: rid,
+      start_hour: start,
+      end_hour: finish,
+      enabled: kind == :npc,
+      principal: principal,
+      at: state.now
+    })
   end
 
   def allow_open(state, sid) do
@@ -398,6 +410,9 @@ defmodule FeudHall.Domain.Hall.Management do
         restaurant = state.restaurants[state.stalls[sid].restaurant]
 
         cond do
+          Progression.distressed?(state, restaurant.id) -> {:error, :business_distressed}
+          Population.closing?(state, restaurant.id) -> {:error, :npc_retiring}
+          Map.get(state.stalls[sid], :ready_at, 0) > state.now -> {:error, :location_refitting}
           not staffed?(state, sid, state.now) -> {:error, :staff_off_duty}
           lease.arrears > 0 -> {:error, :unpaid_rent}
           not operating_authorized?(state, sid, restaurant) -> {:error, :owner_absent}
@@ -747,9 +762,21 @@ defmodule FeudHall.Domain.Hall.Management do
             []
         end
       end)
+      |> Enum.uniq()
     else
       []
     end
+  end
+
+  def remove_venture_policies(state, id) do
+    state =
+      Enum.reduce([:last_simulated_sale, :reports], state, fn field, current ->
+        update_in(current, [:management, field], &Map.delete(&1, id))
+      end)
+
+    Enum.reduce([:restock, :pricing, :restock_budget], state, fn field, current ->
+      update_in(current, [:management, field], &Map.reject(&1, fn {{restaurant, _}, _} -> restaurant == id end))
+    end)
   end
 
   def opening_requested(state, sid, requested?) do
@@ -780,27 +807,11 @@ defmodule FeudHall.Domain.Hall.Management do
 
       update_in(state.management.leases, fn leases ->
         Map.new(leases, fn {sid, lease} ->
-          open? = state.access == :open and state.stalls[sid].mode == :open
-          rent = if open?, do: lease.rent, else: lease.holding
-
-          automatic =
-            if state.access == :open and (open? or MapSet.member?(busy, sid)) do
-              active = length(Staff.active(lease.workers, state.now))
-              positions = if Map.has_key?(state.management.shift_by_stall, sid), do: max(active - 1, 0), else: active
-              state.management.rules.wage_rate * positions
-            else
-              0
-            end
-
-          workers = Staff.accrue(lease.workers, elapsed, working_staff(state, sid, lease, busy))
-
-          {sid,
-           %{
-             lease
-             | workers: workers,
-               rent_accrued: lease.rent_accrued + elapsed * rent,
-               wages_accrued: lease.wages_accrued + elapsed * automatic
-           }}
+          if Progression.distressed?(state, state.stalls[sid].restaurant) do
+            {sid, lease}
+          else
+            accrue_lease(state, elapsed, busy, sid, lease)
+          end
         end)
       end)
     else
@@ -808,31 +819,64 @@ defmodule FeudHall.Domain.Hall.Management do
     end
   end
 
+  defp accrue_lease(state, elapsed, busy, sid, lease) do
+    open? = state.access == :open and state.stalls[sid].mode == :open
+    rent = if open?, do: lease.rent, else: lease.holding
+
+    automatic =
+      if state.access == :open and (open? or MapSet.member?(busy, sid)) do
+        active = length(Staff.active(lease.workers, state.now))
+        positions = if Map.has_key?(state.management.shift_by_stall, sid), do: max(active - 1, 0), else: active
+        state.management.rules.wage_rate * positions
+      else
+        0
+      end
+
+    workers = Staff.accrue(lease.workers, elapsed, working_staff(state, sid, lease, busy))
+
+    {sid,
+     %{
+       lease
+       | workers: workers,
+         rent_accrued: lease.rent_accrued + elapsed * rent,
+         wages_accrued: lease.wages_accrued + elapsed * automatic
+     }}
+  end
+
   def charge_events(state) do
-    {events, _} =
-      Enum.map_reduce(Enum.sort(state.management.leases), state, fn {sid, lease}, current ->
-        rid = current.stalls[sid].restaurant
-        rent = div(lease.rent_accrued, Clock.day())
-        wages = div(lease.wages_accrued, Clock.hour())
-        due = lease.arrears + rent + wages
-        amount = min(due, cash_after_payroll(current, rid))
+    leases =
+      state.management.leases
+      |> Map.keys()
+      |> Enum.sort()
+      |> Enum.reject(&Progression.distressed?(state, state.stalls[&1].restaurant))
 
-        event = %{
-          type: :operating_costs_charged,
-          stall_id: sid,
-          restaurant_id: rid,
-          amount: amount,
-          arrears: due - amount,
-          rent_accrued: rem(lease.rent_accrued, Clock.day()),
-          wages_accrued: rem(lease.wages_accrued, Clock.hour())
-        }
-
-        {event, Evolver.evolve(current, event)}
+    {events, current} =
+      Enum.map_reduce(leases, state, fn sid, current ->
+        charge = lease_charge(current, sid)
+        {charge, Evolver.evolve(current, charge)}
       end)
 
-    events ++
-      [%{type: :management_hour_closed, at: state.management.next_hour}] ++
-      enforce(Enum.reduce(events, state, &Evolver.evolve(&2, &1)))
+    distress = Progression.inspect_after_charges(current)
+    current = Enum.reduce(distress, current, &Evolver.evolve(&2, &1))
+
+    events ++ distress ++ [%{type: :management_hour_closed, at: state.management.next_hour}] ++ enforce(current)
+  end
+
+  def lease_charge(state, sid) do
+    lease = state.management.leases[sid]
+    rid = state.stalls[sid].restaurant
+    due = lease.arrears + div(lease.rent_accrued, Clock.day()) + div(lease.wages_accrued, Clock.hour())
+    amount = min(due, cash_after_payroll(state, rid))
+
+    %{
+      type: :operating_costs_charged,
+      stall_id: sid,
+      restaurant_id: rid,
+      amount: amount,
+      arrears: due - amount,
+      rent_accrued: rem(lease.rent_accrued, Clock.day()),
+      wages_accrued: rem(lease.wages_accrued, Clock.hour())
+    }
   end
 
   def record_sale(state, rid, :simulated) do
@@ -872,7 +916,8 @@ defmodule FeudHall.Domain.Hall.Management do
   end
 
   def evolve(state, %{type: :management_started, rules: rules}) do
-    Map.put(state, :management, %{
+    state
+    |> Map.put(:management, %{
       rules: rules,
       leases: %{},
       presence: %{},
@@ -893,6 +938,7 @@ defmodule FeudHall.Domain.Hall.Management do
       reports: %{},
       next_hour: (div(state.now, Clock.hour()) + 1) * Clock.hour()
     })
+    |> Progression.start()
   end
 
   def evolve(state, %{type: :visitor_allowance_claimed, principal: id, day: day}),
@@ -908,7 +954,7 @@ defmodule FeudHall.Domain.Hall.Management do
 
   def evolve(state, %{type: :stall_opening_queued, stall_id: sid}), do: opening_requested(state, sid, true)
 
-  def evolve(state, %{type: :management_resumed}), do: put_in(state.management.presence, %{})
+  def evolve(state, %{type: :management_resumed}), do: put_in(state.management.presence, %{}) |> Population.recovered()
 
   def evolve(state, %{type: :stall_draft_reserved} = e) do
     state
@@ -953,7 +999,10 @@ defmodule FeudHall.Domain.Hall.Management do
         do: evolve(state, %{type: :stall_draft_released, principal: e.principal, stall_id: e.stall_id}),
         else: state
 
-    state |> put_in([:management, :leases, e.stall_id], lease) |> debit(e.restaurant_id, e.setup_fee)
+    state
+    |> put_in([:management, :leases, e.stall_id], lease)
+    |> debit(e.restaurant_id, e.setup_fee)
+    |> Progression.track_lease(e.restaurant_id)
   end
 
   def evolve(state, %{type: :staff_schedule_set} = e) do

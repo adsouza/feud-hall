@@ -12,6 +12,11 @@ defmodule FeudHall.Web.Router do
     run(conn, fn -> HallAuthority.management_view(authority(), device(conn)) end)
   end
 
+  get "/api/dining-history" do
+    before = fetch_query_params(conn).query_params["before"]
+    run(conn, fn -> HallAuthority.dining_history(authority(), device(conn), before) end)
+  end
+
   post "/api/device" do
     if write_allowed?(conn) and RateLimit.allow?({:device, conn.remote_ip}, 20) do
       case device(conn) do

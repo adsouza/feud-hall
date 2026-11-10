@@ -37,7 +37,17 @@ defmodule FeudHall.Domain.Hall.Advance do
   """
 
   alias FeudHall.Domain.{Choice, Clock, Demand, Dietary, Inventory, Kitchen, Market}
-  alias FeudHall.Domain.Hall.{Admission, Evolver, Management, OperatingPolicy, Settlement}
+
+  alias FeudHall.Domain.Hall.{
+    Admission,
+    Evolver,
+    Management,
+    OperatingPolicy,
+    Population,
+    Progression,
+    Recognition,
+    Settlement
+  }
 
   @doc "Returns the events that advance `state` to hall time `target`."
   def run(state, target), do: loop(state, target, [])
@@ -50,6 +60,7 @@ defmodule FeudHall.Domain.Hall.Advance do
     [
       {1, &expiries/1},
       {2, &cleaning_start/1},
+      {2.5, &Recognition.boundaries/1},
       {3, &kitchen_completions/1},
       {4, &deadlines/1},
       {5, &reopening/1},
@@ -57,6 +68,8 @@ defmodule FeudHall.Domain.Hall.Advance do
       {7, &market_clearing/1},
       {8, &arrival/1},
       {8.5, &Management.boundaries/1},
+      {8.75, &Progression.boundaries/1},
+      {8.9, &Population.boundaries/1},
       {9, &dispatch/1}
     ]
   end
@@ -243,12 +256,15 @@ defmodule FeudHall.Domain.Hall.Advance do
         else: []
 
     reported = Enum.reduce(costs, settled, &Evolver.evolve(&2, &1))
-    [started | management] ++ events ++ costs ++ Management.report_events(reported)
+    reports = Management.report_events(reported)
+    [started | management] ++ events ++ costs ++ reports ++ Recognition.daily_milestones(reported, reports)
   end
 
   defp handle(state, {:cleaning_end}) do
     event = %{type: :hall_cleaning_ended, day: Clock.day_of(state.now), at: state.now}
-    [event | Management.enforce(Evolver.evolve(state, event))]
+    reopened = Evolver.evolve(state, event)
+    changes = Management.enforce(reopened)
+    [event | changes] ++ Population.evaluate(Enum.reduce(changes, reopened, &Evolver.evolve(&2, &1)))
   end
 
   defp handle(state, {:stage_done, oid}) do
@@ -349,9 +365,19 @@ defmodule FeudHall.Domain.Hall.Advance do
   defp handle(state, {:helper_end, shift}), do: [Management.end_shift(state, shift, :scheduled_end)]
   defp handle(state, {:selection_end, sid}), do: Management.finish_selection(state, sid)
 
+  defp handle(state, {:award_review}), do: [Recognition.review(state)]
+
+  defp handle(state, {:npc_retirement_due, id}), do: Population.finish_retirement(state, id)
+
+  defp handle(state, {:bankruptcy_due, id}), do: Progression.terminate(state, id)
+  defp handle(state, {:dormancy_due, id}), do: Progression.dormant(state, id)
+
   defp handle(state, {:management_hour}) do
     charges = Management.charge_events(state)
-    charges ++ OperatingPolicy.hourly(Enum.reduce(charges, state, &Evolver.evolve(&2, &1)))
+    settled = Enum.reduce(charges, state, &Evolver.evolve(&2, &1))
+    changes = Population.evaluate(settled)
+    current = Enum.reduce(changes, settled, &Evolver.evolve(&2, &1))
+    charges ++ changes ++ Recognition.service_milestones(current) ++ OperatingPolicy.hourly(current)
   end
 
   defp handle(state, {:attendance, id}) do

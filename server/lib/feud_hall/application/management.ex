@@ -1,8 +1,8 @@
 defmodule FeudHall.Application.Management do
   @moduledoc "Authenticated management commands and scoped read models."
-  alias FeudHall.Domain.{Dietary, Identity, Kitchen, Money, Offers, PublicView}
+  alias FeudHall.Domain.{Clock, Dietary, Identity, Kitchen, Money, Offers, PublicView}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
-  alias FeudHall.Domain.Hall.OperatingPolicy
+  alias FeudHall.Domain.Hall.{Equipment, OperatingPolicy, Population, Progression, Recognition, Staff}
 
   @guest_commands ~w(request_allowance admit_visit cancel_tray accept_dessert decline_dessert cancel_dessert
     accept_helper_shift leave_helper_shift select_handover report_helper_presence redeem_invitation apply_for_license
@@ -10,7 +10,8 @@ defmodule FeudHall.Application.Management do
   @owner_commands ~w(create_restaurant open_stall close_stall unlock_recipe set_menu_price remove_menu_item
     set_substitution_policy submit_purchase_request cancel_purchase_request set_staff_schedule hire_staff set_worker_schedule dismiss_staff set_helper_offers
     reserve_stall cancel_stall_draft join_waitlist leave_waitlist
-    set_restock_policy set_pricing_policy request_starter_stock end_helper_shift report_owner_presence set_unattended_policy issue_invitation revoke_invitation)a
+    set_restock_policy set_pricing_policy request_starter_stock end_helper_shift report_owner_presence set_unattended_policy issue_invitation revoke_invitation)a ++
+                    Progression.commands()
 
   def public_commands,
     do:
@@ -79,7 +80,10 @@ defmodule FeudHall.Application.Management do
 
         Map.merge(stall, %{
           name: restaurant.name,
-          cuisine: restaurant.cuisine,
+          cuisine: Progression.cuisine(state.stalls[stall.stall_id], restaurant),
+          npc: restaurant.owner_kind == :npc,
+          retiring: Population.closing?(state, restaurant.id),
+          awards: Recognition.active_awards(state, restaurant.id),
           menu: Map.new(stall.menu, fn {id, price} -> {id, cents(price)} end)
         })
       end)
@@ -89,6 +93,8 @@ defmodule FeudHall.Application.Management do
       access: state.access,
       stalls: stalls,
       position: runtime.position,
+      failed_ventures: public_history(state, identity),
+      lease_forecast: lease_forecast(state, public.market),
       cuisines: state.catalog.recipes |> Map.values() |> Enum.map(& &1.cuisine) |> Enum.uniq() |> Enum.sort(),
       dietary_profiles:
         state.catalog.profiles
@@ -138,8 +144,68 @@ defmodule FeudHall.Application.Management do
       restaurant: if(restaurant, do: restaurant_view(state, restaurant, market), else: nil),
       draft: if(HallManagement.enabled?(state), do: encode_lease(state.management.drafts[principal]), else: nil),
       waitlisted: HallManagement.enabled?(state) and Map.has_key?(state.management.waitlist, principal),
-      slots: if(account.owner? and is_nil(restaurant), do: available_slots(state), else: [])
+      slots:
+        if(account.owner? and (is_nil(restaurant) or Progression.enabled?(state)), do: available_slots(state), else: []),
+      ventures: venture_history(state, principal)
     }
+  end
+
+  defp lease_forecast(state, market) do
+    if Progression.enabled?(state) do
+      {start, finish} = HallManagement.starter_schedule(state.now)
+      hours = rem(finish - start + 24, 24)
+
+      trading =
+        Enum.count(0..(hours - 1), fn offset ->
+          not Clock.cleaning?(rem(start + offset, 24) * Clock.hour())
+        end)
+
+      margins =
+        for recipe <- Map.values(state.catalog.recipes), recipe.starter, into: %{} do
+          ingredients =
+            Enum.sum(
+              Enum.map(recipe.lines, fn line ->
+                Money.ceil_div(line.qty * market[line.product].price, 1_000)
+              end)
+            )
+
+          {recipe.cuisine, cents(recipe.suggested_price - ingredients)}
+        end
+
+      %{
+        trading_hours: trading,
+        wages: cents(trading * Staff.starter_count() * state.management.rules.wage_rate),
+        starter_margins: margins
+      }
+    end
+  end
+
+  defp public_history(state, identity) do
+    state
+    |> get_in([:progression, :history])
+    |> Kernel.||(%{})
+    |> Map.values()
+    |> Enum.filter(&(&1.owner_kind == :principal))
+    |> Enum.sort_by(&{-&1.ended_at, &1.id})
+    |> Enum.take(30)
+    |> Enum.map(fn record ->
+      owner = Identity.principal(identity, record.owner)
+
+      record
+      |> Map.take([:id, :name, :cuisines, :opened_at, :ended_at, :peak_stalls, :milestones, :awards])
+      |> Map.put(:owner_name, owner && owner.name)
+    end)
+  end
+
+  defp venture_history(state, principal) do
+    for {_, record} <-
+          Enum.sort_by(get_in(state, [:progression, :history]) || %{}, fn {id, record} -> {-record.ended_at, id} end),
+        record.owner_kind == :principal and record.owner == principal do
+      record
+      |> Map.take([:id, :name, :cuisines, :opened_at, :ended_at, :peak_stalls])
+      |> Map.put(:unpaid, cents(record.unpaid))
+      |> Map.put(:final_ledger, Map.new(record.final_ledger, fn {account, value} -> {account, cents(value)} end))
+    end
   end
 
   defp reviewer_queue(identity) do
@@ -185,6 +251,13 @@ defmodule FeudHall.Application.Management do
         lease = get_in(state, [:management, :leases, sid]) || %{}
 
         Map.merge(Map.take(stall, [:id, :mode, :tier]), %{
+          cuisine: Progression.cuisine(stall, restaurant),
+          ready_at: Map.get(stall, :ready_at),
+          refit_cost: cents(state.management.rules.setup_fee),
+          starter_stock: starter_stock(state, id, sid),
+          unlock_offers: unlock_offers(state, restaurant, stall),
+          menu:
+            Map.new(Progression.stall_menu(state, stall, restaurant), fn {recipe, value} -> {recipe, cents(value)} end),
           lease: Map.take(lease, [:start_hour, :end_hour, :helper_offers, :unattended, :workers, :opening_requested]),
           can_open: HallManagement.allow_open(state, sid) == :ok
         })
@@ -194,6 +267,16 @@ defmodule FeudHall.Application.Management do
       id: id,
       name: restaurant.name,
       cuisine: restaurant.cuisine,
+      cuisines: Progression.cuisines(state, restaurant),
+      distress_deadline: get_in(state, [:progression, :distress, id]),
+      stall_limit: get_in(state, [:catalog, :rules, :progression, :stall_limit]),
+      milestones: Recognition.milestones(state, id),
+      awards: Recognition.awards(state, id),
+      award_review_at: get_in(state, [:progression, :recognition, :next_review]),
+      reputation: Recognition.reputation(state, id),
+      unpaid: cents(unpaid(state, id)),
+      salvage: salvage_view(state, restaurant),
+      equipment_salvage: equipment_salvage(state, restaurant),
       unlocked: restaurant.unlocked,
       menu: Map.new(restaurant.menu, fn {recipe, value} -> {recipe, cents(value)} end),
       ledger: Map.new(restaurant.ledger, fn {account, value} -> {account, cents(value)} end),
@@ -210,8 +293,50 @@ defmodule FeudHall.Application.Management do
     }
   end
 
-  defp starter_stock(state, id) do
-    offer = OperatingPolicy.starter_stock_offer(state, id)
+  defp unlock_offers(state, restaurant, stall) do
+    cuisine = Progression.cuisine(stall, restaurant)
+
+    for {id, recipe} <- state.catalog.recipes,
+        recipe.cuisine == cuisine,
+        known <- [id in restaurant.unlocked],
+        {:ok, equipment, events} <- [Equipment.quote(state, restaurant, stall.id, recipe)],
+        not known or events != [],
+        into: %{} do
+      price = if(known, do: 0, else: recipe.unlock_cost) + equipment
+      {id, %{cost: cents(price), equipment: cents(equipment), technique: Map.get(recipe, :technique), known: known}}
+    end
+  end
+
+  defp equipment_salvage(state, restaurant) do
+    if Progression.distressed?(state, restaurant.id) do
+      for sid <- Progression.stalls(state, restaurant.id),
+          event <- Equipment.salvage_events(state, sid),
+          do: %{stall_id: sid, technique: event.technique, amount: cents(event.amount)}
+    else
+      []
+    end
+  end
+
+  defp unpaid(state, id) do
+    id
+    |> then(&Progression.stalls(state, &1))
+    |> Enum.reduce(Progression.released_debt(state, id), fn sid, total ->
+      total + (get_in(state, [:management, :leases, sid, :arrears]) || 0)
+    end)
+  end
+
+  defp salvage_view(state, restaurant) do
+    if Progression.distressed?(state, restaurant.id) do
+      for {id, batch} <- Enum.sort(restaurant.batches),
+          batch.reserved == 0 and batch.expires_at > state.now,
+          do: %{id: id, product: batch.product, qty: batch.qty, amount: cents(Progression.salvage_value(state, batch))}
+    else
+      []
+    end
+  end
+
+  defp starter_stock(state, id, sid \\ nil) do
+    offer = OperatingPolicy.starter_stock_offer(state, id, sid)
     %{budget: cents(offer.budget), items: Enum.map(offer.items, &Map.take(&1, [:product, :qty]))}
   end
 

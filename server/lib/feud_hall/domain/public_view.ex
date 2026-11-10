@@ -19,6 +19,7 @@ defmodule FeudHall.Domain.PublicView do
   """
 
   alias FeudHall.Domain.Market
+  alias FeudHall.Domain.Hall.Progression
 
   @summary_keys [:day, :arrivals, :admitted, :left, :trays_served, :menu_prices_median]
 
@@ -47,7 +48,7 @@ defmodule FeudHall.Domain.PublicView do
         restaurant_id: stall.restaurant,
         tier: stall.tier,
         open?: stall.mode == :open,
-        menu: state.restaurants[stall.restaurant].menu
+        menu: Progression.stall_menu(state, stall, state.restaurants[stall.restaurant])
       }
     end)
   end

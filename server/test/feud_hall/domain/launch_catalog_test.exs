@@ -1,0 +1,78 @@
+defmodule FeudHall.Domain.LaunchCatalogTest do
+  use ExUnit.Case, async: true
+
+  import FeudHall.Fixtures
+
+  alias FeudHall.Domain.{Clock, Content, Hall}
+  alias FeudHall.Domain.Content.LaunchCatalog
+  alias FeudHall.Domain.Hall.Invariants
+
+  test "all launch cuisines serve their starter, drink and later dessert with funded wholesale stock" do
+    catalog = quiet_catalog(LaunchCatalog.catalog())
+    assert :ok = Content.validate(catalog)
+
+    cuisines = catalog.recipes |> Map.values() |> Enum.group_by(& &1.cuisine)
+    assert map_size(cuisines) == 24
+    assert map_size(catalog.recipes) == 120
+
+    for {cuisine, recipes} <- cuisines do
+      assert %{main: 3, dessert: 1, drink: 1} == Enum.frequencies_by(recipes, & &1.kind)
+      [starter] = Enum.filter(recipes, & &1.starter)
+      drink = Enum.find(recipes, &(&1.kind == :drink))
+      dessert = Enum.find(recipes, &(&1.kind == :dessert))
+
+      operator = {:npc, "budget"}
+
+      world =
+        run!(
+          {nil, []},
+          {:initialize_hall, %{hall_id: "launch", catalog: catalog, managed: true}},
+          {:system, :admin},
+          "init"
+        )
+        |> run!(
+          {:create_restaurant, %{stall_id: "s001", restaurant_id: "r1", name: "Launch counter", cuisine: cuisine}},
+          operator,
+          "create"
+        )
+        |> run!({:open_stall, %{stall_id: "s001"}}, operator, "open")
+
+      world =
+        Enum.reduce([drink, dessert], world, fn recipe, world ->
+          world
+          |> run!({:unlock_recipe, %{restaurant_id: "r1", recipe_id: recipe.id}}, operator, "unlock-" <> recipe.id)
+          |> run!(
+            {:set_menu_price, %{restaurant_id: "r1", recipe_id: recipe.id, price: recipe.suggested_price}},
+            operator,
+            "price-" <> recipe.id
+          )
+        end)
+
+      lines = Enum.flat_map([starter, drink, dessert], & &1.lines)
+      quantities = Enum.reduce(lines, %{}, fn line, qs -> Map.update(qs, line.product, line.qty, &(&1 + line.qty)) end)
+
+      world =
+        Enum.reduce(quantities, world, fn {product, qty}, world ->
+          run!(
+            world,
+            {:submit_purchase_request,
+             %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000}},
+            operator,
+            "buy-" <> product
+          )
+        end)
+        |> advance_hall(4 * Clock.minute())
+        |> simulated_visit("diner", starter.id, drink.id, "unrestricted", 10_000, true)
+        |> advance_hall(40 * Clock.minute())
+
+      {state, events} = world
+      assert %{served_mains: 1, served_drinks: 1, served_desserts: 1, finalized_visits: 1} = state.stats
+
+      assert state.restaurants["r1"].ledger.revenue ==
+               starter.suggested_price + drink.suggested_price + dessert.suggested_price
+
+      assert :ok = Invariants.check(state)
+      assert Hall.replay(events) == state
+    end
+  end
+end

@@ -44,11 +44,19 @@ defmodule MutationCohort do
   @planner "test/feud_hall/domain/npc_planner_test.exs"
   @npc_plan "test/feud_hall/domain/npc_plan_test.exs"
   @forecast "test/feud_hall/domain/demand_forecast_test.exs"
+  @progression "test/feud_hall/application/progression_test.exs"
   @management "test/feud_hall/application/management_test.exs"
   @retention "test/feud_hall/domain/retention_test.exs"
 
   def mutants do
     [
+      {"M4 a fourth location can be leased", "lib/feud_hall/domain/hall/progression.ex",
+       "length(leased) >= state.catalog.rules.progression.stall_limit",
+       "length(leased) > state.catalog.rules.progression.stall_limit", [@progression]},
+      {"M4 distress continues accruing lease costs", "lib/feud_hall/domain/hall/management.ex",
+       "if Progression.distressed?(state, state.stalls[sid].restaurant) do", "if false do", [@progression]},
+      {"M4 guest visits count toward competitive recognition", "lib/feud_hall/domain/hall/recognition.ex",
+       "%{source: :simulated} = visit, event)", "%{source: _} = visit, event)", [@progression]},
       {"M3 standby erroneously grants licensing eligibility", "lib/feud_hall/domain/hall/management.ex",
        "and work.tasks > 0", "and work.tasks >= 0", [@management]},
       {"M3 a revoked device remains authenticated", "lib/feud_hall/domain/identity.ex",
@@ -152,15 +160,17 @@ defmodule MutationCohort do
       {"B4 arrivals during cleaning (hourly weights floored at 1, so no hour has quota 0)",
        "lib/feud_hall/domain/demand.ex", "    weights = rules.hourly_weights\n",
        "    weights = Enum.map(rules.hourly_weights, &max(&1, 1))\n", [@arrivals]},
-      {"B5 exposure applied twice", "lib/feud_hall/domain/choice.ex", "div((best_score + variety) * exposure, 1000)}",
-       "div(div((best_score + variety) * exposure, 1000) * exposure, 1000)}", [@choice]},
+      {"B5 exposure applied twice", "lib/feud_hall/domain/choice.ex",
+       "weight = div((best_score + variety) * exposure * recognition, 1_000_000)",
+       "weight = div(div((best_score + variety) * exposure * recognition, 1_000_000) * exposure, 1_000)", [@choice]},
       {"B6 incompatible food allowed in choice (diner's requirement not applied)", "lib/feud_hall/domain/choice.ex",
        "visit = %{requirement: diner.requirement, carbs_reserved: 0, carbs_served: 0}",
        "visit = %{requirement: %{profile_id: nil, excludes: [], carb_ceiling_mg: nil}, carbs_reserved: 0, carbs_served: 0}",
        [@choice]},
       {"B7 handover completes at the 03:00 cutoff (classes 2 and 3 swapped)", "lib/feud_hall/domain/hall/advance.ex",
-       "      {2, &cleaning_start/1},\n      {3, &kitchen_completions/1},",
-       "      {3, &cleaning_start/1},\n      {2, &kitchen_completions/1},", [@kitchen]},
+       "      {2, &cleaning_start/1},\n      {2.5, &Recognition.boundaries/1},\n      {3, &kitchen_completions/1},",
+       "      {3, &cleaning_start/1},\n      {2.5, &Recognition.boundaries/1},\n      {2, &kitchen_completions/1},",
+       [@kitchen]},
       {"B7b dispatch (including handover starts) not gated on open access", "lib/feud_hall/domain/hall/advance.ex",
        "defp dispatch(%{access: :open} = state) do", "defp dispatch(state) do", [@kitchen]},
       {"B8 accepted trays kept queued across cleaning", "lib/feud_hall/domain/hall/advance.ex",

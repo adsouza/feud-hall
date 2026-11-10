@@ -1,6 +1,69 @@
+import menus from "../../server/priv/content/launch_menus.json";
+import products from "../../server/priv/content/launch_products.json";
+
 export type Locale = "en" | "ja";
 
 const en = {
+  equipmentCost: "Equipment",
+  installEquipment: "Install equipment",
+  salvageEquipment: "Sell equipment",
+  steam: "Steaming",
+  simmer: "Simmering",
+  griddle: "Griddle",
+  roast: "Roasting",
+  wok: "Wok",
+  fry: "Frying",
+  cold: "Cold preparation",
+  brew: "Brewing",
+
+  diningDay: "Day {day}",
+  npcOperator: "NPC operator",
+  npcRetiring: "Retiring",
+  expandLocation: "Lease another location",
+  dailyOverheadEstimate: "Estimated daily rent and wages",
+  breakEvenMeals:
+    "Estimated break-even at starter prices: {meals} meals per game day.",
+  noStarterMargin:
+    "At the current ingredient prices, the starter meal has no positive margin.",
+  reopenLocation: "Lease a location for this business",
+  currentLocations: "Current locations",
+  refitLocation: "Refit this location",
+  readyIn: "Ready in",
+  surrenderLocation: "Surrender closed location",
+  surrenderDistressHint:
+    "Surrender releases the stall and sells its installed equipment. Outstanding charges remain due.",
+  leaseLocation: "Confirm lease",
+  chooseCuisine: "Choose cuisine",
+  overlappingCuisines: "Choose among the cuisines at this point",
+  closedLocationHint:
+    "Close the stall and let accepted orders settle before surrendering it.",
+  businessDistress: "Business in distress",
+  distressHint:
+    "Trading is paused. Sell usable stock and pay the outstanding charges before the deadline, or accept bankruptcy.",
+  unpaidCharges: "Outstanding charges",
+  recoveryEnds: "Recovery ends in",
+  payArrears: "Pay outstanding charges",
+  acceptBankruptcy: "Accept bankruptcy",
+  salvage: "Sell stock",
+  businessHistory: "Failed ventures",
+  bankrupt: "Bankrupt",
+  bankruptcyConfirm: "Confirm bankruptcy",
+  noMoreLocations: "This business has reached its location limit.",
+  recognition: "Recognition",
+  reputation: "Simulated service reputation",
+  nextReview: "Next award review",
+  milestones: "Milestones",
+  awards: "Awards",
+  first_profitable_day: "First profitable day",
+  waste_conscious: "Waste conscious",
+  reliable_kitchen: "A reliable kitchen",
+  cuisine_specialist: "Cuisine specialist",
+  second_counter: "A second counter",
+  across_the_menu: "Across the menu",
+  service_excellence: "Service Excellence",
+  outstanding_value: "Outstanding Value",
+  cuisine_distinction: "Cuisine Distinction",
+
   tired: "Fatigued",
   protectiveBreak: "Protective break",
   starterStock: "Suggested starter ingredients",
@@ -30,6 +93,14 @@ const en = {
   hall: "Hall",
   business: "Business",
   visit: "My visit",
+  diningHistory: "Dining receipts",
+  diningHistoryEmpty: "Your completed visits will appear here.",
+  diningHistoryUnavailable: "Couldn’t load your dining receipts.",
+  diningHistoryOlder: "Show older receipts",
+  diningHistoryRetry: "Retry loading receipts",
+  diningCharged: "Charged",
+  courseServed: "Served",
+  courseUnserved: "Not served",
   work: "Work",
   profile: "Profile",
   review: "Review",
@@ -204,6 +275,64 @@ const en = {
 export type Key = keyof typeof en;
 
 const ja: Record<Key, string> = {
+  equipmentCost: "設備費",
+  installEquipment: "設備を設置",
+  salvageEquipment: "設備を売却",
+  steam: "蒸し調理",
+  simmer: "煮込み",
+  griddle: "鉄板調理",
+  roast: "オーブン調理",
+  wok: "中華鍋",
+  fry: "揚げ調理",
+  cold: "冷製調理",
+  brew: "抽出",
+
+  diningDay: "{day}日目",
+  npcOperator: "NPC経営",
+  npcRetiring: "営業終了の準備中",
+  expandLocation: "店舗を追加",
+  dailyOverheadEstimate: "1ゲーム日あたりの推定賃料・人件費",
+  breakEvenMeals: "初期価格での損益分岐点の目安：1ゲーム日あたり{meals}食。",
+  noStarterMargin: "現在の食材価格では、初期メニューの利益が出ません。",
+  reopenLocation: "この店の営業場所を借りる",
+  currentLocations: "現在の店舗",
+  refitLocation: "この店舗を改装",
+  readyIn: "準備完了まで",
+  surrenderLocation: "閉店した店舗を返却",
+  surrenderDistressHint:
+    "返却すると店舗を明け渡し、設置済みの設備を売却します。未払い金の支払いは引き続き必要です。",
+  leaseLocation: "契約を確定",
+  chooseCuisine: "料理の種類を選ぶ",
+  overlappingCuisines: "この地点に重なる料理から選ぶ",
+  closedLocationHint:
+    "店舗を閉め、受け付け済みの注文が終了してから返却できます。",
+  businessDistress: "経営危機",
+  distressHint:
+    "営業は停止中です。期限までに在庫を売却して未払い金を支払うか、破産を選択してください。",
+  unpaidCharges: "未払い金",
+  recoveryEnds: "再建期限まで",
+  payArrears: "未払い金を支払う",
+  acceptBankruptcy: "破産を選択",
+  bankruptcyConfirm: "破産を確定",
+  salvage: "在庫を売却",
+  businessHistory: "破産した店舗の履歴",
+  bankrupt: "破産",
+  noMoreLocations: "店舗数の上限に達しています。",
+  recognition: "評価と表彰",
+  reputation: "シミュレーション客による評価",
+  nextReview: "次回の審査",
+  milestones: "達成目標",
+  awards: "表彰",
+  first_profitable_day: "初めての黒字営業日",
+  waste_conscious: "食品ロス削減",
+  reliable_kitchen: "信頼できる厨房",
+  cuisine_specialist: "料理の専門家",
+  second_counter: "二つ目のカウンター",
+  across_the_menu: "多彩なメニュー",
+  service_excellence: "優秀サービス賞",
+  outstanding_value: "優秀価格賞",
+  cuisine_distinction: "料理部門賞",
+
   tired: "疲労あり",
   protectiveBreak: "安全のため休憩中",
   starterStock: "開業時のおすすめ食材",
@@ -232,6 +361,14 @@ const ja: Record<Key, string> = {
   hall: "ホール",
   business: "店舗運営",
   visit: "注文",
+  diningHistory: "注文履歴",
+  diningHistoryEmpty: "終了した注文はここに表示されます。",
+  diningHistoryUnavailable: "注文履歴を読み込めませんでした。",
+  diningHistoryOlder: "以前の注文を表示",
+  diningHistoryRetry: "注文履歴を再読み込み",
+  diningCharged: "支払額",
+  courseServed: "提供済み",
+  courseUnserved: "未提供",
   work: "仕事",
   profile: "プロフィール",
   review: "審査",
@@ -486,6 +623,48 @@ const productJapanese: Record<string, string> = {
   mint: "ミント",
 };
 
+const launchLabels = new Map<string, [string, string]>();
+const grades: Record<string, [string, string]> = {
+  value: ["Value grade", "普及品"],
+  frozen: ["Frozen", "冷凍"],
+  chilled: ["Preserved", "保存用"],
+};
+
+for (const [id, english, japanese, recipes] of menus) {
+  if (
+    typeof id !== "string" ||
+    typeof english !== "string" ||
+    typeof japanese !== "string" ||
+    !Array.isArray(recipes)
+  )
+    continue;
+  launchLabels.set(id, [english, japanese]);
+  for (const [recipe, en, ja] of recipes) {
+    if (
+      typeof recipe === "string" &&
+      typeof en === "string" &&
+      typeof ja === "string"
+    )
+      launchLabels.set(recipe, [en, ja]);
+  }
+}
+for (const [id, english, japanese, , , , , grade] of products) {
+  if (
+    typeof id !== "string" ||
+    typeof english !== "string" ||
+    typeof japanese !== "string"
+  )
+    continue;
+  launchLabels.set(id, [english, japanese]);
+  if (typeof grade === "string" && grades[grade]) {
+    const [en, ja] = grades[grade];
+    launchLabels.set(id + "_" + grade, [
+      en + " " + english,
+      ja + " " + japanese,
+    ]);
+  }
+}
+
 export function label(locale: Locale, key: Key): string {
   return (locale === "ja" ? ja : en)[key];
 }
@@ -493,6 +672,7 @@ export function contentLabel(locale: Locale, id: string): string {
   if (Object.hasOwn(en, id)) return label(locale, id as Key);
   return (
     recipeNames[id]?.[locale === "ja" ? 1 : 0] ??
+    launchLabels.get(id)?.[locale === "ja" ? 1 : 0] ??
     (locale === "ja" ? productJapanese[id] : undefined) ??
     id.replaceAll("_", " ")
   );

@@ -1,6 +1,43 @@
 import type { Locale } from "./i18n";
 
 const messages = {
+  location_refitting: [
+    "This location is still being fitted out.",
+    "この店舗は準備中です。",
+  ],
+  refit_unavailable: [
+    "Refitting needs a closed stall, no active orders, a new cuisine, and enough cash for setup.",
+    "改装には閉店済みの店舗、処理中の注文がないこと、新しい料理、十分な準備資金が必要です。",
+  ],
+  business_distressed: [
+    "This venture is in distress. Pay the outstanding charges before resuming trade.",
+    "経営危機のため営業できません。未払い金を支払ってください。",
+  ],
+  business_dormant: [
+    "Lease a location before ordering stock.",
+    "在庫を仕入れるには店舗の契約が必要です。",
+  ],
+  stall_limit: [
+    "This business has reached its location limit.",
+    "店舗数の上限に達しています。",
+  ],
+  location_not_releasable: [
+    "Close this stall and let its accepted orders settle before surrendering it.",
+    "店舗を閉め、受付済みの注文が終了してから返却してください。",
+  ],
+  arrears_unpayable: [
+    "There isn’t enough cash to pay all outstanding charges.",
+    "未払い金を全額支払うための現金が足りません。",
+  ],
+  salvage_unavailable: [
+    "This asset is no longer available to sell.",
+    "この資産は売却できなくなりました。",
+  ],
+  business_not_distressed: [
+    "Bankruptcy can only be accepted during a recovery window.",
+    "破産を選択できるのは再建期間中だけです。",
+  ],
+
   allowance_already_claimed: [
     "You’ve already claimed your dining allowance for this game day.",
     "このゲーム日分の食事手当はすでに受け取っています。",

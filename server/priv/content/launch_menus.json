@@ -1,0 +1,149 @@
+[
+  ["tamil", "Tamil", "タミル", [
+    ["idli_with_sambar", "Idli with sambar", "イドゥリとサンバル", "steam", 880, [["rice_lentil_batter", 95], ["red_lentils", 30], ["sambar_pantry", 9], ["filtered_water", 85]]],
+    ["masala_dosa", "Masala dosa", "マサラドーサ", "griddle", 1040, [["rice_lentil_batter", 105], ["potato", 115], ["sambar_pantry", 9], ["onion", 24]]],
+    ["vegetable_uttapam", "Vegetable uttapam", "野菜ウッタパム", "griddle", 940, [["rice_lentil_batter", 100], ["vegetable_mix", 80], ["onion", 30]]],
+    ["paal_payasam", "Paal payasam", "パールパヤサム", "simmer", 480, [["rice_long", 22], ["milk_whole", 115], ["sugar", 18], ["cardamom", 1]]],
+    ["filter_coffee", "Filter coffee", "南インド式フィルターコーヒー", "brew", 330, [["coffee_beans", 8], ["milk_whole", 100], ["sugar", 8], ["filtered_water", 65]]]
+  ]],
+  ["japanese", "Japanese", "日本", [
+    ["chicken_teriyaki_rice", "Chicken teriyaki rice", "鶏の照り焼き丼", "griddle", 1050, [["chicken_thigh", 110], ["rice_long", 40], ["teriyaki_sauce", 36]]],
+    ["vegetable_udon", "Vegetable udon", "野菜うどん", "simmer", 930, [["udon_noodles", 140], ["vegetable_broth", 160], ["vegetable_mix", 85]]],
+    ["salmon_rice_bowl", "Salmon rice bowl", "焼き鮭丼", "roast", 1290, [["salmon", 100], ["rice_long", 45], ["teriyaki_sauce", 14]]],
+    ["dorayaki", "Dorayaki", "どら焼き", "griddle", 480, [["wheat_flour", 34], ["eggs", 24], ["adzuki_paste", 30], ["sugar", 10]]],
+    ["sencha", "Sencha", "煎茶", "brew", 270, [["sencha_leaf", 4], ["filtered_water", 210]]]
+  ]],
+  ["cantonese", "Cantonese", "広東", [
+    ["mushroom_cheung_fun", "Mushroom cheung fun", "きのこの腸粉", "steam", 940, [["rice_roll_base", 110], ["mushrooms", 75], ["scallion", 12], ["teriyaki_sauce", 15]]],
+    ["white_cut_chicken", "White-cut chicken with ginger-scallion rice", "白切鶏とご飯（しょうがねぎだれ）", "simmer", 1210, [["chicken_thigh", 125], ["rice_long", 41], ["ginger", 12], ["scallion", 15]]],
+    ["char_siu_rice", "Char siu pork with rice", "叉焼飯", "roast", 1300, [["pork", 125], ["rice_long", 40], ["char_siu_sauce", 40]]],
+    ["egg_tart", "Egg tart", "エッグタルト", "roast", 510, [["pastry_shell", 35], ["eggs", 35], ["evaporated_milk", 23], ["sugar", 14]]],
+    ["hong_kong_milk_tea", "Hong Kong-style milk tea", "香港式ミルクティー", "brew", 380, [["black_tea_leaf", 6], ["evaporated_milk", 45], ["filtered_water", 150]]]
+  ]],
+  ["mexican", "Mexican", "メキシコ", [
+    ["bean_tacos", "Bean tacos", "豆のタコス", "griddle", 850, [["corn_tortillas", 85], ["black_beans", 90], ["tomato", 35], ["onion", 16]]],
+    ["chicken_tacos", "Chicken tacos", "チキンタコス", "griddle", 1070, [["corn_tortillas", 85], ["chicken_thigh", 100], ["tomato", 40], ["cilantro", 5]]],
+    ["vegetable_quesadilla", "Vegetable quesadilla", "野菜ケサディーヤ", "griddle", 1010, [["corn_tortillas", 90], ["vegetable_mix", 70], ["vegetarian_cheese", 55]]],
+    ["arroz_con_leche", "Arroz con leche", "アロス・コン・レチェ", "simmer", 430, [["rice_long", 25], ["milk_whole", 100], ["sugar", 17], ["cinnamon", 1]]],
+    ["rice_horchata", "Rice-cinnamon horchata", "米とシナモンのオルチャータ", "cold", 330, [["rice_long", 20], ["filtered_water", 195], ["sugar", 16], ["cinnamon", 1]]]
+  ]],
+  ["persian", "Persian", "ペルシャ", [
+    ["vegetarian_adas_polo", "Vegetarian adas polo", "菜食アダスポロ", "simmer", 910, [["rice_long", 52], ["lentils_brown", 35], ["onion", 29], ["olive_oil", 9]]],
+    ["ash_reshteh", "Ash reshteh", "アーシュ・レシュテ", "simmer", 1040, [["reshteh_noodles", 47], ["kashk", 26], ["spinach", 80], ["kidney_beans", 70]]],
+    ["zereshk_polo_ba_morgh", "Zereshk polo ba morgh", "ゼレシュクポロと鶏肉", "roast", 1370, [["rice_long", 50], ["chicken_thigh", 125], ["barberries", 15], ["saffron", 1]]],
+    ["sholeh_zard", "Sholeh zard", "ショレ・ザルド", "simmer", 510, [["rice_long", 25], ["sugar", 25], ["saffron", 1], ["filtered_water", 110]]],
+    ["doogh", "Doogh", "ドゥーグ", "cold", 350, [["yogurt_plain", 100], ["filtered_water", 110], ["mint", 3]]]
+  ]],
+  ["thai", "Thai", "タイ", [
+    ["basil_chicken_rice", "Basil chicken rice", "ガパオライス", "wok", 1040, [["chicken_thigh", 110], ["rice_long", 45], ["basil", 10], ["vegetable_mix", 50]]],
+    ["tofu_pad_thai", "Tofu pad Thai", "豆腐のパッタイ", "wok", 1050, [["tofu_firm", 85], ["rice_noodles", 57], ["pad_thai_pantry", 32], ["peanuts_roasted", 12]]],
+    ["green_curry", "Green curry", "グリーンカレー", "simmer", 1260, [["chicken_thigh", 100], ["thai_green_curry_paste", 32], ["coconut_milk", 100], ["rice_long", 42]]],
+    ["mango_sticky_rice", "Mango sticky rice", "マンゴーもち米", "steam", 610, [["glutinous_rice", 35], ["mango", 75], ["coconut_milk", 35], ["sugar", 13]]],
+    ["thai_iced_tea", "Thai iced tea", "タイ式アイスミルクティー", "brew", 390, [["black_tea_leaf", 6], ["condensed_milk", 37], ["filtered_water", 175]]]
+  ]],
+  ["berber", "Berber (Amazigh)", "ベルベル（アマジグ）", [
+    ["vegetable_couscous", "Vegetable couscous", "野菜クスクス", "steam", 910, [["couscous", 55], ["vegetable_mix", 130], ["chickpeas_canned", 60], ["olive_oil", 12]]],
+    ["chicken_tagine", "Chicken tagine with preserved lemon and bread", "塩漬けレモンと鶏肉のタジン（パン添え）", "simmer", 1230, [["chicken_thigh", 120], ["preserved_lemon", 15], ["bread", 65], ["onion", 45]]],
+    ["vegetarian_tikourbabine", "Vegetarian tikourbabine", "菜食ティクルバビン", "simmer", 1000, [["semolina", 60], ["vegetable_broth", 130], ["spinach", 70], ["olive_oil", 10]]],
+    ["baghrir_with_honey", "Baghrir with honey", "はちみつがけバグリール", "griddle", 470, [["semolina", 48], ["honey", 25], ["filtered_water", 60]]],
+    ["atay", "Mint tea (atay)", "ミントティー（アタイ）", "brew", 320, [["green_tea_leaf", 4], ["mint", 6], ["filtered_water", 195], ["sugar", 12]]]
+  ]],
+  ["ethiopian", "Ethiopian", "エチオピア", [
+    ["shiro_with_injera", "Shiro with injera", "シロとインジェラ", "simmer", 920, [["chickpea_flour", 45], ["injera", 110], ["berbere", 7], ["onion", 30]]],
+    ["misir_wot_with_injera", "Misir wot with injera", "ミシルワットとインジェラ", "simmer", 960, [["red_lentils", 52], ["injera", 110], ["berbere", 9], ["tomato", 40]]],
+    ["doro_wat_with_injera", "Doro wat with injera", "ドロワットとインジェラ", "simmer", 1380, [["chicken_thigh", 120], ["eggs", 48], ["injera", 100], ["berbere", 12]]],
+    ["sweet_himbasha", "Sweet himbasha", "甘いヒンバシャ", "roast", 480, [["wheat_flour", 55], ["sugar", 18], ["cardamom", 2], ["filtered_water", 34]]],
+    ["buna", "Buna (black coffee)", "ブナ（ブラックコーヒー）", "brew", 300, [["coffee_beans", 10], ["filtered_water", 150]]]
+  ]],
+  ["peruvian", "Peruvian", "ペルー", [
+    ["papa_a_la_huancaina", "Papa a la huancaína", "パパ・ア・ラ・ワンカイーナ", "cold", 960, [["potato", 165], ["aji_amarillo", 18], ["vegetarian_cheese", 45], ["evaporated_milk", 38]]],
+    ["aji_de_gallina", "Ají de gallina with rice", "アヒ・デ・ガジーナとご飯", "simmer", 1210, [["chicken_thigh", 105], ["aji_amarillo", 23], ["bread", 30], ["evaporated_milk", 47], ["rice_long", 40]]],
+    ["lomo_saltado", "Lomo saltado with rice and potatoes", "ロモ・サルタードとご飯・じゃがいも", "wok", 1410, [["beef", 110], ["potato", 105], ["rice_long", 40], ["onion", 25], ["tomato", 30]]],
+    ["picarones", "Picarones", "ピカロネス", "fry", 550, [["wheat_flour", 42], ["squash", 35], ["sweet_potato", 30], ["panela", 19]]],
+    ["chicha_morada", "Chicha morada", "チチャ・モラーダ", "brew", 380, [["purple_corn", 26], ["pineapple", 38], ["cinnamon", 1], ["lime_juice", 10], ["filtered_water", 190]]]
+  ]],
+  ["turkish", "Turkish", "トルコ", [
+    ["mercimek_corbasi", "Mercimek çorbası with bread", "メルジメッキ・チョルバス（パン添え）", "simmer", 900, [["red_lentils", 55], ["potato", 45], ["onion", 25], ["bread", 62]]],
+    ["spinach_cheese_gozleme", "Spinach-and-cheese gözleme", "ほうれん草とチーズのギョズレメ", "griddle", 1070, [["wheat_flour", 58], ["spinach", 70], ["vegetarian_cheese", 46], ["olive_oil", 9]]],
+    ["kofte_with_bulgur", "Köfte with bulgur", "キョフテとブルグル", "griddle", 1290, [["minced_meat", 120], ["bulgur", 50], ["onion", 27], ["cilantro", 4]]],
+    ["tahin_helvasi", "Halvah (tahin helvası)", "タヒニのヘルヴァ", "cold", 470, [["tahini", 42], ["sugar", 23], ["sesame", 7]]],
+    ["turkish_black_tea", "Turkish black tea (çay)", "トルコ紅茶（チャイ）", "brew", 270, [["black_tea_leaf", 5], ["filtered_water", 165]]]
+  ]],
+  ["vietnamese", "Vietnamese", "ベトナム", [
+    ["tofu_banh_mi", "Tofu bánh mì", "豆腐のバインミー", "griddle", 970, [["bread", 110], ["tofu_firm", 95], ["vegetable_mix", 52], ["cilantro", 6]]],
+    ["chicken_pho", "Chicken phở", "鶏肉のフォー", "simmer", 1210, [["chicken_thigh", 100], ["chicken_broth", 200], ["rice_noodles", 60], ["pho_pantry", 8]]],
+    ["bun_cha", "Bún chả", "ブンチャー", "griddle", 1260, [["pork", 120], ["rice_noodles", 55], ["lime_juice", 18], ["cilantro", 7]]],
+    ["che_chuoi", "Chè chuối", "バナナのチェー", "simmer", 510, [["banana", 80], ["tapioca", 18], ["coconut_milk", 65], ["sugar", 12]]],
+    ["ca_phe_sua_da", "Cà phê sữa đá", "ベトナム式アイスミルクコーヒー", "brew", 390, [["coffee_beans", 12], ["condensed_milk", 35], ["filtered_water", 145]]]
+  ]],
+  ["javanese", "Javanese", "ジャワ", [
+    ["vegetarian_pecel", "Vegetarian pecel with rice", "菜食ペチェルとご飯", "steam", 940, [["vegetable_mix", 130], ["rice_long", 48], ["peanuts_roasted", 23], ["palm_sugar", 8]]],
+    ["vegetable_nasi_goreng", "Vegetable nasi goreng", "野菜ナシゴレン", "wok", 980, [["rice_long", 55], ["vegetable_mix", 110], ["sweet_soy_sauce", 20], ["tofu_firm", 55]]],
+    ["chicken_satay", "Chicken satay with rice", "鶏のサテとご飯", "griddle", 1200, [["chicken_thigh", 120], ["rice_long", 43], ["peanuts_roasted", 24], ["sweet_soy_sauce", 24]]],
+    ["klepon", "Klepon", "クレポン", "simmer", 510, [["glutinous_rice_flour", 35], ["pandan", 2], ["palm_sugar", 18], ["coconut_grated", 19]]],
+    ["wedang_jahe", "Wedang jahe", "ウェダン・ジャヘ", "brew", 310, [["ginger", 15], ["palm_sugar", 12], ["filtered_water", 200]]]
+  ]],
+  ["korean", "Korean", "韓国", [
+    ["vegetable_bibimbap", "Vegetable bibimbap", "野菜ビビンバ", "griddle", 970, [["rice_long", 52], ["vegetable_mix", 130], ["gochujang_vegan", 20], ["sesame", 7]]],
+    ["vegetable_japchae", "Vegetable japchae", "野菜チャプチェ", "wok", 1020, [["glass_noodles", 60], ["mushrooms", 65], ["spinach", 55], ["sesame", 8]]],
+    ["beef_bulgogi_rice", "Beef bulgogi with rice", "牛プルコギとご飯", "griddle", 1390, [["beef", 120], ["rice_long", 43], ["scallion", 15], ["sweet_soy_sauce", 27]]],
+    ["brown_sugar_hotteok", "Brown-sugar hotteok", "黒糖ホットク", "griddle", 470, [["wheat_flour", 44], ["brown_sugar", 22], ["sesame", 8]]],
+    ["boricha", "Boricha (barley tea)", "ポリ茶（麦茶）", "brew", 260, [["barley", 11], ["filtered_water", 205]]]
+  ]],
+  ["european", "European", "ヨーロッパ", [
+    ["tomato_pasta", "Tomato pasta", "トマトパスタ", "simmer", 920, [["pasta", 82], ["tomato", 135], ["basil", 7], ["olive_oil", 10]]],
+    ["ratatouille_with_bread", "Ratatouille with bread", "ラタトゥイユ（パン添え）", "simmer", 1020, [["eggplant", 75], ["zucchini", 75], ["tomato", 65], ["bread", 70]]],
+    ["chicken_schnitzel", "Chicken schnitzel with potatoes", "チキンシュニッツェルとじゃがいも", "fry", 1310, [["chicken_thigh", 125], ["potato", 140], ["eggs", 24], ["breadcrumbs", 32]]],
+    ["apple_crumble", "Apple crumble", "アップルクランブル", "roast", 540, [["apple", 115], ["wheat_flour", 29], ["butter", 18], ["sugar", 18]]],
+    ["espresso", "Espresso", "エスプレッソ", "brew", 280, [["coffee_beans", 10], ["filtered_water", 40]]]
+  ]],
+  ["brazilian", "Brazilian", "ブラジル", [
+    ["vegetarian_arroz_com_feijao", "Vegetarian arroz com feijão", "菜食アホース・コン・フェイジョン", "simmer", 910, [["rice_long", 52], ["black_beans", 130], ["onion", 25], ["olive_oil", 9]]],
+    ["frango_com_quiabo", "Frango com quiabo with rice", "鶏肉とオクラの煮込み（ご飯添え）", "simmer", 1180, [["chicken_thigh", 115], ["okra", 95], ["rice_long", 46], ["tomato", 45]]],
+    ["moqueca_de_peixe", "Moqueca de peixe with rice", "魚のムケッカとご飯", "simmer", 1370, [["white_fish", 130], ["coconut_milk", 95], ["palm_oil", 12], ["tomato", 65], ["rice_long", 45]]],
+    ["brigadeiro", "Brigadeiro", "ブリガデイロ", "simmer", 480, [["condensed_milk", 55], ["cocoa", 9], ["butter", 10]]],
+    ["cafezinho", "Cafezinho", "カフェジーニョ", "brew", 280, [["coffee_beans", 9], ["filtered_water", 82], ["sugar", 9]]]
+  ]],
+  ["yoruba", "Yoruba", "ヨルバ", [
+    ["vegetarian_ewa_riro", "Vegetarian ewa riro with plantain", "菜食エワリロとプランテン", "simmer", 930, [["cowpeas", 135], ["plantain", 95], ["palm_oil", 10], ["onion", 32]]],
+    ["vegetarian_moi_moi", "Vegetarian moi moi with rice", "菜食モイモイとご飯", "steam", 1010, [["cowpeas", 115], ["rice_long", 46], ["onion", 29], ["palm_oil", 11]]],
+    ["efo_riro_with_amala", "Efo riro with fish and amala", "魚入りエフォリロとアマラ", "simmer", 1290, [["spinach", 110], ["white_fish", 115], ["yam_flour", 62], ["palm_oil", 12]]],
+    ["puff_puff", "Puff-puff", "パフパフ", "fry", 440, [["wheat_flour", 47], ["sugar", 16], ["filtered_water", 36], ["palm_oil", 10]]],
+    ["zobo", "Zobo (hibiscus drink)", "ゾボ（ハイビスカス飲料）", "brew", 340, [["hibiscus", 8], ["ginger", 7], ["pineapple", 28], ["filtered_water", 190]]]
+  ]],
+  ["colombian", "Colombian", "コロンビア", [
+    ["arepa_con_queso", "Arepa con queso", "チーズ入りアレパ", "griddle", 940, [["cornmeal", 70], ["vegetarian_cheese", 65], ["filtered_water", 55]]],
+    ["patacones_with_hogao", "Patacones with hogao and beans", "パタコネス（オガオと豆添え）", "fry", 1050, [["plantain", 140], ["tomato", 65], ["onion", 38], ["kidney_beans", 70]]],
+    ["ajiaco", "Ajiaco", "アヒアコ", "simmer", 1240, [["chicken_thigh", 100], ["potato", 130], ["steamed_corn", 55], ["guascas", 4], ["chicken_broth", 90]]],
+    ["obleas_con_arequipe", "Obleas con arequipe", "アレキペ入りオブレア", "cold", 510, [["wafers", 35], ["arequipe", 46]]],
+    ["aguapanela_with_lime", "Aguapanela with lime", "ライム入りアグアパネラ", "brew", 310, [["panela", 22], ["lime_juice", 20], ["filtered_water", 205]]]
+  ]],
+  ["haudenosaunee", "Haudenosaunee", "ハウデノサウニー", [
+    ["three_sisters_soup", "Three Sisters soup", "三姉妹のスープ", "simmer", 920, [["white_corn_hulled", 65], ["kidney_beans", 80], ["squash", 100], ["vegetable_broth", 130]]],
+    ["oneida_white_corn_soup", "Oneida white-corn soup with pork", "オナイダの白トウモロコシと豚肉のスープ", "simmer", 1210, [["white_corn_hulled", 90], ["pork", 105], ["kidney_beans", 65]]],
+    ["boiled_corn_bean_bread", "Boiled corn-and-bean bread with roasted squash", "トウモロコシと豆のゆでパン（焼きかぼちゃ添え）", "steam", 1010, [["cornmeal", 60], ["kidney_beans", 68], ["squash", 110]]],
+    ["berry_corn_mush", "Berry corn mush with maple syrup", "ベリー入りコーン粥（メープルシロップ添え）", "simmer", 520, [["cornmeal", 30], ["mixed_berries", 63], ["maple_syrup", 20], ["filtered_water", 85]]],
+    ["strawberry_drink", "Strawberry drink", "いちごの飲み物", "cold", 360, [["strawberries", 62], ["filtered_water", 155], ["maple_syrup", 12]]]
+  ]],
+  ["dine", "Diné (Navajo)", "ディネ（ナバホ）", [
+    ["lamb_steamed_corn_stew", "Lamb and steamed-corn stew", "ラム肉と蒸しトウモロコシのシチュー", "simmer", 1190, [["lamb", 110], ["steamed_corn", 96], ["potato", 70], ["filtered_water", 105]]],
+    ["blue_corn_dumpling_stew", "Blue-corn dumpling stew", "青トウモロコシ団子のシチュー", "simmer", 970, [["blue_cornmeal", 55], ["squash", 80], ["vegetable_broth", 135]]],
+    ["blue_corn_griddle_cakes", "Blue-corn griddle cakes with roasted squash", "青トウモロコシの焼き餅（焼きかぼちゃ添え）", "griddle", 1020, [["blue_cornmeal", 70], ["squash", 110], ["filtered_water", 65]]],
+    ["red_sumac_berry_pudding", "Red sumac berry pudding", "赤いスマックの実のプディング", "simmer", 530, [["red_sumac_berries", 43], ["cornmeal", 25], ["sugar", 19], ["filtered_water", 100]]],
+    ["greenthread_tea", "Greenthread tea", "グリーンスレッド茶", "brew", 320, [["greenthread", 5], ["filtered_water", 205]]]
+  ]],
+  ["lakota", "Lakota", "ラコタ", [
+    ["bison_prairie_turnip_stew", "Bison and prairie-turnip stew", "バイソンとプレーリーターニップのシチュー", "simmer", 1230, [["bison", 105], ["prairie_turnip", 95], ["squash", 60], ["filtered_water", 110]]],
+    ["cedar_braised_bison", "Cedar-braised bison", "セダー風味のバイソン煮込み", "roast", 1450, [["bison", 145], ["culinary_cedar", 3], ["wild_onions", 40]]],
+    ["roasted_squash_wild_onions", "Roasted squash with wild onions", "野生タマネギと焼きかぼちゃ", "roast", 930, [["squash", 180], ["wild_onions", 38], ["filtered_water", 25]]],
+    ["wojapi", "Wojapi (berry sauce)", "ウォジャピ（ベリーソース）", "simmer", 510, [["mixed_berries", 120], ["filtered_water", 50]]],
+    ["prairie_mint_tea", "Wild prairie mint tea", "プレーリーミント茶", "brew", 310, [["prairie_mint", 5], ["filtered_water", 205]]]
+  ]],
+  ["coast_salish", "Coast Salish", "コースト・セイリッシュ", [
+    ["roasted_salmon", "Roasted salmon", "焼きサケ", "roast", 1220, [["salmon", 145], ["filtered_water", 25]]],
+    ["steamed_clams_with_kelp", "Steamed clams with kelp", "二枚貝とコンブの蒸し物", "steam", 1050, [["clams", 150], ["kelp", 13], ["filtered_water", 75]]],
+    ["halibut_seaweed_broth", "Halibut and seaweed broth", "オヒョウと海藻のスープ", "simmer", 1420, [["halibut", 130], ["kelp", 20], ["filtered_water", 175]]],
+    ["huckleberry_compote", "Huckleberry compote", "ハックルベリーのコンポート", "simmer", 550, [["huckleberries", 95], ["maple_syrup", 19], ["filtered_water", 45]]],
+    ["nettle_tea", "Nettle tea", "イラクサ茶", "brew", 300, [["nettles", 5], ["filtered_water", 205]]]
+  ]]
+]
