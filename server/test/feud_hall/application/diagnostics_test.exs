@@ -7,7 +7,9 @@ defmodule FeudHall.Application.DiagnosticsTest do
   alias FeudHall.Infrastructure.InMemoryEventStore
 
   @allowed ~w(command_id kind actor_kind outcome reason attempt position epoch hall_ms duration_us scope
-              recovery_id snapshot_position skipped error_class batch_events backlog lateness_ms)a
+              recovery_id snapshot_position skipped error_class batch_events backlog lateness_ms
+              batch fills unfilled arrivals admitted left stages_started served cancelled boundary count operator
+              accepted rejected)a
 
   defp env(id, actor, command), do: %{command_id: id, actor: actor, command: command}
 
@@ -241,5 +243,100 @@ defmodule FeudHall.Application.DiagnosticsTest do
     assert workload({Exporter, exporter}) == base
     assert length(MemorySink.records(sink)) > 30
     assert base.position > 20
+  end
+
+  describe "simulation records" do
+    defp batch_events do
+      [
+        %{
+          type: :market_cleared,
+          batch: 7,
+          prices: %{"rice" => 3},
+          fills: [%{who: "Casa"}, %{who: "Casa"}],
+          unfilled: [1]
+        },
+        %{type: :market_cleared, batch: 8, prices: %{}, fills: [%{}], unfilled: []},
+        %{type: :diner_arrived, outcome: :admitted, reason: nil, budget: 999},
+        %{type: :diner_arrived, outcome: :left, reason: :wait_too_long, budget: 5},
+        %{type: :diner_arrived, outcome: :left, reason: :wait_too_long, budget: 5},
+        %{type: :stage_started, order_id: "o1", stage: :prep},
+        %{type: :tray_served, tray_id: "t1"},
+        %{type: :dessert_served, order_id: "o1"},
+        %{type: :tray_cancelled, reason: :deadline_missed},
+        %{type: :dessert_cancelled, reason: :guest_cancelled},
+        %{type: :hall_cleaning_started, day: 1, at: 1},
+        %{type: :hall_cleaning_ended, day: 1, at: 2},
+        %{type: :hall_cleaning_started, day: 2, at: 3},
+        %{
+          type: :npc_planned,
+          operator: "budget",
+          slot: 1,
+          outcomes: [
+            %{action: :open_stall, result: :accepted},
+            %{action: :set_price, result: :rejected, reason: :nope},
+            %{action: :set_price, result: :accepted}
+          ]
+        },
+        %{type: :restaurant_created, name: "sentinel-secret-🌮"}
+      ]
+    end
+
+    test "one aggregated, constant-size record per kind, from the committed events only" do
+      assert [
+               {:market_cleared, %{batch: 8, fills: 3, unfilled: 1}},
+               {:arrivals, %{arrivals: 3, admitted: 1, left: 2}},
+               {:course_lifecycle, %{stages_started: 1, served: 2, cancelled: 2}},
+               {:cleaning_boundary, %{boundary: :started, count: 2}},
+               {:cleaning_boundary, %{boundary: :ended, count: 1}},
+               {:npc_plan, %{operator: "budget", accepted: 2, rejected: 1}}
+             ] = Diagnostics.batch_summaries(batch_events())
+
+      assert Diagnostics.batch_summaries([%{type: :restaurant_created}, %{type: :stall_opened}]) == []
+    end
+
+    test "a zero-activity clearing is suppressed; mixed NPC operators drop the operator" do
+      empty = %{type: :market_cleared, batch: 3, prices: %{}, fills: [], unfilled: []}
+      assert Diagnostics.batch_summaries([empty]) == []
+
+      plans = for op <- ["a", "b"], do: %{type: :npc_planned, operator: op, slot: 1, outcomes: []}
+      assert [{:npc_plan, fields}] = Diagnostics.batch_summaries(plans)
+      refute Map.has_key?(Diagnostics.record(:npc_plan, fields).fields, :operator)
+      assert fields.accepted == 0 and fields.rejected == 0
+      assert fields.operator == nil
+    end
+
+    test "records built from a batch keep only allowlisted fields and no payload text", %{sink: sink} do
+      Diagnostics.emit_batch({MemorySink, sink}, batch_events())
+      records = MemorySink.records(sink)
+      assert Enum.map(records, & &1.name) == ~w(market_cleared arrivals course_lifecycle cleaning_boundary
+                                                cleaning_boundary npc_plan)a
+      for r <- records, do: assert(Map.keys(r.fields) -- @allowed == [])
+      dump = inspect(records, limit: :infinity)
+      refute dump =~ "sentinel"
+      refute dump =~ "Casa"
+      assert :ok = Diagnostics.emit_batch({MemorySink, sink}, :not_events)
+      assert :ok = Diagnostics.emit_batch({MemorySink, sink}, [%{type: :market_cleared, fills: :bad, unfilled: 1}])
+      assert :ok = Diagnostics.emit_batch(nil, batch_events())
+    end
+
+    test "NPC actors report an NPC kind and never an identity" do
+      assert Diagnostics.actor_kind({:npc, "budget"}) == :npc
+      assert Diagnostics.record(:x, %{actor_kind: :npc}).fields.actor_kind == :npc
+    end
+
+    test "a committed clearing with fills reports a market_cleared record through the workflow", %{sink: sink} do
+      workload({MemorySink, sink})
+      assert [%{fields: fields} | _] = for(%{name: :market_cleared} = r <- MemorySink.records(sink), do: r)
+      assert fields.fills > 0 and is_integer(fields.batch) and is_integer(fields.unfilled)
+      assert Map.keys(fields) -- @allowed == []
+      refute inspect(MemorySink.records(sink), limit: :infinity) =~ "sentinel"
+    end
+
+    test "an exporter whose export raises does not change what the workflow commits" do
+      {:ok, exporter} =
+        Exporter.start_link(export: fn _ -> raise "exporter down" end, max_queue: 5, batch: 2, timeout_ms: 1_000)
+
+      assert workload({Exporter, exporter}) == workload(nil)
+    end
   end
 end

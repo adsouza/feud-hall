@@ -1012,6 +1012,109 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
     end
   end
 
+  @simulation_names ~w(market_cleared arrivals course_lifecycle cleaning_boundary npc_plan)a
+  @simulation_fields ~w(batch fills unfilled arrivals admitted left stages_started served cancelled boundary count
+                        operator accepted rejected epoch scope)a
+
+  defp simulation_records(ctx), do: for(%{name: n} = r <- MemorySink.records(ctx.sink), n in @simulation_names, do: r)
+
+  defp scripted_day(ctx, pid) do
+    assert {:accepted, _} = HallAuthority.execute(pid, create_sentinel())
+    for _ <- 1..24, do: assert(:ok = tick_after(ctx, pid, @hour_service))
+    pid
+  end
+
+  for adapter <- [:memory, :postgres] do
+    describe "#{adapter} adapter simulation diagnostics" do
+      @describetag adapter: adapter
+
+      test "a scripted day reports each simulation record with only allowlisted count fields", ctx do
+        pid = ctx |> npc_authority() |> initialize() |> then(&scripted_day(ctx, &1))
+        records = simulation_records(ctx)
+        events = events(pid)
+        by_name = Enum.group_by(records, & &1.name, & &1.fields)
+
+        assert Map.keys(by_name) |> Enum.sort() == Enum.sort(@simulation_names)
+        for r <- records, do: assert(Map.keys(r.fields) -- @simulation_fields == [])
+        for r <- records, do: assert(r.severity == :info and r.schema == 1)
+
+        # Counts reconcile with what committed.
+        arrived = Enum.filter(events, &(&1.type == :diner_arrived))
+        assert arrived != []
+        assert Enum.sum(for f <- by_name.arrivals, do: f.arrivals) == length(arrived)
+        assert Enum.sum(for f <- by_name.arrivals, do: f.admitted) == Enum.count(arrived, &(&1.outcome == :admitted))
+        assert Enum.sum(for f <- by_name.arrivals, do: f.left) == Enum.count(arrived, &(&1.outcome == :left))
+
+        cleared = Enum.filter(events, &(&1.type == :market_cleared))
+        assert Enum.sum(for f <- by_name.market_cleared, do: f.fills) == Enum.sum(for e <- cleared, do: length(e.fills))
+
+        assert Enum.sum(for f <- by_name.market_cleared, do: f.unfilled) ==
+                 Enum.sum(for e <- cleared, do: length(e.unfilled))
+
+        # Idle clearings are not reported.
+        assert length(by_name.market_cleared) < length(cleared)
+        assert Enum.all?(by_name.market_cleared, &(&1.fills + &1.unfilled > 0 and is_integer(&1.batch)))
+
+        stages = Enum.count(events, &(&1.type == :stage_started))
+        served = Enum.count(events, &(&1.type in [:tray_served, :dessert_served]))
+        cancelled = Enum.count(events, &(&1.type in [:tray_cancelled, :dessert_cancelled]))
+        assert Enum.sum(for f <- by_name.course_lifecycle, do: f.stages_started) == stages
+        assert Enum.sum(for f <- by_name.course_lifecycle, do: f.served) == served
+        assert Enum.sum(for f <- by_name.course_lifecycle, do: f.cancelled) == cancelled
+
+        assert Enum.sort(for f <- by_name.cleaning_boundary, do: {f.boundary, f.count}) == [ended: 1, started: 1]
+
+        plans = Enum.filter(events, &(&1.type == :npc_planned))
+        assert length(by_name.npc_plan) == length(plans)
+        assert Enum.sort(for f <- by_name.npc_plan, do: f.operator) == Enum.sort(for p <- plans, do: p.operator)
+        accepted = for p <- plans, o <- p.outcomes, o.result == :accepted, do: o
+        assert Enum.sum(for f <- by_name.npc_plan, do: f.accepted) == length(accepted)
+
+        assert Enum.sum(for f <- by_name.npc_plan, do: f.rejected) ==
+                 length(plans |> Enum.flat_map(& &1.outcomes)) - length(accepted)
+      end
+
+      test "player text never reaches a simulation record, and no record exceeds one per kind per batch", ctx do
+        pid = ctx |> npc_authority() |> initialize() |> then(&scripted_day(ctx, &1))
+        # Positive control: the sentinel is in the committed history, so the check below can fail.
+        assert inspect(events(pid), limit: :infinity) =~ @sentinel
+        dump = inspect(MemorySink.records(ctx.sink), limit: :infinity)
+        refute dump =~ @sentinel
+        refute dump =~ "Sentinel"
+
+        # One record per kind per committed batch (cleaning boundaries: one per boundary).
+        batch_count = length(batches(pid))
+        for name <- @simulation_names, do: assert(length(records(ctx, name)) <= 2 * batch_count)
+        assert length(records(ctx, :arrivals)) <= batch_count
+      end
+    end
+  end
+
+  describe "simulation diagnostics isolation" do
+    @describetag adapter: :memory
+
+    test "an exporter whose export raises changes neither hall state nor committed history", ctx do
+      {:ok, exporter} =
+        start_supervised(
+          {FeudHall.Infrastructure.Diagnostics.Exporter,
+           export: fn _ -> raise "exporter down" end, max_queue: 5, batch: 2, timeout_ms: 1_000, on_event: self()},
+          id: :exporter
+        )
+
+      run = fn diagnostics ->
+        {:ok, clock} = start_supervised({ManualClock, 0}, id: make_ref())
+        ctx = %{ctx | clock: clock}
+        pid = ctx |> npc_authority(diagnostics: diagnostics) |> initialize() |> then(&scripted_day(ctx, &1))
+        {HallAuthority.state(pid).hall, batches(pid)}
+      end
+
+      base = run.(nil)
+      assert elem(base, 1) != []
+      assert run.({FeudHall.Infrastructure.Diagnostics.Exporter, exporter}) == base
+      assert_receive {:exporter, :failed, _count}
+    end
+  end
+
   # --- PostgreSQL only ---------------------------------------------------------
 
   # A value-typed in-memory store cannot be shared between two processes, so a real takeover by a

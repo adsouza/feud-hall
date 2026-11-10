@@ -367,6 +367,8 @@ defmodule FeudHall.Application.CommandWorkflow do
         }
 
         receipt = Map.put(receipt, :position, position)
+        # Only after the append: these are the events that committed, never the intent.
+        Diagnostics.emit_batch(runtime.diagnostics, events)
         status = if receipt.outcome == :accepted, do: :accepted, else: :rejected
         {status, receipt, runtime}
 

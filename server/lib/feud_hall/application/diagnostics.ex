@@ -13,7 +13,9 @@ defmodule FeudHall.Application.Diagnostics do
   @callback emit(sink :: term, record :: map) :: :ok
 
   @allowed ~w(command_id kind actor_kind outcome reason attempt position epoch hall_ms duration_us scope
-              recovery_id snapshot_position skipped error_class batch_events backlog lateness_ms)a
+              recovery_id snapshot_position skipped error_class batch_events backlog lateness_ms
+              batch fills unfilled arrivals admitted left stages_started served cancelled boundary count operator
+              accepted rejected)a
   @max_string 128
   @errors ~w(command_rejected recovery_failed)a
 
@@ -79,10 +81,115 @@ defmodule FeudHall.Application.Diagnostics do
   def reason(_), do: :unknown
 
   @doc "The kind of actor, never its identity."
-  @spec actor_kind(term()) :: :principal | :system | nil
+  @spec actor_kind(term()) :: :principal | :system | :npc | nil
   def actor_kind({:principal, _}), do: :principal
   def actor_kind({:system, _}), do: :system
+  def actor_kind({:npc, _}), do: :npc
   def actor_kind(_), do: nil
+
+  @doc """
+  Emits the simulation records for one committed batch of hall events: see
+  `batch_summaries/1`. Called only after the append succeeded, with the events
+  that committed; best effort like every emission, and a malformed batch drops
+  the records, nothing more.
+  """
+  @spec emit_batch(config(), term()) :: :ok
+  def emit_batch(nil, _events), do: :ok
+
+  def emit_batch(config, events) do
+    for {name, fields} <- guard(fn -> batch_summaries(events) end, []), do: emit(config, name, fields)
+    :ok
+  end
+
+  @empty %{
+    clearing: nil,
+    fills: 0,
+    unfilled: 0,
+    arrivals: 0,
+    admitted: 0,
+    left: 0,
+    stages: 0,
+    served: 0,
+    cancelled: 0,
+    started: 0,
+    ended: 0,
+    plans: 0,
+    accepted: 0,
+    rejected: 0,
+    operator: :none
+  }
+
+  @doc """
+  Aggregates a committed batch in one pass into at most one summary per kind
+  (two for cleaning boundaries: started and ended), in a fixed order. Output
+  size does not depend on the batch length, so a long catch-up logs as little
+  as a single command. Counts only: no event payload, name or price is copied.
+
+  A clearing with no fills and nothing unfilled is not reported: clearings
+  recur every four hall minutes, so reporting idle ones would only add volume.
+  `:npc_plan` carries `operator` only when every plan in the batch has the same one.
+  """
+  @spec batch_summaries([map()]) :: [{atom(), map()}]
+  def batch_summaries(events) when is_list(events) do
+    a = Enum.reduce(events, @empty, &tally/2)
+
+    [
+      a.fills + a.unfilled > 0 && {:market_cleared, %{batch: a.clearing, fills: a.fills, unfilled: a.unfilled}},
+      a.arrivals > 0 && {:arrivals, %{arrivals: a.arrivals, admitted: a.admitted, left: a.left}},
+      a.stages + a.served + a.cancelled > 0 &&
+        {:course_lifecycle, %{stages_started: a.stages, served: a.served, cancelled: a.cancelled}},
+      a.started > 0 && {:cleaning_boundary, %{boundary: :started, count: a.started}},
+      a.ended > 0 && {:cleaning_boundary, %{boundary: :ended, count: a.ended}},
+      a.plans > 0 &&
+        {:npc_plan, %{operator: operator(a.operator), accepted: a.accepted, rejected: a.rejected}}
+    ]
+    |> Enum.filter(& &1)
+  end
+
+  defp tally(%{type: :market_cleared} = e, a),
+    do: %{a | clearing: e[:batch], fills: a.fills + size(e[:fills]), unfilled: a.unfilled + size(e[:unfilled])}
+
+  defp tally(%{type: :diner_arrived} = e, a) do
+    a = %{a | arrivals: a.arrivals + 1}
+
+    case e[:outcome] do
+      :admitted -> %{a | admitted: a.admitted + 1}
+      :left -> %{a | left: a.left + 1}
+      _ -> a
+    end
+  end
+
+  defp tally(%{type: :stage_started}, a), do: %{a | stages: a.stages + 1}
+  defp tally(%{type: type}, a) when type in [:tray_served, :dessert_served], do: %{a | served: a.served + 1}
+  defp tally(%{type: type}, a) when type in [:tray_cancelled, :dessert_cancelled], do: %{a | cancelled: a.cancelled + 1}
+  defp tally(%{type: :hall_cleaning_started}, a), do: %{a | started: a.started + 1}
+  defp tally(%{type: :hall_cleaning_ended}, a), do: %{a | ended: a.ended + 1}
+
+  defp tally(%{type: :npc_planned} = e, a) do
+    outcomes = if is_list(e[:outcomes]), do: e.outcomes, else: []
+    accepted = Enum.count(outcomes, &match?(%{result: :accepted}, &1))
+    rejected = Enum.count(outcomes, &match?(%{result: :rejected}, &1))
+
+    %{
+      a
+      | plans: a.plans + 1,
+        accepted: a.accepted + accepted,
+        rejected: a.rejected + rejected,
+        operator: merge_operator(a.operator, e[:operator])
+    }
+  end
+
+  defp tally(_event, a), do: a
+
+  defp size(list) when is_list(list), do: length(list)
+  defp size(_), do: 0
+
+  defp merge_operator(:none, op), do: {:one, op}
+  defp merge_operator({:one, op}, op), do: {:one, op}
+  defp merge_operator(_, _), do: :many
+
+  defp operator({:one, op}), do: op
+  defp operator(_), do: nil
 
   defp severity(:recovery_failed, _), do: :error
   defp severity(:command_outcome, %{outcome: outcome}) when outcome in [:unavailable, :commit_unknown], do: :error
@@ -94,7 +201,10 @@ defmodule FeudHall.Application.Diagnostics do
   defp severity(_, _), do: :info
 
   defp clean(fields) do
-    for {key, value} <- fields, key in @allowed, key != :actor_kind or value in [:principal, :system], reduce: %{} do
+    for {key, value} <- fields,
+        key in @allowed,
+        key != :actor_kind or value in [:principal, :system, :npc],
+        reduce: %{} do
       acc ->
         case scalar(value) do
           :drop -> acc
