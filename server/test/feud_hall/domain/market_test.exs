@@ -391,26 +391,30 @@ defmodule FeudHall.Domain.MarketTest do
     end
   end
 
-  describe "replenish/3" do
+  describe "replenish/4" do
     test "tops up toward the scaled target" do
       # onion target 400 per equivalent; scale 2.5 equivalents -> 1000.
-      r = Market.replenish(catalog(), %{stock: %{"onion" => 300}}, 2_500)
+      r = Market.replenish(catalog(), %{stock: %{"onion" => 300}}, 2_500, 2)
       assert r["onion"] == 700
     end
 
-    test "never exceeds the cap and never goes negative" do
-      # onion cap is 1600; a huge scale is bounded by the cap.
-      r = Market.replenish(catalog(), %{stock: %{"onion" => 100}}, 1_000_000)
-      assert r["onion"] == 1_500
+    test "caps deliveries at the baseline through the floor and scales the cap above it" do
+      market = %{stock: %{"onion" => 100}}
 
-      full = Market.replenish(catalog(), %{stock: %{"onion" => 5_000}}, 2_500)
-      assert full["onion"] == 0
+      assert Market.replenish(catalog(), market, 10_000, 0)["onion"] == 1_500
+      assert Market.replenish(catalog(), market, 10_000, 3)["onion"] == 1_500
+      assert Market.replenish(catalog(), market, 10_000, 4)["onion"] == 2_033
+      assert Market.replenish(catalog(), market, 10_000, 6)["onion"] == 3_100
+      assert Market.replenish(catalog(), market, 10_000, 150)["onion"] == 3_900
+    end
 
-      assert Enum.all?(Map.values(Market.replenish(catalog(), %{stock: %{}}, 0)), &(&1 >= 0))
+    test "stock above a reduced cap receives no delivery" do
+      market = %{stock: %{"onion" => 3_000}}
+      assert Market.replenish(catalog(), market, 10_000, 3)["onion"] == 0
     end
 
     test "covers every product and treats missing stock as zero" do
-      r = Market.replenish(catalog(), %{stock: %{}}, 1_000)
+      r = Market.replenish(catalog(), %{stock: %{}}, 1_000, 1)
       assert map_size(r) == map_size(catalog().products)
       assert r["onion"] == 400
       assert r["cilantro"] == 100

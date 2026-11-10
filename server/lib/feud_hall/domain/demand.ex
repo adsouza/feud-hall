@@ -278,7 +278,8 @@ defmodule FeudHall.Domain.Demand do
   @doc """
   The `day_closed` fact for the midnight at `state.now`: the completed day's
   equivalents, the scale for the day now starting, the market replenishment
-  (computed with the scale fixed at the previous midnight), and the summary.
+  (target based on the previous midnight's scale, cap based on the open
+  restaurants now), and the summary.
   """
   def close_day(state) do
     rules = state.catalog.rules.demand
@@ -287,13 +288,17 @@ defmodule FeudHall.Domain.Demand do
 
     scale = max(equivalents, rules.equivalent_floor_millis)
 
+    open_restaurants =
+      for {_, %{mode: :open, restaurant: restaurant}} <- state.stalls, into: MapSet.new(), do: restaurant
+
     %{
       type: :day_closed,
       day: day,
       equivalents_millis: equivalents,
       scale_millis: scale,
       hour_quotas_millis: hour_quotas(rules, scale),
-      replenishment: Market.replenish(state.catalog, state.market, state.demand.supply_scale_millis),
+      replenishment:
+        Market.replenish(state.catalog, state.market, state.demand.supply_scale_millis, MapSet.size(open_restaurants)),
       summary: Map.merge(%{day: day, menu_prices_median: menu_prices_median(state)}, state.demand.today)
     }
   end

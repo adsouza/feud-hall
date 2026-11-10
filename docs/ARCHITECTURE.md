@@ -342,6 +342,8 @@ Service wins an exact tie with patience only if its meal is still fresh, the pos
 
 Arrival generation uses a cumulative rate so fractional expected arrivals carry forward. Customer choice uses seeded sampling or an allocation method that preserves exact population counts. Never independently round every stall's share.
 
+At 00:00, the [wholesale delivery](GAME_DESIGN.md#market-structure) uses the previous midnight's forecast for the stock target. Scale each product's baseline `replenish_cap` by `max(floor_millis, 1000 * open_restaurants) / floor_millis`, rounding down. Count distinct restaurant IDs from stalls in open mode at the boundary, before commands at that timestamp. The `day_closed` event records the resulting additions before same-instant market clearing. Replay applies those additions directly.
+
 ### Recorded decisions and clock continuity
 
 Events carry resolved prices, amounts, allocation results, IDs, applicable

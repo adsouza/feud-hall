@@ -240,7 +240,8 @@ Per [competing for supplies](../../GAME_DESIGN.md#8-competing-for-supplies).
   restock policies arrive in Milestone 3.
 - **Replenishment (builder's call).** Daily at 00:00 hall time, each product is
   replenished toward a target stock scaled by the business-equivalent forecast
-  fixed at the previous midnight (a one-day delay), never above a content cap.
+  fixed at the previous midnight (a one-day delay). The stock cap scales with
+  the [open restaurant count](../../GAME_DESIGN.md#market-structure) at delivery.
 - **Market stock does not age (builder's call).** A fill starts the product's
   full shelf life at the fill time, as Milestone 1 purchases do. Only unfilled
   requests expire.

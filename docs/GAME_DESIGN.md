@@ -573,7 +573,7 @@ Each hall has its own wholesale market, finite ingredient stock, published price
 
 Ingredients have base prices, target stock, replenishment quantities, storage requirements, and shelf lives. Scarcity raises prices within configured bounds; replenishment reduces scarcity. Announced supplier events may change future deliveries, giving players time to react. The first release has purchases from wholesalers; player-to-player trading, routine commodity resale, futures, and loans are outside scope. Explicit discounted asset liquidation during recovery or lease surrender is a separate exception, not a wholesale resale market.
 
-Supply scale is calibrated to the same published business activity forecast used for demand, with a delay. Expansion does not immediately create free wholesale stock. Common ingredients link cuisines economically, while specialty ingredients provide different shortage risks.
+At midnight, wholesale stock is topped up toward the target set by the previous midnight's business activity forecast. Each ingredient has a baseline stock cap at the forecast floor. The cap grows in proportion to the number of open restaurants above that floor. Each restaurant with an open stall counts once, including NPC restaurants and restaurants whose kitchens are out of stock. Opening a stall between deliveries adds no stock. If stock already exceeds the new cap, it stays in the market and the delivery adds none of that ingredient. Common ingredients link cuisines economically, while specialty ingredients provide different shortage risks.
 
 ### Purchasing and clearing
 

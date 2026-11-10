@@ -112,14 +112,17 @@ defmodule FeudHall.Domain.Market do
 
   @doc """
   Units to add per product: toward the target scaled by `scale_millis`
-  business equivalents, never above the content cap and never negative.
+  business equivalents. The content cap is the baseline at the demand floor
+  and scales proportionally above it with the number of open restaurants.
   """
-  def replenish(catalog, market, scale_millis) do
+  def replenish(catalog, market, scale_millis, open_restaurants) do
     rules = catalog.rules.market
+    floor_millis = catalog.rules.demand.equivalent_floor_millis
+    cap_scale_millis = max(floor_millis, open_restaurants * 1000)
 
     Map.new(Map.keys(catalog.products), fn product ->
       target = div(Map.fetch!(rules.target_stock_per_equivalent, product) * scale_millis, 1000)
-      cap = Map.fetch!(rules.replenish_cap, product)
+      cap = div(Map.fetch!(rules.replenish_cap, product) * cap_scale_millis, floor_millis)
       {product, max(0, min(target, cap) - Map.get(market.stock, product, 0))}
     end)
   end

@@ -213,7 +213,7 @@ defmodule FeudHall.Domain.DemandForecastTest do
       {_state, events} = advance_hall(world, @day)
       closed = events |> day_closed() |> List.last()
 
-      assert closed.replenishment == Market.replenish(before.catalog, before.market, @floor)
+      assert closed.replenishment == Market.replenish(before.catalog, before.market, @floor, 1)
     end
 
     test "the recorded replenishment names every product and tops each toward its own scaled target" do
@@ -224,7 +224,7 @@ defmodule FeudHall.Domain.DemandForecastTest do
 
       assert closed.replenishment |> Map.keys() |> Enum.sort() == before.catalog.products |> Map.keys() |> Enum.sort()
 
-      # Computed from the content directly, not through `Market.replenish/3`.
+      # One open restaurant keeps each product at its baseline cap.
       for {product, qty} <- closed.replenishment do
         target = div(market.target_stock_per_equivalent[product] * @floor, 1000)
         room = min(target, market.replenish_cap[product]) - Map.get(before.market.stock, product, 0)
@@ -245,9 +245,41 @@ defmodule FeudHall.Domain.DemandForecastTest do
       {state, events} = advance_hall(next, 2 * @day)
       [^first, second] = day_closed(events)
 
-      assert second.replenishment == Market.replenish(catalog, before.market, first.scale_millis)
-      refute second.replenishment == Market.replenish(catalog, before.market, floor)
+      assert second.replenishment == Market.replenish(catalog, before.market, first.scale_millis, 0)
+      refute second.replenishment == Market.replenish(catalog, before.market, floor, 0)
       assert state.demand.supply_scale_millis == second.scale_millis
+    end
+
+    test "midnight caps deliveries using distinct open restaurants, even when out of stock" do
+      world =
+        Enum.reduce(2..4, stocked_world(stock: %{}), fn n, world ->
+          stall = "s00#{n}"
+          actor = if n == 4, do: {:npc, "npc-four"}, else: owner("owner-#{n}")
+          restaurant = %{restaurant_id: "r#{n}", stall_id: stall, name: "Restaurant #{n}", cuisine: "mexican"}
+
+          world
+          |> run!({:create_restaurant, restaurant}, actor, "create-#{n}")
+          |> run!({:open_stall, %{stall_id: stall}}, actor, "open-#{n}")
+        end)
+
+      {before, log} = advance_hall(world, @day - 24)
+      assert Demand.operating(before) == []
+      # Set a previously recorded forecast high enough for the cap to bind.
+      before = put_in(before.demand.supply_scale_millis, 6_000)
+      # Model a second stall for r1, since the slice has no expansion command.
+      before = put_in(before.stalls["s005"], %{before.stalls["s001"] | id: "s005"})
+
+      {state, events} = advance_hall({before, log}, @day)
+      assert [%{replenishment: %{"onion" => 933}}] = day_closed(events)
+      assert state.market.stock["onion"] == 2_133
+
+      {state, events} =
+        {before, log}
+        |> run!({:close_stall, %{stall_id: "s004"}}, {:npc, "npc-four"}, "close-four")
+        |> advance_hall(@day)
+
+      assert [%{replenishment: %{"onion" => 400}}] = day_closed(events)
+      assert state.market.stock["onion"] == 1_600
     end
 
     test "the evolver adds the recorded replenishment to market stock and resets the day" do
