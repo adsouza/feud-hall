@@ -142,15 +142,16 @@ defmodule FeudHall.Domain.Hall.Settlement do
   # A simulated diner decides at service from the appetite drawn at arrival:
   # an eligible, affordable dessert is accepted in the same batch (the quote's
   # deadline binds); otherwise the visit ends with no offer window.
-  defp simulated_dessert_decision(state, visit, eligible?) do
-    with true <- eligible? and visit.dessert_appetite?,
-         {:ok, [accepted]} <- Admission.accept_dessert(state, visit, nil, "DS:" <> visit.id) do
-      [accepted]
-    else
-      _ ->
-        declined = %{type: :dessert_declined, visit_id: visit.id}
-        [declined, finalize_event(Evolver.evolve(state, declined), visit, :completed)]
-    end
+  defp simulated_dessert_decision(state, visit, true) when visit.dessert_appetite? do
+    # Eligibility just quoted this exact state, so acceptance must succeed; an
+    # error here is a bug and must not be swallowed as a decline.
+    {:ok, [accepted]} = Admission.accept_dessert(state, visit, nil, "DS:" <> visit.id)
+    [accepted]
+  end
+
+  defp simulated_dessert_decision(state, visit, _eligible?) do
+    declined = %{type: :dessert_declined, visit_id: visit.id}
+    [declined, finalize_event(Evolver.evolve(state, declined), visit, :completed)]
   end
 
   # A served main unlocks one optional same-stall dessert only when it can be

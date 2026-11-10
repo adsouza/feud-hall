@@ -87,6 +87,35 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       Oracle.assert_settled!(state, events)
     end
 
+    test "a simulated visit's accepted dessert still in the kitchen at 03:00 is cancelled; the served main keeps its score" do
+      # An accepted dessert always quotes to finish before 03:00, so it is only
+      # unfinished at the cutoff if the counter slows after acceptance (as in
+      # automatic_kitchen_test's cleaning case).
+      w = stocked_world() |> advance_hall(@three - 20 * Clock.minute())
+      w = simulated_visit(w, "d1", "bean_tacos", nil, "unrestricted", 10_000, true)
+      w = serve_tray(w, tray_id("visit-d1"))
+      {state, log} = w
+      vid = visit_id("visit-d1")
+      assert state.visits[vid].dessert == :accepted
+      dessert_id = state.visits[vid].dessert_order
+      assert state.now < @three
+
+      w = {put_in(state, [:catalog, :rules, :handover_ms], 30 * Clock.minute()), log}
+      w = advance_hall(w, @three - Clock.ratio())
+      {before, _} = w
+      assert before.visits[vid].status == :active
+      assert before.orders[dessert_id].status != :served
+
+      {state, events} = advance_hall(w, @three)
+      assert state.orders[dessert_id].status == :cancelled
+      assert state.orders[dessert_id].cancel_reason == :cleaning
+      assert Enum.any?(events, &(&1.type == :dessert_cancelled and &1.reason == :cleaning))
+      assert state.visits[vid].outcome.reason == :cleaning
+      assert state.visits[vid].outcome.score == 10_000
+      assert state.visits[vid].outcome.competitive
+      Oracle.assert_settled!(state, events)
+    end
+
     test "no dessert is offered when its work cannot finish before the cutoff" do
       # Served at 02:53: dessert work (seven minutes) would end exactly at 03:00.
       w = stocked_world() |> advance_hall(@three - 15 * Clock.minute())

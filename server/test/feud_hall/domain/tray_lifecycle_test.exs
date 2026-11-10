@@ -185,6 +185,24 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
              )
   end
 
+  test "a guest declining a real dessert offer finalizes the visit without penalty", %{world: w} do
+    w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "g1", "bean_tacos")
+    w = serve_tray(w, tray_id("g1"))
+    vid = visit_id("g1")
+    {state, _} = w
+    assert state.visits[vid].dessert == :offered
+
+    w = run!(w, {:decline_dessert, %{visit_id: vid}}, {:principal, "gina"}, "decline")
+    {state, events} = w
+    visit = state.visits[vid]
+    assert visit.status == :finalized
+    assert visit.dessert == :declined
+    assert visit.outcome.reason == :completed
+    assert visit.outcome.score == 10_000
+    assert Enum.map(visit.outcome.components, & &1.kind) == [:main]
+    Oracle.assert_settled!(state, events)
+  end
+
   test "an unaccepted dessert offer times out after 30 available-service seconds", %{world: w} do
     w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "d1", "bean_tacos")
     w = serve_tray(w, tray_id("d1"))
