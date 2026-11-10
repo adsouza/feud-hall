@@ -1,0 +1,1 @@
+{"e":{"cuisine":"mexican","name":"NPC budget","npc":{"next_slot_at":3600000,"profile_id":"budget","rng":9881595845425798720},"owner":"budget","owner_kind":{"$a":"npc"},"restaurant_id":"npc-budget","stall_id":"s041","starter_recipe":"bean_tacos","type":{"$a":"restaurant_created"}},"v":1}

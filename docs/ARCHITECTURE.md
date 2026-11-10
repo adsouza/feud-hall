@@ -1015,9 +1015,11 @@ Implementation decisions within the contracts above:
   runs cannot double-count. `PostgresEventStore.rebuild_projections/1` and
   `Postgres.DailyActivityProjector.rebuild/1` recompute derived tables from the
   log.
-- **Snapshots, evolution 2.** A snapshot encodes the hall and control states at
+- **Snapshots, evolution 3.** A snapshot encodes the hall and control states at
   a position and is accepted only for the current evolution version; version 1
-  (hall only) is rejected as incompatible. Recovery uses only verified
+  (hall only) and version 2 (before the shared simulation's layout, seed, NPCs,
+  market requests, stall counters, order stage fields, demand bookkeeping and
+  simulated-arrival stats) are rejected as incompatible. Recovery uses only verified
   snapshots, skips one beyond the store head, and falls back to older ones or
   genesis. Snapshots never justify skipping history that fails to replay.
 - **Unavailable storage.** On PostgreSQL, connection errors (and lock timeouts,

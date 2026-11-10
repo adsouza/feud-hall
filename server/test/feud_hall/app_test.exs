@@ -15,4 +15,75 @@ defmodule FeudHall.AppTest do
     assert :ok = FeudHall.App.preload_modules()
     assert Enum.reject(modules, &:code.is_loaded/1) == []
   end
+
+  # The two-VM probe: what one VM writes, a freshly started VM must decode with `[:safe]`. A mid-day
+  # hall (kitchen, counter, market requests, NPCs, demand) and receipts of an accepted and a rejected
+  # command carry atoms from every domain module, so decoding depends on those modules being loaded
+  # first. The child VM never starts the application; it only runs the preload.
+  describe "a freshly started VM" do
+    alias FeudHall.Application.CommandWorkflow
+    alias FeudHall.Domain.Control
+    alias FeudHall.Domain.Content.SliceCatalog
+    alias FeudHall.Infrastructure.{InMemoryEventStore, Snapshot}
+
+    defp receipts do
+      {:ok, rt} = CommandWorkflow.open(InMemoryEventStore, InMemoryEventStore.new())
+      env = fn id, actor, command -> %{command_id: id, actor: actor, command: command} end
+      init = env.("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h", catalog: SliceCatalog.catalog()}})
+      {:accepted, accepted, rt} = CommandWorkflow.execute(rt, init)
+      bad = env.("bad", {:principal, "alice"}, {:open_stall, %{stall_id: "nope"}})
+      {:rejected, rejected, _rt} = CommandWorkflow.execute(rt, bad)
+      [accepted, rejected]
+    end
+
+    defp child(path, preload?) do
+      ebin = :feud_hall |> :code.lib_dir() |> Path.join("ebin")
+
+      script = """
+      if #{preload?} do
+        :ok = Application.load(:feud_hall)
+        :ok = FeudHall.App.preload_modules()
+      end
+
+      {snapshot, receipts} = :erlang.binary_to_term(File.read!(#{inspect(path)}))
+      loaded = FeudHall.Infrastructure.Snapshot.load(snapshot)
+
+      receipts =
+        try do
+          {:ok, :erlang.binary_to_term(receipts, [:safe])}
+        rescue
+          ArgumentError -> {:error, :unknown_atom}
+        end
+
+      IO.write(:erlang.term_to_binary({loaded, receipts}) |> Base.encode64())
+      """
+
+      {out, 0} = System.cmd(System.find_executable("elixir"), ["-pa", ebin, "-e", script], stderr_to_stdout: true)
+      out |> String.trim() |> Base.decode64!() |> :erlang.binary_to_term()
+    end
+
+    setup do
+      {hall, _log} = FeudHall.EventFixtureScenarios.world()
+      control = Control.replay([%{type: :availability_started, epoch_id: "e1"}], nil)
+      snapshot = Snapshot.take(%{hall: hall, control: control}, 7)
+      receipts = receipts()
+      dir = Path.join(System.tmp_dir!(), "feud_hall_two_vm_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      path = Path.join(dir, "terms.bin")
+      File.write!(path, :erlang.term_to_binary({snapshot, :erlang.term_to_binary(receipts)}))
+      on_exit(fn -> File.rm_rf!(dir) end)
+      %{path: path, hall: hall, control: control, receipts: receipts}
+    end
+
+    test "decodes a mid-day snapshot and receipts once the application's modules are preloaded", ctx do
+      assert {{:ok, %{position: 7, state: %{hall: hall, control: control}}}, {:ok, receipts}} = child(ctx.path, true)
+      assert hall == ctx.hall
+      assert control == ctx.control
+      assert receipts == ctx.receipts
+    end
+
+    test "without the preload the same bytes are refused, which is what the preload prevents", ctx do
+      assert {{:error, :incompatible_snapshot}, {:error, :unknown_atom}} = child(ctx.path, false)
+    end
+  end
 end

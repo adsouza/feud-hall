@@ -3,9 +3,10 @@ defmodule FeudHall.Application.RecoveryTest do
   use ExUnit.Case, async: false
 
   alias FeudHall.Application.{CommandWorkflow, Recovery}
-  alias FeudHall.Domain.{Control, Hall}
+  alias FeudHall.Domain.{Clock, Control, Hall}
   alias FeudHall.Domain.Content.SliceCatalog
-  alias FeudHall.Infrastructure.{InMemoryEventStore, PostgresEventStore, Repo, Snapshot}
+  alias FeudHall.Domain.Hall.Invariants
+  alias FeudHall.Infrastructure.{HallAuthority, InMemoryEventStore, ManualClock, PostgresEventStore, Repo, Snapshot}
 
   @scope "hall:test"
   @authority {:system, :authority}
@@ -139,6 +140,27 @@ defmodule FeudHall.Application.RecoveryTest do
     :crypto.hash(:sha256, body) <> body
   end
 
+  # An evolution 2 snapshot as the previous release wrote it: the hall state lacks everything the shared
+  # simulation added (layout, seed, NPCs, market requests, stall counters, stage fields, demand
+  # bookkeeping, simulated-arrival stats). Loading it would crash the evolver on the next event.
+  defp evolution_2_snapshot(rt) do
+    hall =
+      rt.state
+      |> Map.drop([:layout, :seed, :npcs])
+      |> update_in([:market], &Map.drop(&1, [:requests, :by_key, :next_clear_at]))
+      |> update_in([:demand], &Map.drop(&1, [:observed_ms, :next_day_at, :acc_millis, :acc_at, :arrival_seq]))
+      |> update_in([:stats], &Map.drop(&1, [:arrivals_simulated, :admitted_simulated, :left_simulated]))
+      |> update_in([:stalls], &Map.new(&1, fn {id, stall} -> {id, Map.delete(stall, :counter)} end))
+
+    body =
+      :erlang.term_to_binary(
+        %{position: rt.position, evolution: 2, state: %{hall: hall, control: rt.control}},
+        [:deterministic]
+      )
+
+    :crypto.hash(:sha256, body) <> body
+  end
+
   defp resumed(state, id), do: Hall.replay([%{type: :hall_resumed, recovery_id: id}], state)
 
   defp batches_after(mod, store, position) do
@@ -243,6 +265,22 @@ defmodule FeudHall.Application.RecoveryTest do
                  {older, :incompatible_snapshot}
                ]
 
+        assert report.tail_batches == rt.position
+        assert recovered.state == resumed(rt.state, "recovery:boot:1")
+      end
+
+      test "an evolution 2 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
+        assert Snapshot.evolution_version() == 3
+
+        rt = live({mod, store})
+        {rt, old} = save_snapshot(rt, evolution_2_snapshot(rt), rt.position)
+        assert Snapshot.evolution_of(evolution_2_snapshot(rt)) == 2
+        assert {:error, :incompatible_snapshot} = Snapshot.load(evolution_2_snapshot(rt))
+        rt = run(rt, later_commands())
+
+        assert {:ok, recovered, report} = recover_from_snapshots(mod, rt.store, "b")
+        assert report.snapshot == :genesis
+        assert report.skipped == [{old, :incompatible_snapshot}]
         assert report.tail_batches == rt.position
         assert recovered.state == resumed(rt.state, "recovery:boot:1")
       end
@@ -364,6 +402,142 @@ defmodule FeudHall.Application.RecoveryTest do
         assert tail == rt.position - snap_position
         refute_received {:side_effect, _}
       end
+    end
+  end
+
+  # --- a hall recovered mid-day --------------------------------------------------
+
+  describe "a hall with NPCs, customers and pending purchases" do
+    # Service milliseconds in a quarter of a game hour.
+    @quarter div(Clock.hour(), 4 * Clock.ratio())
+
+    defp start_hall(store, owner) do
+      {:ok, clock} = start_supervised({ManualClock, 0}, id: {:clock, owner})
+
+      opts = [
+        store_mod: InMemoryEventStore,
+        store: store,
+        owner: owner,
+        scope: @scope,
+        clock: {ManualClock, clock},
+        tick_ms: :manual,
+        max_gap_ms: 10 * div(Clock.hour(), Clock.ratio()),
+        # Only the snapshot this test takes: the authority never takes its own.
+        snapshot_every_events: 1_000_000_000,
+        snapshot_every_service_ms: 1_000_000_000_000
+      ]
+
+      pid = start_supervised!(Supervisor.child_spec({HallAuthority, opts}, id: {:authority, owner}))
+      %{pid: pid, clock: clock}
+    end
+
+    defp tick(%{pid: pid, clock: clock}, ms) do
+      ManualClock.advance(clock, ms)
+      assert :ok = HallAuthority.tick(pid)
+    end
+
+    # Every hall event after `position`, in order, without the recovery marker.
+    defp hall_events_after(%{pid: pid}, position) do
+      {mod, store} = HallAuthority.store(pid)
+      {:ok, batches} = mod.read_from(store, position)
+      batches |> Enum.flat_map(& &1.events) |> Enum.reject(&(&1.type == :hall_resumed))
+    end
+
+    defp live_orders(hall),
+      do:
+        hall.orders
+        |> Map.values()
+        |> Enum.filter(&(&1.status in [:queued_prep, :prep, :queued_finish, :finish, :ready]))
+
+    test "recovery from a snapshot taken mid-day reproduces the live state and then the same events as an uninterrupted run" do
+      a = start_hall(InMemoryEventStore.new(), "node-a")
+
+      init =
+        env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+
+      assert {:accepted, _} = HallAuthority.execute(a.pid, init)
+
+      # Ten game hours of NPC planning and diners, then two game minutes into the next hour: the NPCs
+      # have just filed that hour's purchase requests and the market has not yet cleared them.
+      for _ <- 1..39, do: tick(a, @quarter)
+      tick(a, @quarter + 5_000)
+
+      mid = HallAuthority.state(a.pid)
+      assert rem(mid.hall.now, Clock.hour()) == 120_000
+      assert map_size(mid.hall.market.requests) > 0
+      assert live_orders(mid.hall) != []
+      assert mid.hall.demand.arrival_seq > 0 and mid.hall.demand.next_arrival_at > mid.hall.now
+      assert mid.hall.stats.arrivals_simulated > 0
+      assert map_size(mid.hall.npcs) == 3
+      assert Enum.all?(mid.hall.npcs, fn {_op, npc} -> npc.next_slot_at == 11 * Clock.hour() end)
+      assert Invariants.check(mid.hall) == :ok
+
+      snapshot = Snapshot.take(%{hall: mid.hall, control: mid.control}, mid.position)
+
+      # The hall carries on past the snapshot: requests clear, diners are served.
+      for ms <- [2_000, 3_000, @quarter], do: tick(a, ms)
+      live = HallAuthority.state(a.pid)
+      assert live.position > mid.position
+      assert live.hall.market.requests == %{}
+
+      # The same log in stores of their own: with the mid-day snapshot (and the tail after it), with a
+      # snapshot at the head (no tail, so nothing replayed can mask what the snapshot dropped), and with none.
+      {mod, head_store} = HallAuthority.store(a.pid)
+      head_snapshot = Snapshot.take(%{hall: live.hall, control: live.control}, live.position)
+
+      with_snapshot = fn store, body, position ->
+        {:ok, store, id} = mod.save_snapshot(store, position, body)
+        {:ok, store} = mod.mark_snapshot_verified(store, id)
+        store
+      end
+
+      mid_store = with_snapshot.(head_store, snapshot, mid.position)
+      head_snapshot_store = with_snapshot.(head_store, head_snapshot, live.position)
+
+      assert {:ok, _, %{snapshot: snapshot_position, tail_batches: tail}} =
+               recover_from_snapshots(mod, mid_store, "probe")
+
+      assert snapshot_position == mid.position
+      assert tail == live.position - mid.position
+
+      b = start_hall(mid_store, "node-b")
+      c = start_hall(head_store, "node-c")
+      d = start_hall(head_snapshot_store, "node-d")
+      [b_state, c_state, d_state] = for hall <- [b, c, d], do: HallAuthority.state(hall.pid)
+
+      assert b_state.recovery.snapshot == mid.position
+      assert c_state.recovery.snapshot == :genesis
+      assert c_state.recovery.tail_batches == live.position
+      assert d_state.recovery.snapshot == live.position
+      assert d_state.recovery.tail_batches == 0
+
+      # Live, genesis replay, snapshot-tail and head-snapshot state agree at the same committed position.
+      resumed_live = resumed(live.hall, "recovery:node-a:1")
+      assert b_state.hall == resumed_live
+      assert c_state.hall == resumed_live
+      assert d_state.hall == resumed_live
+      assert b_state.control.current_epoch == "node-b:2"
+      assert Invariants.check(b_state.hall) == :ok
+
+      # Afterwards all four, driven identically across the next NPC slot, produce identical events.
+      halls = [a, b, c, d]
+      for ms <- [@quarter, @quarter, @quarter, @quarter + 7_000], hall <- halls, do: tick(hall, ms)
+
+      from_live = hall_events_after(a, live.position)
+
+      recovered =
+        for {hall, state} <- [{b, b_state}, {c, c_state}, {d, d_state}],
+            do: hall_events_after(hall, state.position)
+
+      types = from_live |> Enum.map(& &1.type) |> MapSet.new()
+
+      for type <- ~w(npc_planned purchase_requested market_cleared diner_arrived clock_advanced)a,
+          do: assert(type in types, "the continuation never produced #{type}")
+
+      for events <- recovered, do: assert(events == from_live)
+
+      [final | finals] = for hall <- halls, do: Map.delete(HallAuthority.state(hall.pid).hall, :last_recovery_id)
+      for other <- finals, do: assert(other == final)
     end
   end
 

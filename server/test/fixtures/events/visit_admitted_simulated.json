@@ -1,0 +1,1 @@
+{"e":{"budget":10000,"dessert_appetite?":true,"principal":"diner:fx-dessert","requirement":{"carb_ceiling_mg":null,"excludes":[],"profile_id":"unrestricted"},"restaurant_id":"r1","source":{"$a":"simulated"},"stall_id":"s001","type":{"$a":"visit_admitted"},"visit_id":"V:visit-fx-dessert"},"v":1}

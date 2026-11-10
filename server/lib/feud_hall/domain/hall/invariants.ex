@@ -19,9 +19,20 @@ defmodule FeudHall.Domain.Hall.Invariants do
       negative, and the next clearing lies after the clock;
     * the arrival accumulator: the PRNG state is a 64-bit integer, the carried
       remainder is less than one arrival, the day's arrivals do not exceed its
-      accumulated quota, and the next arrival lies after the clock;
-    * each NPC operator owns the restaurant its record names and its PRNG
-      state is a 64-bit integer.
+      accumulated quota, the recorded next arrival is the one the accumulator
+      implies and lies after the clock, and the next midnight lies after it;
+    * simulated arrival counts: `arrivals_simulated` is the admitted plus the
+      left arrivals, the day's `arrival_seq` does not exceed it, and the
+      admitted ones do not exceed the hall's simulated visits;
+    * each NPC operator owns the restaurant its record names, its PRNG state is
+      a 64-bit integer, and its next planning slot is a positive whole game
+      hour. A slot already reached is legitimate (planning lags the clock after
+      a crash or a planner that gave up on the slot), so it is not an error;
+    * kitchen, for halls whose catalog has kitchen rules: stations in use never
+      exceed a stall's capacity, an order at a station has an integer finish
+      time not before the clock, and a stall's counter holds an existing tray
+      or dessert whose components are all ready, finishing no earlier than the
+      clock, on no other counter.
 
   Problems are terms naming the broken invariant: `{restaurant_id, problem}`
   for restaurant checks, `{:missing_tray_component, tray_id, order_id}`,
@@ -29,17 +40,26 @@ defmodule FeudHall.Domain.Hall.Invariants do
   `{:dangling_request_index, id}`, `{:request_for_unknown_restaurant, id}`,
   `{:negative_market_stock, product}`, `{:market_clearing_overdue, at}`,
   `{:bad_demand_rng, rng}`, `{:arrival_accumulator_out_of_range, acc_millis}`,
-  `{:arrivals_beyond_quota, seq}`, `{:arrival_overdue, at}`, `{:npc_without_restaurant, operator}`,
-  and `{:bad_npc_rng, operator}`.
+  `{:arrivals_beyond_quota, seq}`, `{:arrival_overdue, at}`,
+  `{:arrival_schedule_mismatch, recorded, implied}`, `{:day_close_overdue, at}`,
+  `{:simulated_stats_mismatch, arrivals, admitted_plus_left}`,
+  `{:arrival_seq_beyond_stats, seq}`, `{:admitted_beyond_visits, admitted, visits}`,
+  `{:npc_without_restaurant, operator}`, `{:bad_npc_rng, operator}`,
+  `{:bad_npc_slot, operator}`, `{:stage_over_capacity, stall_id, :prep | :finish}`,
+  `{:stage_deadline_missing, order_id}`, `{:stage_overdue, order_id}`,
+  `{:counter_item_missing, stall_id}`, `{:counter_item_not_ready, stall_id}`,
+  `{:counter_overdue, stall_id}`, and `{:item_on_two_counters, item}`.
   """
 
-  alias FeudHall.Domain.Clock
+  alias FeudHall.Domain.{Clock, Demand, Market}
 
   @spec check(map() | nil) :: :ok | {:error, [term()]}
   def check(nil), do: :ok
 
   def check(state) do
-    case restaurants(state) ++ trays(state) ++ access(state) ++ market(state) ++ arrivals(state) ++ npcs(state) do
+    case restaurants(state) ++
+           trays(state) ++
+           access(state) ++ market(state) ++ arrivals(state) ++ stats(state) ++ npcs(state) ++ kitchen(state) do
       [] -> :ok
       problems -> {:error, problems}
     end
@@ -130,35 +150,119 @@ defmodule FeudHall.Domain.Hall.Invariants do
   # States recorded before the arrival stream carry no accumulator.
   defp arrivals(%{demand: %{acc_millis: acc, arrival_seq: seq, hour_quotas_millis: quotas} = demand} = state) do
     rng = demand.rng
-    at = demand.next_arrival_at
+    at = Map.get(demand, :next_arrival_at)
+    implied = Demand.next_arrival_at(demand)
 
     [
-      {is_integer(rng) and rng >= 0 and rng < 0x1_0000_0000_0000_0000, {:bad_demand_rng, rng}},
+      {prng?(rng), {:bad_demand_rng, rng}},
       {is_integer(acc) and acc >= 0 and acc < 1000, {:arrival_accumulator_out_of_range, acc}},
       {is_integer(seq) and seq >= 0 and 1000 * seq <= acc + Enum.sum(quotas), {:arrivals_beyond_quota, seq}},
-      {at == nil or at > state.now, {:arrival_overdue, at}}
+      {at == nil or at > state.now, {:arrival_overdue, at}},
+      {at == implied, {:arrival_schedule_mismatch, at, implied}},
+      {not Demand.closes_days?(state.catalog) or demand.next_day_at > state.now,
+       {:day_close_overdue, demand.next_day_at}}
     ]
-    |> Enum.flat_map(fn {ok, problem} -> if ok, do: [], else: [problem] end)
+    |> problems()
   end
 
   defp arrivals(_state), do: []
 
-  # A planning slot may lie in the past (a plan not yet committed is due), so only identity and PRNG are checked.
+  # Simulated arrivals are counted both in the cumulative stats and in the day's sequence.
+  defp stats(%{stats: stats, demand: demand, visits: visits}) do
+    arrived = Map.get(stats, :arrivals_simulated)
+    admitted = Map.get(stats, :admitted_simulated)
+    left = stats |> Map.get(:left_simulated, %{}) |> Map.values() |> Enum.sum()
+    simulated_visits = Enum.count(visits, fn {_id, v} -> v.source == :simulated end)
+
+    [
+      {arrived == admitted + left, {:simulated_stats_mismatch, arrived, admitted + left}},
+      {Map.get(demand, :arrival_seq, 0) <= arrived, {:arrival_seq_beyond_stats, demand.arrival_seq}},
+      {admitted <= simulated_visits, {:admitted_beyond_visits, admitted, simulated_visits}}
+    ]
+    |> problems()
+  end
+
+  defp stats(_state), do: []
+
+  defp prng?(rng), do: is_integer(rng) and rng >= 0 and rng < 0x1_0000_0000_0000_0000
+
+  defp problems(checks), do: for({false, problem} <- checks, do: problem)
+
+  # A planning slot may lie in the past (a plan not yet committed is due), so only its form is checked.
   defp npcs(state) do
     state
     |> Map.get(:npcs, %{})
     |> Enum.sort()
     |> Enum.flat_map(fn {op, npc} ->
-      [
+      slot = npc.next_slot_at
+
+      problems([
         {state.owners[{:npc, op}] == npc.restaurant_id and Map.has_key?(state.restaurants, npc.restaurant_id),
          {:npc_without_restaurant, op}},
-        {is_integer(npc.rng) and npc.rng >= 0 and npc.rng < 0x1_0000_0000_0000_0000, {:bad_npc_rng, op}}
-      ]
-      |> Enum.flat_map(fn {ok, problem} -> if ok, do: [], else: [problem] end)
+        {prng?(npc.rng), {:bad_npc_rng, op}},
+        {is_integer(slot) and slot > 0 and rem(slot, Clock.hour()) == 0, {:bad_npc_slot, op}}
+      ])
     end)
   end
 
-  defp clears?(state), do: (get_in(state.catalog, [:rules, :market, :clear_every_hall_ms]) || 0) > 0
+  # Halls recorded before the automatic kitchen carry no kitchen rules and no stage bookkeeping.
+  defp kitchen(%{catalog: %{rules: %{kitchen: %{prep_stations: prep_n, finish_stations: finish_n}}}} = state) do
+    stationed = Enum.filter(Map.values(state.orders), &(&1.status in [:prep, :finish]))
+    by_stall = Enum.group_by(stationed, &get_in(state, [:visits, &1.visit, :stall]))
+
+    capacity =
+      for {sid, orders} <- Enum.sort(by_stall),
+          {stage, limit} <- [prep: prep_n, finish: finish_n],
+          Enum.count(orders, &(&1.status == stage)) > limit,
+          do: {:stage_over_capacity, sid, stage}
+
+    deadlines =
+      stationed
+      |> Enum.sort_by(& &1.id)
+      |> Enum.flat_map(fn o ->
+        cond do
+          not is_integer(o.stage_done_at) -> [{:stage_deadline_missing, o.id}]
+          o.stage_done_at < state.now -> [{:stage_overdue, o.id}]
+          true -> []
+        end
+      end)
+
+    capacity ++ deadlines ++ counters(state)
+  end
+
+  defp kitchen(_state), do: []
+
+  defp counters(state) do
+    held = for {sid, %{counter: %{} = counter}} <- Enum.sort(state.stalls), do: {sid, counter}
+
+    items =
+      Enum.flat_map(held, fn {sid, counter} ->
+        problems([
+          {item_exists?(state, counter.item), {:counter_item_missing, sid}},
+          {not item_exists?(state, counter.item) or item_ready?(state, counter.item), {:counter_item_not_ready, sid}},
+          {is_integer(counter.done_at) and counter.done_at >= state.now, {:counter_overdue, sid}}
+        ])
+      end)
+
+    twice =
+      held
+      |> Enum.frequencies_by(fn {_sid, counter} -> counter.item end)
+      |> Enum.sort()
+      |> Enum.flat_map(fn {item, n} -> if n > 1, do: [{:item_on_two_counters, item}], else: [] end)
+
+    items ++ twice
+  end
+
+  defp item_exists?(state, {:tray, id}), do: Map.has_key?(state.trays, id)
+  defp item_exists?(state, {:dessert, id}), do: match?(%{kind: :dessert}, Map.get(state.orders, id))
+  defp item_exists?(_state, _other), do: false
+
+  defp item_ready?(state, {:tray, id}),
+    do: Enum.all?(state.trays[id].components, &(get_in(state, [:orders, &1, :status]) == :ready))
+
+  defp item_ready?(state, {:dessert, id}), do: state.orders[id].status == :ready
+
+  defp clears?(state), do: Market.clearing?(state.catalog)
 
   defp access(state) do
     if state.access == :cleaning == Clock.cleaning?(state.now),

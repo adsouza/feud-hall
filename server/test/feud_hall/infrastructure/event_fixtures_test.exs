@@ -1,0 +1,75 @@
+defmodule FeudHall.Infrastructure.EventFixturesTest do
+  # Golden serialized events (`test/fixtures/events/*.json`): committed bytes produced once from real
+  # domain events by `FeudHall.EventFixtureScenarios.write!/1`. They pin the wire format, so a codec or
+  # event-shape change that would break reading stored history fails here instead of at recovery.
+  use ExUnit.Case, async: true
+
+  alias FeudHall.Domain.Hall.Evolver
+  alias FeudHall.EventFixtureScenarios
+  alias FeudHall.Infrastructure.EventCodec
+
+  @dir Path.expand("../../fixtures/events", __DIR__)
+
+  # Every event type the shared simulation added (Tasks 1-15), by fixture name.
+  @added ~w(
+    stage_started_prep stage_started_finish stage_completed_prep stage_completed_finish handover_started
+    purchase_requested purchase_request_cancelled market_cleared day_closed
+    diner_arrived_admitted diner_arrived_left npc_planned
+  )
+  # Changed shapes of older events.
+  @changed ~w(hall_initialized clock_advanced_operating tray_accepted dessert_accepted restaurant_created_npc visit_admitted_simulated)
+  # Milestone 1 / Project A events the decider no longer emits; they must keep decoding and evolving.
+  @historical ~w(stock_purchased preparation_started preparation_completed)
+
+  @entries Map.new(EventFixtureScenarios.entries(), &{&1.name, &1})
+
+  defp files, do: @dir |> File.ls!() |> Enum.filter(&String.ends_with?(&1, ".json")) |> Enum.sort()
+
+  test "there is exactly one fixture per added, changed and historical event shape" do
+    assert files() == Enum.map(Enum.sort(@added ++ @changed ++ @historical), &(&1 <> ".json"))
+    assert @entries |> Map.keys() |> Enum.sort() == Enum.sort(@added ++ @changed ++ @historical)
+  end
+
+  test "every event type the evolver newly handles has a fixture" do
+    types =
+      files()
+      |> Enum.map(&(@dir |> Path.join(&1) |> File.read!() |> EventCodec.decode() |> elem(1) |> Map.fetch!(:type)))
+      |> MapSet.new()
+
+    for type <- ~w(stage_started stage_completed handover_started purchase_requested purchase_request_cancelled
+                   market_cleared day_closed diner_arrived npc_planned stock_purchased preparation_started
+                   preparation_completed)a do
+      assert type in types, "no golden fixture for #{type}"
+    end
+  end
+
+  for name <- @added ++ @changed ++ @historical do
+    describe name do
+      test "decodes, re-encodes to the same bytes, and evolves onto its state" do
+        bytes = File.read!(Path.join(@dir, unquote(name) <> ".json"))
+        assert {:ok, event} = EventCodec.decode(bytes)
+        assert EventCodec.encode!(event) == bytes
+
+        %{pre: pre} = Map.fetch!(@entries, unquote(name))
+        evolved = Evolver.evolve(pre, event)
+        assert evolved != pre or event.type in [:stock_purchased, :hall_initialized]
+      end
+    end
+  end
+
+  test "every event of the whole scenario round-trips, so the allowlist covers what the domain emits" do
+    {_state, log} = EventFixtureScenarios.world()
+    assert length(log) > 200
+    assert log |> Enum.map(& &1.type) |> Enum.uniq() |> length() >= 25
+
+    for event <- log do
+      assert {:ok, ^event} = event |> EventCodec.encode!() |> EventCodec.decode()
+    end
+  end
+
+  test "an event naming an atom outside the allowlist is refused rather than skipped" do
+    bytes = File.read!(Path.join(@dir, "npc_planned.json"))
+    tampered = String.replace(bytes, "npc_planned", "launch_missiles")
+    assert {:error, {:unknown_atom, "launch_missiles"}} = EventCodec.decode(tampered)
+  end
+end

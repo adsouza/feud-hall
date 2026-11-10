@@ -140,16 +140,17 @@ defmodule FeudHall.Domain.Hall.Advance do
   defp reopening(_state), do: []
 
   # Class 6: each midnight, once. Halls recorded without demand rules have none.
-  defp day_boundary(%{demand: %{next_day_at: at}, catalog: %{rules: %{demand: %{operating_hours_ms: _}}}}),
-    do: [{at, "day", {:day_close}}]
+  defp day_boundary(%{demand: %{next_day_at: at}, catalog: catalog}) do
+    if Demand.closes_days?(catalog), do: [{at, "day", {:day_close}}], else: []
+  end
 
   defp day_boundary(_state), do: []
 
   # Class 7: every `clear_every_hall_ms`, cleaning included, whether or not
   # requests are pending. Halls recorded without market rules never clear.
-  defp market_clearing(%{market: %{next_clear_at: at}, catalog: %{rules: %{market: %{clear_every_hall_ms: n}}}})
-       when is_integer(n) and n > 0,
-       do: [{at, "market", {:market_clear}}]
+  defp market_clearing(%{market: %{next_clear_at: at}, catalog: catalog}) do
+    if Market.clearing?(catalog), do: [{at, "market", {:market_clear}}], else: []
+  end
 
   defp market_clearing(_state), do: []
 

@@ -23,6 +23,17 @@ defmodule FeudHall.Domain.Market do
   alias FeudHall.Domain.{Inventory, Money}
 
   @doc """
+  Whether the hall clears the market at all: its catalog's `clear_every_hall_ms` is a positive
+  integer. The clock advance and the recovery checks both use this one predicate.
+  """
+  def clearing?(catalog) do
+    case get_in(catalog, [:rules, :market, :clear_every_hall_ms]) do
+      n when is_integer(n) and n > 0 -> true
+      _ -> false
+    end
+  end
+
+  @doc """
   Adds `request` under `request_id`, replacing any pending request from the same
   restaurant for the same product.
   """

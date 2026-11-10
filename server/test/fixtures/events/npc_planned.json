@@ -1,0 +1,1 @@
+{"e":{"next_slot_at":7200000,"operator":"budget","outcomes":[{"action":{"$a":"set_menu_price"},"result":{"$a":"accepted"}}],"rng":5,"slot":3600000,"type":{"$a":"npc_planned"}},"v":1}

@@ -49,6 +49,13 @@ defmodule FeudHall.Domain.Demand do
   # No dietary restriction: no excluded origins and no carbohydrate ceiling.
   @unrestricted %{profile_id: nil, excludes: [], carb_ceiling_mg: nil}
 
+  @doc """
+  Whether the hall closes days at all: its catalog carries demand rules. Halls recorded
+  before the demand system never close one. The clock advance and the recovery checks
+  both use this one predicate.
+  """
+  def closes_days?(catalog), do: match?(%{rules: %{demand: %{operating_hours_ms: _}}}, catalog)
+
   @doc "The counters of a day with nothing in it yet."
   def blank_day, do: %{arrivals: 0, admitted: 0, left: %{}, trays_served: 0}
 
