@@ -248,7 +248,7 @@ defmodule FeudHall.Fixtures do
   def serve_tray(world, tray_id) do
     {state, _} = world
     world = advance_hall(world, ceil_to_tick(state.trays[tray_id].estimated_completion))
-    assert elem(world, 0).trays[tray_id].status == :served, "tray #{tray_id} was not served"
+    assert tray_status(world, tray_id) == :served, "tray #{tray_id} was not served"
     world
   end
 
@@ -256,9 +256,73 @@ defmodule FeudHall.Fixtures do
   def serve_dessert(world, order_id) do
     {state, _} = world
     world = advance_hall(world, ceil_to_tick(state.orders[order_id].estimated_completion))
-    assert elem(world, 0).orders[order_id].status == :served, "dessert #{order_id} was not served"
+    assert order_status(world, order_id) == :served, "dessert #{order_id} was not served"
     world
   end
+
+  # Finished visits, with their trays and orders, leave live hall state when they
+  # finalize; their facts stay in the log. These read a world's facts from the log.
+
+  @doc """
+  The `visit_finalized` event recorded for `visit_id` (its `reason`,
+  `components`, `score` and `competitive`), or `nil` while the visit is live.
+  """
+  def visit_outcome({_state, log}, visit_id),
+    do: log |> Enum.filter(&match?(%{type: :visit_finalized, visit_id: ^visit_id}, &1)) |> List.last()
+
+  @doc """
+  A tray's status: its live status while it is in state, otherwise `:served`
+  or `:cancelled` from the event that settled it (`nil` if there is none).
+  """
+  def tray_status({state, log}, tray_id) do
+    case state.trays[tray_id] do
+      %{status: status} ->
+        status
+
+      nil ->
+        last_fact(log, fn
+          %{type: :tray_served, tray_id: ^tray_id} -> :served
+          %{type: :tray_cancelled, tray_id: ^tray_id} -> :cancelled
+          _ -> nil
+        end)
+    end
+  end
+
+  @doc """
+  An order's status: its live work stage (or `:served` while its visit is
+  live) from state, otherwise `:served` or `:cancelled` from the tray or
+  dessert event that settled it (`nil` if there is none).
+  """
+  def order_status({state, log}, order_id) do
+    case state.orders[order_id] do
+      %{status: status} -> status
+      nil -> last_fact(log, &order_settlement(&1, order_id))
+    end
+  end
+
+  @doc "The reason recorded when `order_id` was cancelled (tray or dessert), or `nil`."
+  def order_cancel_reason({_state, log}, order_id) do
+    last_fact(log, fn
+      %{type: :tray_cancelled, components: cs, reason: reason} ->
+        if Enum.any?(cs, &(&1.order_id == order_id)), do: reason
+
+      %{type: :dessert_cancelled, order_id: ^order_id, reason: reason} ->
+        reason
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp order_settlement(%{type: :tray_served, components: cs}, id), do: if(component?(cs, id), do: :served)
+  defp order_settlement(%{type: :tray_cancelled, components: cs}, id), do: if(component?(cs, id), do: :cancelled)
+  defp order_settlement(%{type: :dessert_served, order_id: id}, id), do: :served
+  defp order_settlement(%{type: :dessert_cancelled, order_id: id}, id), do: :cancelled
+  defp order_settlement(_event, _id), do: nil
+
+  defp component?(components, id), do: Enum.any?(components, &(&1.order_id == id))
+
+  defp last_fact(log, fun), do: log |> Enum.map(fun) |> Enum.reject(&is_nil/1) |> List.last()
 
   def ceil_to_tick(hall_ms), do: div(hall_ms + Clock.ratio() - 1, Clock.ratio()) * Clock.ratio()
 

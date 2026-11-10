@@ -17,6 +17,13 @@ defmodule FeudHall.Domain.Hall.Invariants do
     * every tray component names an existing order; every order names an
       existing visit, and each visit's tray components and dessert order name
       that visit (an order replaced under a reused ID breaks this);
+    * live state holds only unfinished work: every tray belongs to the live
+      visit that holds it; no cancelled tray or order, and no served dessert,
+      is retained (each settles its visit's finalization in the same batch);
+      a served tray stays only while its visit's dessert is offered or
+      accepted; admitted visits are the finalized ones plus the live ones
+      (`stats.arrivals == stats.finalized_visits + live visits`); and the next
+      order sequence number lies above every live order's;
     * the access gate matches the cleaning calendar (`Clock.cleaning?/1`);
     * the market's pending purchase requests and their `{restaurant, product}`
       index agree, each names an existing restaurant, market stock is never
@@ -29,7 +36,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
       restaurant IDs;
     * simulated arrival counts: `arrivals_simulated` is the admitted plus the
       left arrivals, the day's `arrival_seq` does not exceed it, and the
-      admitted ones do not exceed the hall's simulated visits;
+      admitted ones do not exceed the hall's admitted visits;
     * each NPC operator owns the restaurant its record names, its PRNG state is
       a 64-bit integer, and its next planning slot is a positive whole game
       hour. A slot already reached is legitimate (planning lags the clock after
@@ -45,6 +52,9 @@ defmodule FeudHall.Domain.Hall.Invariants do
   `:storage_over_capacity`, and the batch problems),
   `{:missing_tray_component, tray_id, order_id}`,
   `{:order_without_visit, order_id}`, `{:visit_order_mismatch, visit_id, order_id}`,
+  `{:tray_without_visit, tray_id}`, `{:settled_tray_retained, tray_id}`,
+  `{:settled_order_retained, order_id}`, `{:visit_count_mismatch, admitted, finalized_plus_live}`,
+  `{:order_seq_behind, order_seq}`,
   `{:access_gate_mismatch, hall_ms}`, `{:unindexed_purchase_request, id}`,
   `{:dangling_request_index, id}`, `{:request_for_unknown_restaurant, id}`,
   `{:negative_market_stock, product}`, `{:market_clearing_overdue, at}`,
@@ -53,7 +63,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   `{:arrival_schedule_mismatch, recorded, implied}`, `{:day_close_overdue, at}`,
   `:bad_operating_record`,
   `{:simulated_stats_mismatch, arrivals, admitted_plus_left}`,
-  `{:arrival_seq_beyond_stats, seq}`, `{:admitted_beyond_visits, admitted, visits}`,
+  `{:arrival_seq_beyond_stats, seq}`, `{:admitted_beyond_visits, admitted, visits_admitted}`,
   `{:npc_without_restaurant, operator}`, `{:bad_npc_rng, operator}`,
   `{:bad_npc_slot, operator}`, `{:stage_over_capacity, stall_id, :prep | :finish}`,
   `{:stage_deadline_missing, order_id}`, `{:stage_overdue, order_id}`,
@@ -70,6 +80,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
     case restaurants(state) ++
            trays(state) ++
            orders(state) ++
+           retired(state) ++
            access(state) ++ market(state) ++ arrivals(state) ++ stats(state) ++ npcs(state) ++ kitchen(state) do
       [] -> :ok
       problems -> {:error, problems}
@@ -148,6 +159,40 @@ defmodule FeudHall.Domain.Hall.Invariants do
     orphans ++ mismatched
   end
 
+  # Finished work has left live state: only unfinished visits, their trays and
+  # their orders remain, and the order counter is ahead of every live order.
+  defp retired(state) do
+    trays =
+      Enum.flat_map(Enum.sort(state.trays), fn {tid, tray} ->
+        visit = Map.get(state.visits, tray.visit)
+
+        problems([
+          {match?(%{tray: ^tid}, visit), {:tray_without_visit, tid}},
+          {tray.status == :accepted or
+             (tray.status == :served and match?(%{dessert: d} when d in [:offered, :accepted], visit)),
+           {:settled_tray_retained, tid}}
+        ])
+      end)
+
+    orders =
+      for {oid, o} <- Enum.sort(state.orders),
+          o.status == :cancelled or (o.status == :served and o.kind == :dessert),
+          do: {:settled_order_retained, oid}
+
+    stats = Map.get(state, :stats, %{})
+    admitted = Map.get(stats, :arrivals, 0)
+    live = admitted - Map.get(stats, :finalized_visits, 0)
+    seq = Map.get(state, :order_seq)
+    top = state.orders |> Map.values() |> Enum.map(& &1.seq) |> Enum.max(fn -> -1 end)
+
+    trays ++
+      orders ++
+      problems([
+        {live == map_size(state.visits), {:visit_count_mismatch, admitted, admitted - live + map_size(state.visits)}},
+        {is_integer(seq) and seq > top, {:order_seq_behind, seq}}
+      ])
+  end
+
   defp visit_orders(state, visit) do
     tray = if visit.tray, do: state.trays |> Map.get(visit.tray, %{components: []}) |> Map.get(:components), else: []
     tray ++ List.wrap(visit.dessert_order)
@@ -211,17 +256,19 @@ defmodule FeudHall.Domain.Hall.Invariants do
   end
 
   # Simulated arrivals are counted both in the cumulative stats and in the day's sequence.
-  defp stats(%{stats: stats, demand: demand, visits: visits}) do
+  # Finished visits are no longer in state, so admitted simulated arrivals are
+  # bounded by every visit admitted (live or finalized), from the stats.
+  defp stats(%{stats: stats, demand: demand}) do
     # A missing count reads as zero, so a damaged state reports a mismatch rather than raising.
     arrived = Map.get(stats, :arrivals_simulated, 0)
     admitted = Map.get(stats, :admitted_simulated, 0)
     left = stats |> Map.get(:left_simulated, %{}) |> Map.values() |> Enum.sum()
-    simulated_visits = Enum.count(visits, fn {_id, v} -> v.source == :simulated end)
+    visits_admitted = Map.get(stats, :arrivals, 0)
 
     [
       {arrived == admitted + left, {:simulated_stats_mismatch, arrived, admitted + left}},
       {Map.get(demand, :arrival_seq, 0) <= arrived, {:arrival_seq_beyond_stats, demand.arrival_seq}},
-      {admitted <= simulated_visits, {:admitted_beyond_visits, admitted, simulated_visits}}
+      {admitted <= visits_admitted, {:admitted_beyond_visits, admitted, visits_admitted}}
     ]
     |> problems()
   end

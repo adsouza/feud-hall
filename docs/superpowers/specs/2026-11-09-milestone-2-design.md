@@ -441,13 +441,21 @@ live in the architecture's
   `@fallback_trays_per_day 10`) until a content pass moves them into the
   catalog. Safe for replay: planner output is recorded in `npc_planned` and its
   action events, and replay never reruns the planner.
-- **Finished work stays in live state (ruling R22).** Finalized visits and
-  their trays and orders stay in the hall state, and the advance scans them.
-  Measured: about 48 ms per idle wake-up and about 161 MB of state at 100,000
-  finished visits. This is a known scaling limit deferred to the start of
-  Project C: its first task removes finalized visits, trays and orders from
-  live state (or indexes live orders) and replaces `seq: map_size(state.orders)`
-  with a counter.
+- **Finished work leaves live state (ruling R22, then Task 20).** Ruling R22
+  first kept finalized visits, trays and orders in the hall state (measured: about
+  48 ms per idle wake-up and 161 MB of state at 100,000 finished visits) and
+  deferred the fix to Project C; the owner then had it done on this branch
+  (final-review finding I1). A visit's `visit_finalized` now removes the visit,
+  its tray and its orders in the same transition, once all its work has
+  settled; orders are numbered by a monotonic `order_seq` instead of
+  `map_size(state.orders)`; snapshot evolution is 5. No event changed. The
+  domain's ID guards cover live entities only; uniqueness over the hall's
+  history is the application boundary's (receipts bind command IDs, and the
+  arrival-shaped and `DS:` IDs the advance mints are refused to every actor).
+  A command naming a finished visit or tray is refused as `:unknown_visit` or
+  `:unknown_tray` (formerly `:visit_finalized` or `:tray_settled`). No live-order
+  index was added: after the change the scans cover live work only (see the
+  Task 20 report for the measurements).
 - **Leave reasons.** A simulated diner who leaves records one reason, the first
   that applies: `:no_open_stall` (no stall open and accepting new mains),
   `:no_compatible_main` (every offered main is dietary-incompatible),
@@ -461,16 +469,17 @@ live in the architecture's
   reasons where they first apply (`Choice` moduledoc).
 - **`DS:` is a reserved command-ID prefix.** A simulated diner's dessert order
   derives from `"DS:" <> visit_id` just as a guest's derives from its command
-  ID, so `CommandWorkflow` refuses `DS:` IDs from clients and NPCs, and
-  `Admission` refuses any derived visit, tray or order ID that already exists
-  (`:visit_id_taken`, `:order_id_taken`). If the guard ever fires in the
+  ID, so `CommandWorkflow` refuses `DS:` IDs (since Task 20 from every actor,
+  as it does the arrival shape), and `Admission` refuses any derived visit,
+  tray or order ID that a live entity holds (`:visit_id_taken`,
+  `:order_id_taken`). If the guard ever fires in the
   advance, the simulated diner declines dessert instead.
 - **Operating lists recorded on change.** `clock_advanced` carries `operating`
   only when the list differs from the last one recorded (kept in
   `demand.operating`, initially empty); an interval without it credits the
   last list. Older logs that restate it on every interval replay to the same
   state. Reason: an idle one-stall hall wrote about 630 copies of the list a
-  day. Snapshot evolution is 4.
+  day. Snapshot evolution was 4 (5 since Task 20).
 
 ### Project C: the 150-stall measurement
 

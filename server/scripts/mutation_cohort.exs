@@ -41,6 +41,7 @@ defmodule MutationCohort do
   @planner "test/feud_hall/domain/npc_planner_test.exs"
   @npc_plan "test/feud_hall/domain/npc_plan_test.exs"
   @forecast "test/feud_hall/domain/demand_forecast_test.exs"
+  @retention "test/feud_hall/domain/retention_test.exs"
 
   def mutants do
     [
@@ -166,7 +167,10 @@ defmodule MutationCohort do
        "lib/feud_hall/domain/hall/admission.ex",
        "with :ok <- ensure(not Map.has_key?(state.orders, order_id), :order_id_taken),", "with :ok <- :ok,", [@tray]},
       {"authority charges the gap instead of recovering", "lib/feud_hall/infrastructure/hall_authority.ex",
-       "if elapsed > s.max_gap_ms do", "if false do", [@authority]}
+       "if elapsed > s.max_gap_ms do", "if false do", [@authority]},
+      # -- Task 20: finished work leaves live state ------------------------------------
+      {"R1 finished visits kept in live state (retirement skipped)", "lib/feud_hall/domain/hall/evolver.ex",
+       "    |> retire_visit(visit)\n", "", [@retention]}
     ]
   end
 

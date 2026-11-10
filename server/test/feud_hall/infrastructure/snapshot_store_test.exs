@@ -43,8 +43,8 @@ defmodule FeudHall.Infrastructure.SnapshotStoreTest do
     {:ok, store, _} = PostgresEventStore.save_snapshot(store, 1, snapshot(1))
     {:ok, _store, _} = PostgresEventStore.save_snapshot(store, 2, "not a snapshot")
 
-    assert [[0], [4]] = Repo.query!("select evolution from snapshots order by id").rows |> Enum.sort()
-    assert Snapshot.evolution_version() == 4
+    assert [[0], [5]] = Repo.query!("select evolution from snapshots order by id").rows |> Enum.sort()
+    assert Snapshot.evolution_version() == 5
   end
 
   test "pruning in PostgreSQL keeps the two newest verified and every newer unverified snapshot" do

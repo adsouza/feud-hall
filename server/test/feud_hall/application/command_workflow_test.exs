@@ -76,10 +76,12 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     refute Workflow.reserved_prefix?("buy-1")
   end
 
-  test "simulated arrivals' entity IDs are refused as client command IDs" do
+  # The clock advance mints these itself, so system actors are refused them too: with receipts
+  # binding every other command ID, no visit, tray or order ID is minted twice over history.
+  test "simulated arrivals' entity IDs are refused as command IDs to every actor" do
     rt = runtime()
 
-    for actor <- [{:principal, "alice"}, {:npc, "budget"}] do
+    for actor <- [{:principal, "alice"}, {:npc, "budget"}, {:system, :demand}, {:system, :scheduler}] do
       assert {:error, :reserved_command_id, _} = Workflow.execute(rt, env("A0-12", actor, purchase(10)))
     end
 
@@ -91,11 +93,11 @@ defmodule FeudHall.Application.CommandWorkflowTest do
 
   # The clock advance derives a simulated diner's dessert order from `"DS:" <> visit_id`; a client
   # accepting its own dessert under that ID would mint the same order ID first.
-  test "a simulated diner's dessert entity ID is refused as a client command ID" do
+  test "a simulated diner's dessert entity ID is refused as a command ID to every actor" do
     rt = runtime()
     accept = {:accept_dessert, %{visit_id: "V:g1", confirmed: nil}}
 
-    for actor <- [{:principal, "bob"}, {:npc, "budget"}] do
+    for actor <- [{:principal, "bob"}, {:npc, "budget"}, {:system, :demand}] do
       assert {:error, :reserved_command_id, _} = Workflow.execute(rt, env("DS:V:A0-1", actor, accept))
     end
 

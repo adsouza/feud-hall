@@ -457,7 +457,7 @@ defmodule FeudHall.HallTrace do
     visits =
       state.visits
       |> Map.values()
-      |> Enum.filter(&(&1.status == :active and &1.dessert in [:offered, :accepted]))
+      |> Enum.filter(&(&1.dessert in [:offered, :accepted]))
       |> Enum.sort_by(& &1.id)
 
     case visits do
@@ -537,7 +537,7 @@ defmodule FeudHall.HallTrace do
   defp dessert_answers(state) do
     state.visits
     |> Map.values()
-    |> Enum.filter(&(&1.status == :active and &1.dessert == :offered))
+    |> Enum.filter(&(&1.dessert == :offered))
     |> Enum.sort_by(& &1.id)
     |> Enum.flat_map(fn visit ->
       case dessert_command(state, visit, :accept) do

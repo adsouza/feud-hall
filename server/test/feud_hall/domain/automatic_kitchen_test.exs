@@ -44,8 +44,8 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     {before, _} = advance_hall(w, tray.estimated_completion - Clock.ratio())
     assert before.trays[tray.id].status == :accepted
 
-    {state, events} = advance_hall(w, tray.estimated_completion)
-    assert state.trays[tray.id].status == :served
+    {state, events} = served = advance_hall(w, tray.estimated_completion)
+    assert tray_status(served, tray.id) == :served
     assert served_at(events, tray.id) == [tray.estimated_completion]
     assert state.stalls[@stall].counter == nil
 
@@ -127,10 +127,11 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     tray = state.trays[tray_id("visit-d1")]
     assert tray.estimated_completion == @t0 + 9 * @min
 
-    {state, events} = advance_hall(w, @t0 + 9 * @min)
-    assert state.trays[tray.id].status == :cancelled
+    {state, events} = expired = advance_hall(w, @t0 + 9 * @min)
+    assert tray_status(expired, tray.id) == :cancelled
     [_main, drink] = tray.components
-    assert state.orders[drink].cancel_reason == :ready_food_expired
+    assert order_status(expired, drink) == :cancelled
+    assert order_cancel_reason(expired, drink) == :ready_food_expired
     assert served_at(events, tray.id) == []
     assert state.stalls[@stall].counter == nil
     Oracle.assert_settled!(state, events)
@@ -152,8 +153,8 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     tray = state.trays[tray_id("visit-d1")]
     assert tray.deadline == tray.estimated_completion
 
-    {served, events} = advance_hall(w, tray.deadline)
-    assert served.trays[tray.id].status == :served
+    {_served, events} = served = advance_hall(w, tray.deadline)
+    assert tray_status(served, tray.id) == :served
     assert served_at(events, tray.id) == [tray.deadline]
 
     # A deadline one tick before the handover completes (not reachable through a
@@ -161,9 +162,9 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     early = tray.deadline - Clock.ratio()
     [main] = tray.components
     state = state |> put_in([:trays, tray.id, :deadline], early) |> put_in([:orders, main, :deadline], early)
-    {late, events} = advance_hall({state, log}, tray.deadline)
-    assert late.trays[tray.id].status == :cancelled
-    assert late.visits[visit_id("visit-d1")].outcome.reason == :main_failed
+    {late, events} = missed = advance_hall({state, log}, tray.deadline)
+    assert tray_status(missed, tray.id) == :cancelled
+    assert visit_outcome(missed, visit_id("visit-d1")).reason == :main_failed
 
     assert [{^early, %{type: :tray_cancelled, reason: :deadline_missed}}] =
              for({t, %{type: :tray_cancelled}} = te <- timeline(events), do: {t, elem(te, 1)})
@@ -186,11 +187,11 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     assert ledger.wip > 0
     assert %{item: {:tray, _}} = before.stalls[@stall].counter
 
-    {state, events} = advance_hall(w, @five + 10 * @min)
+    {state, events} = reopened = advance_hall(w, @five + 10 * @min)
 
     for id <- ~w(visit-held visit-waiting) do
-      assert state.visits[visit_id(id)].outcome.reason == :cleaning
-      assert state.trays[tray_id(id)].status == :cancelled
+      assert visit_outcome(reopened, visit_id(id)).reason == :cleaning
+      assert tray_status(reopened, tray_id(id)) == :cancelled
     end
 
     {after_cleaning, _} = advance_hall(w, @three)
@@ -212,10 +213,10 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     {mid, _} = advance_hall(w, @three - Clock.ratio())
     assert %{item: {:tray, _}, done_at: @three} = mid.stalls[@stall].counter
 
-    {state, events} = advance_hall(w, @three)
+    {state, events} = cut = advance_hall(w, @three)
     assert served_at(events, tray_id("visit-edge")) == []
-    assert state.trays[tray_id("visit-edge")].status == :cancelled
-    assert state.visits[visit_id("visit-edge")].outcome.reason == :cleaning
+    assert tray_status(cut, tray_id("visit-edge")) == :cancelled
+    assert visit_outcome(cut, visit_id("visit-edge")).reason == :cleaning
     assert state.stalls[@stall].counter == nil
     Oracle.assert_settled!(state, events)
   end
@@ -332,10 +333,10 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     dessert = state.orders[state.visits[vid].dessert_order]
     assert dessert.estimated_completion == @t0 + 17 * @min
 
-    {state, events} = advance_hall(w, @t0 + 20 * @min)
+    {state, events} = done = advance_hall(w, @t0 + 20 * @min)
     assert served_at(events, tray_id("visit-b")) == [@t0 + 13 * @min]
     assert dessert_served_at(events, dessert.id) == [@t0 + 17 * @min]
-    assert state.visits[vid].outcome.reason == :completed
+    assert visit_outcome(done, vid).reason == :completed
     Oracle.assert_settled!(state, events)
   end
 

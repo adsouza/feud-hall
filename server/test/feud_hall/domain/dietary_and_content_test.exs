@@ -60,10 +60,11 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
       w = stocked_world() |> simulated_visit("c1", "chicken_tacos", nil, "carb_conscious")
       w = serve_tray(w, tray_id("visit-c1"))
       {state, events} = w
-      visit = state.visits[visit_id("visit-c1")]
-      assert visit.carbs_served == 28_200
-      assert visit.status == :finalized
-      assert visit.outcome.components |> Enum.map(& &1.kind) == [:main]
+      # The visit finalized at service; its served carbohydrate is its served tray's.
+      [served] = Enum.filter(events, &(&1.type == :tray_served and &1.tray_id == tray_id("visit-c1")))
+      assert served.components |> Enum.map(& &1.carbs_mg) |> Enum.sum() == 28_200
+      outcome = visit_outcome(w, visit_id("visit-c1"))
+      assert outcome.components |> Enum.map(& &1.kind) == [:main]
       Oracle.assert_settled!(state, events)
     end
 
@@ -72,8 +73,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
       catalog = put_in(SliceCatalog.catalog(), [:profiles, "carb_conscious", :carb_ceiling_mg], 90_000)
       w = stocked_world(catalog: catalog) |> simulated_visit("c1", "chicken_tacos", nil, "carb_conscious", 10_000, true)
       w = serve_tray(w, tray_id("visit-c1"))
-      {state, _} = w
-      assert state.visits[visit_id("visit-c1")].status == :finalized
+      assert %{components: [%{kind: :main}]} = visit_outcome(w, visit_id("visit-c1"))
 
       # The same diner profile with an unrestricted first course gets the dessert.
       w = stocked_world(catalog: catalog) |> simulated_visit("u1", "chicken_tacos", nil, "unrestricted", 10_000, true)

@@ -175,6 +175,21 @@ defmodule FeudHall.Application.RecoveryTest do
     :crypto.hash(:sha256, body) <> body
   end
 
+  # An evolution 4 snapshot as the shared simulation's second release wrote it: it has no order
+  # counter (the next sequence number was the size of `orders`), so loading it would crash the
+  # evolver at the next accepted order; it would also keep every finished visit in live state.
+  defp evolution_4_snapshot(rt) do
+    hall = Map.delete(rt.state, :order_seq)
+
+    body =
+      :erlang.term_to_binary(
+        %{position: rt.position, evolution: 4, state: %{hall: hall, control: rt.control}},
+        [:deterministic]
+      )
+
+    :crypto.hash(:sha256, body) <> body
+  end
+
   defp resumed(state, id), do: Hall.replay([%{type: :hall_resumed, recovery_id: id}], state)
 
   defp batches_after(mod, store, position) do
@@ -283,8 +298,24 @@ defmodule FeudHall.Application.RecoveryTest do
         assert recovered.state == resumed(rt.state, "recovery:boot:1")
       end
 
+      test "an evolution 4 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
+        assert Snapshot.evolution_version() == 5
+
+        rt = live({mod, store})
+        {rt, old} = save_snapshot(rt, evolution_4_snapshot(rt), rt.position)
+        assert Snapshot.evolution_of(evolution_4_snapshot(rt)) == 4
+        assert {:error, :incompatible_snapshot} = Snapshot.load(evolution_4_snapshot(rt))
+        rt = run(rt, later_commands())
+
+        assert {:ok, recovered, report} = recover_from_snapshots(mod, rt.store, "b")
+        assert report.snapshot == :genesis
+        assert report.skipped == [{old, :incompatible_snapshot}]
+        assert report.tail_batches == rt.position
+        assert recovered.state == resumed(rt.state, "recovery:boot:1")
+      end
+
       test "an evolution 3 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
-        assert Snapshot.evolution_version() == 4
+        assert Snapshot.evolution_version() == 5
 
         rt = live({mod, store})
         {rt, old} = save_snapshot(rt, evolution_3_snapshot(rt), rt.position)
@@ -300,7 +331,7 @@ defmodule FeudHall.Application.RecoveryTest do
       end
 
       test "an evolution 2 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
-        assert Snapshot.evolution_version() == 4
+        assert Snapshot.evolution_version() == 5
 
         rt = live({mod, store})
         {rt, old} = save_snapshot(rt, evolution_2_snapshot(rt), rt.position)

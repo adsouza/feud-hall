@@ -35,13 +35,13 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     {state, events} = w
     Oracle.assert_settled!(state, events)
 
-    final = state.visits[visit.id]
-    assert final.status == :finalized
-    assert final.outcome.reason == :completed
-    assert Enum.map(final.outcome.components, & &1.weight) == [4, 1, 2]
+    refute Map.has_key?(state.visits, visit.id)
+    final = visit_outcome(w, visit.id)
+    assert final.reason == :completed
+    assert Enum.map(final.components, & &1.weight) == [4, 1, 2]
     # All primary ingredients: every course scores 100.
-    assert final.outcome.score == 10_000
-    assert final.outcome.competitive
+    assert final.score == 10_000
+    assert final.competitive
     # Optional items never count as another arrival or meal.
     assert state.stats.arrivals == 1
     assert state.stats.served_mains == 1
@@ -67,8 +67,9 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
 
     w = serve_tray(w, tray.id)
     {state, events} = w
-    assert state.visits[visit_id("visit-d2")].dessert == :declined
-    outcome = state.visits[visit_id("visit-d2")].outcome
+    vid = visit_id("visit-d2")
+    assert Enum.any?(events, &match?(%{type: :dessert_declined, visit_id: ^vid}, &1))
+    outcome = visit_outcome(w, vid)
     # Main only: score is the main's quality; declining dessert carries no penalty.
     assert outcome.score == 9_700
     assert Enum.map(outcome.components, & &1.kind) == [:main]
@@ -122,11 +123,11 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     # Another principal cannot cancel it.
     assert {:error, :forbidden} = Hall.decide(state, {:cancel_tray, %{tray_id: tray.id}}, ctx({:principal, "eve"}, "x"))
 
-    {after_cancel, events} = run!(w, {:cancel_tray, %{tray_id: tray.id}}, {:principal, "gina"}, "cancel")
+    {after_cancel, events} = cancelled = run!(w, {:cancel_tray, %{tray_id: tray.id}}, {:principal, "gina"}, "cancel")
     Oracle.assert_settled!(after_cancel, events)
     assert after_cancel.wallets["gina"].slices |> Map.values() |> Enum.map(&{&1.amount, &1.reserved}) == [{2_000, 0}]
-    assert after_cancel.visits[visit_id("g1")].outcome.reason == :guest_cancelled
-    assert after_cancel.visits[visit_id("g1")].outcome.score == nil
+    assert visit_outcome(cancelled, visit_id("g1")).reason == :guest_cancelled
+    assert visit_outcome(cancelled, visit_id("g1")).score == nil
     assert after_cancel.active_visits == %{}
 
     # Preparation starting (at the acceptance instant, on the next advance)
@@ -171,13 +172,14 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
 
     # Cancelling the dessert finalizes the visit; the slot never reopens and the
     # served tray keeps its payment.
-    {state, events} = run!(w, {:cancel_dessert, %{visit_id: vid}}, {:principal, "gina"}, "d4")
+    {state, events} = cancelled = run!(w, {:cancel_dessert, %{visit_id: vid}}, {:principal, "gina"}, "d4")
     Oracle.assert_settled!(state, events)
-    assert state.visits[vid].status == :finalized
-    assert state.visits[vid].outcome.score == 10_000
+    refute Map.has_key?(state.visits, vid)
+    assert visit_outcome(cancelled, vid).score == 10_000
     assert state.restaurants["r1"].ledger.revenue == 900
 
-    assert {:error, :visit_finalized} =
+    # The finalized visit has left live state, so it is no longer known to commands.
+    assert {:error, :unknown_visit} =
              Hall.decide(
                state,
                {:accept_dessert, %{visit_id: vid, confirmed: confirmed}},
@@ -194,12 +196,12 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
 
     w = run!(w, {:decline_dessert, %{visit_id: vid}}, {:principal, "gina"}, "decline")
     {state, events} = w
-    visit = state.visits[vid]
-    assert visit.status == :finalized
-    assert visit.dessert == :declined
-    assert visit.outcome.reason == :completed
-    assert visit.outcome.score == 10_000
-    assert Enum.map(visit.outcome.components, & &1.kind) == [:main]
+    refute Map.has_key?(state.visits, vid)
+    assert [%{type: :dessert_declined, visit_id: ^vid}, %{type: :visit_finalized}] = Enum.take(events, -2)
+    outcome = visit_outcome(w, vid)
+    assert outcome.reason == :completed
+    assert outcome.score == 10_000
+    assert Enum.map(outcome.components, & &1.kind) == [:main]
     Oracle.assert_settled!(state, events)
   end
 
@@ -215,9 +217,9 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     {state, _} = w
     assert state.visits[vid].dessert == :offered
 
-    {state, events} = advance_hall(w, deadline)
-    assert state.visits[vid].outcome.reason == :dessert_offer_expired
-    assert state.visits[vid].outcome.score == 10_000
+    {state, events} = expired = advance_hall(w, deadline)
+    assert visit_outcome(expired, vid).reason == :dessert_offer_expired
+    assert visit_outcome(expired, vid).score == 10_000
     Oracle.assert_settled!(state, events)
   end
 
@@ -232,18 +234,17 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
 
     {before, _} = advance_hall(w, tray.deadline - Clock.ratio())
     assert before.trays[tray.id].status == :accepted
-    {served, _} = advance_hall(w, tray.deadline)
-    assert served.trays[tray.id].status == :served
+    assert tray_status(advance_hall(w, tray.deadline), tray.id) == :served
 
     # Quotes never bind a deadline before the estimate; force one to show the
     # deadline boundary cancelling work in progress.
     [main] = tray.components
     early = tray.deadline - Clock.ratio()
     state = state |> put_in([:trays, tray.id, :deadline], early) |> put_in([:orders, main, :deadline], early)
-    {late, events} = advance_hall({state, log}, tray.deadline)
-    assert late.trays[tray.id].status == :cancelled
-    assert late.visits[visit_id("visit-d1")].outcome.reason == :main_failed
-    assert late.visits[visit_id("visit-d1")].outcome.score == 0
+    {late, events} = missed = advance_hall({state, log}, tray.deadline)
+    assert tray_status(missed, tray.id) == :cancelled
+    assert visit_outcome(missed, visit_id("visit-d1")).reason == :main_failed
+    assert visit_outcome(missed, visit_id("visit-d1")).score == 0
     assert late.restaurants["r1"].ledger.waste > 0
     Oracle.assert_settled!(late, events)
   end
@@ -258,10 +259,11 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     tray = tray_id("visit-d1")
     {state, _} = w
     [main] = state.trays[tray].components
-    {state, events} = advance_hall(w, state.trays[tray].estimated_completion)
-    assert state.orders[main].ready_expires_at == state.now
-    assert state.trays[tray].status == :cancelled
-    assert state.orders[main].cancel_reason == :ready_food_expired
+    {_ready, _} = ready = advance_hall(w, state.trays[tray].estimated_completion - Clock.ratio())
+    {state, events} = expired = advance_hall(w, state.trays[tray].estimated_completion)
+    assert elem(ready, 0).orders[main].ready_expires_at == state.now
+    assert tray_status(expired, tray) == :cancelled
+    assert order_cancel_reason(expired, main) == :ready_food_expired
     refute Enum.any?(events, &(&1.type == :tray_served))
     Oracle.assert_settled!(state, events)
   end
@@ -284,7 +286,7 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
       refute Enum.any?(events, &(&1.type == :dessert_offered))
 
       visit = state.visits[vid]
-      assert visit.status == :active
+      assert visit_outcome(w, vid) == nil
       assert visit.dessert == :accepted
       assert visit.dessert_offer_deadline == nil
       order = state.orders[visit.dessert_order]
@@ -294,11 +296,12 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
 
       w = serve_dessert(w, order.id)
       {state, events} = w
-      final = state.visits[vid]
-      assert final.outcome.reason == :completed
-      assert Enum.map(final.outcome.components, & &1.kind) == [:main, :dessert]
-      assert final.outcome.score == 10_000
-      assert final.outcome.competitive
+      refute Map.has_key?(state.visits, vid)
+      final = visit_outcome(w, vid)
+      assert final.reason == :completed
+      assert Enum.map(final.components, & &1.kind) == [:main, :dessert]
+      assert final.score == 10_000
+      assert final.competitive
       assert state.stats.served_desserts == 1
       assert state.stats.arrivals == 1
       assert state.demand.today.left == %{}
@@ -316,9 +319,8 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
 
       assert fin.reason == :completed
       assert fin.score == 10_000
-      visit = state.visits[vid]
-      assert visit.status == :finalized
-      assert visit.dessert == :declined
+      assert visit_outcome(w, vid) == fin
+      refute Map.has_key?(state.visits, vid)
       refute Enum.any?(events, &(&1.type in [:dessert_offered, :dessert_accepted]))
       # A served main followed by a declined dessert is not a visit that left.
       assert state.demand.today.left == %{}
@@ -329,12 +331,12 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
       w = simulated_visit(w, "c1", "chicken_tacos", nil, "carb_conscious", 10_000, true)
       w = serve_tray(w, tray_id("visit-c1"))
       {state, events} = w
-      visit = state.visits[visit_id("visit-c1")]
+      outcome = visit_outcome(w, visit_id("visit-c1"))
 
-      assert visit.status == :finalized
-      assert Enum.map(visit.outcome.components, & &1.kind) == [:main]
-      assert visit.outcome.score == 10_000
-      assert visit.outcome.reason == :completed
+      refute Map.has_key?(state.visits, visit_id("visit-c1"))
+      assert Enum.map(outcome.components, & &1.kind) == [:main]
+      assert outcome.score == 10_000
+      assert outcome.reason == :completed
       refute Enum.any?(events, &(&1.type in [:dessert_offered, :dessert_accepted]))
       Oracle.assert_settled!(state, events)
     end
@@ -344,24 +346,33 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
       w = serve_tray(w, tray_id("visit-d1"))
       {state, events} = w
 
-      assert state.visits[visit_id("visit-d1")].status == :finalized
+      assert %{reason: :completed} = visit_outcome(w, visit_id("visit-d1"))
+      refute Map.has_key?(state.visits, visit_id("visit-d1"))
       refute Enum.any?(events, &(&1.type == :dessert_accepted))
       Oracle.assert_settled!(state, events)
     end
 
     # A simulated diner's dessert order is `"O:DS:" <> visit_id <> ":dessert"`; a guest's is
-    # `"O:" <> command_id <> ":dessert"`. The workflow reserves `DS:` for system actors; the domain
-    # itself must also never let one order replace another.
-    test "a dessert acceptance whose order ID is already taken is refused", %{world: w} do
-      w = simulated_visit(w, "d1", "bean_tacos", nil, "unrestricted", 10_000, true)
+    # `"O:" <> command_id <> ":dessert"`. The workflow refuses `DS:` command IDs to every actor;
+    # the domain itself must also never let one live order replace another. Both trays are
+    # accepted together: gina's is handed over 4..8 and d1's 8..12, so gina's dessert offer
+    # (and, once accepted, her dessert) is still live when d1's dessert is decided at 12.
+    defp gina_then_d1(w) do
+      w
+      |> grant("gina", 2_500, "grant")
+      |> guest_visit("gina", "g1", "bean_tacos")
+      |> simulated_visit("d1", "bean_tacos", nil, "unrestricted", 10_000, true)
+    end
+
+    test "a dessert acceptance whose order ID a live order holds is refused", %{world: w} do
+      w = gina_then_d1(w)
       w = serve_tray(w, tray_id("visit-d1"))
       taken = "O:DS:" <> visit_id("visit-d1") <> ":dessert"
-      assert Map.has_key?(elem(w, 0).orders, taken)
+      assert elem(w, 0).orders[taken].status in FeudHall.Domain.Kitchen.stages()
 
-      w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "g1", "bean_tacos")
-      w = serve_tray(w, tray_id("g1"))
       {state, _} = w
       vid = visit_id("g1")
+      assert state.visits[vid].dessert == :offered
       {:ok, quote} = Offers.quote_dessert(state, state.visits[vid])
       accept = {:accept_dessert, %{visit_id: vid, confirmed: Offers.terms(quote)}}
 
@@ -371,8 +382,8 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
       assert {:ok, _} = Hall.decide(state, accept, ctx({:principal, "gina"}, "g1-dessert"))
     end
 
-    test "a simulated diner whose dessert order ID is pre-claimed declines and finalizes", %{world: w} do
-      w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "g1", "bean_tacos")
+    test "a simulated diner whose dessert order ID a live order holds declines and finalizes", %{world: w} do
+      w = gina_then_d1(w)
       w = serve_tray(w, tray_id("g1"))
       {state, _} = w
       gid = visit_id("g1")
@@ -385,7 +396,6 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
       order_id = "O:" <> claimed <> ":dessert"
       assert elem(w, 0).orders[order_id].visit == gid
 
-      w = simulated_visit(w, "d1", "bean_tacos", nil, "unrestricted", 10_000, true)
       w = serve_tray(w, tray_id("visit-d1"))
       {state, events} = w
       sid = visit_id("visit-d1")
@@ -393,7 +403,8 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
       assert [%{type: :tray_served}, %{type: :dessert_declined, visit_id: ^sid}, %{type: :visit_finalized} | _] =
                service_batch(events, tray_id("visit-d1"))
 
-      assert %{status: :finalized, dessert: :declined, dessert_order: nil} = state.visits[sid]
+      assert %{reason: :completed, components: [%{kind: :main}]} = visit_outcome(w, sid)
+      refute Map.has_key?(state.visits, sid)
       assert state.orders[order_id].visit == gid
       assert state.visits[gid].dessert_order == order_id
       assert :ok = FeudHall.Domain.Hall.Invariants.check(state)

@@ -285,7 +285,8 @@ defmodule FeudHall.Domain.ArrivalsTest do
       assert %{type: :tray_cancelled, reason: :deadline_missed} =
                Enum.find(events, &(&1.type == :tray_cancelled and &1.tray_id == "T:A0-0"))
 
-      assert %{status: :finalized, outcome: %{reason: :main_failed, score: 0}} = state.visits["V:A0-0"]
+      assert %{reason: :main_failed, score: 0} = visit_outcome({state, events}, "V:A0-0")
+      refute Map.has_key?(state.visits, "V:A0-0")
       Oracle.assert_settled!(state, events)
     end
 
@@ -337,25 +338,29 @@ defmodule FeudHall.Domain.ArrivalsTest do
     test "with shipped segments, patience binds below the 45-minute service window" do
       {state, events} = stocked_world() |> advance_hall(@t0 + @day)
       window = state.catalog.rules.service_window_ms
+      # Finished trays have left state; each one's bound deadline is in its acceptance.
+      deadlines = for %{type: :tray_accepted} = e <- events, into: %{}, do: {e.tray_id, e.deadline}
 
       bound =
         for {at, %{outcome: :admitted} = e} <- arrivals(events),
-            tray = state.trays["T:" <> e.arrival_id],
-            do: {tray.deadline, Enum.min([at + e.patience_hall_ms, at + window, Clock.service_cutoff(at)])}
+            deadline = deadlines["T:" <> e.arrival_id],
+            do: {deadline, Enum.min([at + e.patience_hall_ms, at + window, Clock.service_cutoff(at)])}
 
       assert bound != []
       assert Enum.all?(bound, fn {deadline, expected} -> deadline == expected end)
       assert Enum.any?(arrivals(events), fn {_, e} -> e.patience_hall_ms < window end)
 
       assert Enum.any?(arrivals(events), fn {at, e} ->
-               e.outcome == :admitted and state.trays["T:" <> e.arrival_id].deadline == at + e.patience_hall_ms and
+               e.outcome == :admitted and deadlines["T:" <> e.arrival_id] == at + e.patience_hall_ms and
                  e.patience_hall_ms < window
              end)
     end
 
-    test "an arrival whose IDs a command already took is recorded as having left, not admitted twice" do
+    # The application boundary refuses the arrival shape as a command ID for every actor; the
+    # domain itself refuses only an ID a live visit or tray holds.
+    test "an arrival whose IDs a live visit already holds is recorded as having left, not admitted twice" do
       # A fixture command under the first arrival's entity ID holds V:A0-0 and T:A0-0.
-      world =
+      {state, log} =
         stocked_world(catalog: patient_catalog())
         |> run!(
           {:admit_visit,
@@ -370,6 +375,16 @@ defmodule FeudHall.Domain.ArrivalsTest do
           {:system, :demand},
           "A0-0"
         )
+
+      # Keep that visit live until the arrival: a long preparation, and a deadline after it.
+      [main] = state.trays["T:A0-0"].components
+      late = 3 * @hour
+
+      world =
+        {state
+         |> put_in([:orders, main, :prep_ms], 2 * @hour)
+         |> put_in([:orders, main, :deadline], late)
+         |> put_in([:trays, "T:A0-0", :deadline], late), log}
 
       {before, _} = world
       taken = before.visits["V:A0-0"]
@@ -416,10 +431,18 @@ defmodule FeudHall.Domain.ArrivalsTest do
       assert n == length(timed) and n == admitted + Enum.sum(Map.values(left))
       assert admitted > 0 and left != %{}
 
-      # Each admitted arrival opened its visit, which remembers the dessert appetite drawn.
+      # Each admitted arrival opened its visit, recording the dessert appetite drawn; a visit
+      # still live remembers it.
+      admissions = for %{type: :visit_admitted} = e <- events, into: %{}, do: {e.visit_id, e}
+
       for {_, %{outcome: :admitted} = e} <- timed do
-        assert %{source: :simulated} = visit = s.visits["V:" <> e.arrival_id]
-        assert visit.dessert_appetite? == e.dessert_appetite?
+        assert %{source: :simulated, dessert_appetite?: appetite} = admissions["V:" <> e.arrival_id]
+        assert appetite == e.dessert_appetite?
+
+        case s.visits["V:" <> e.arrival_id] do
+          nil -> assert visit_outcome({s, events}, "V:" <> e.arrival_id)
+          visit -> assert visit.dessert_appetite? == e.dessert_appetite?
+        end
       end
 
       [closed] = Enum.filter(events, &(&1.type == :day_closed))

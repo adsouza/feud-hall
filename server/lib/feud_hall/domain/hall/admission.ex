@@ -6,11 +6,30 @@ defmodule FeudHall.Domain.Hall.Admission do
   the tray (or dessert) is quoted from current state, its terms are bound,
   each course is funded, and its ingredient claims are reserved. Entity IDs
   are derived from `entity_id`, so a decision is deterministic and a retried
-  command cannot mint a second order. A derived visit, tray or order ID that
-  already exists is refused (`:visit_id_taken`, `:order_id_taken`): the
-  evolver inserts these entities unconditionally, so a decision must never
-  name an existing one. Authorization of the caller stays in the decider; this
-  module only decides facts.
+  command cannot mint a second order. Authorization of the caller stays in the
+  decider; this module only decides facts.
+
+  ID uniqueness is split between the domain and the application boundary:
+
+    * The domain guards live entities. A derived visit, tray or order ID held
+      by a live entity is refused (`:visit_id_taken`, `:order_id_taken`): the
+      evolver inserts these entities unconditionally, so a decision must never
+      name a live one. Finished visits, trays and orders leave live state when
+      the visit finalizes, so this guard does not see them.
+    * The application boundary guarantees an ID is never minted twice over
+      the hall's history, per family. `V:<id>`, `T:<id>` and `O:<id>:<kind>`
+      from a command ID: `CommandWorkflow` binds every command ID to its first
+      request by receipt (accepted or rejected), so a retry returns that
+      receipt and never reaches `decide`, and another request under the ID is
+      a conflict. From a simulated arrival `A<day>-<seq>`: the clock advance
+      mints it from the current day and a sequence that only grows within the
+      day, and no actor may use that shape as a command ID. From a simulated
+      diner's dessert `DS:<visit_id>`: visit IDs are unique by the above, a
+      visit accepts at most one dessert, and no actor may use the `DS:` prefix
+      as a command ID.
+
+  So `decide/3` called directly with an ID of a finished entity (as a test can
+  do) admits a new entity under it; the boundary never lets a command do so.
   """
 
   alias FeudHall.Domain.{Dietary, Inventory, Offers, Substitution}
@@ -215,8 +234,8 @@ defmodule FeudHall.Domain.Hall.Admission do
       else: {:error, :over_budget}
   end
 
-  # Visit and tray IDs derive from `entity_id`; an admission never reuses one
-  # (a client command ID and a simulated arrival could otherwise collide).
+  # Visit and tray IDs derive from `entity_id`; an admission never names a live
+  # one (see the moduledoc for uniqueness over the hall's history).
   defp entity_free?(state, entity_id),
     do: not Map.has_key?(state.visits, "V:" <> entity_id) and not Map.has_key?(state.trays, "T:" <> entity_id)
 

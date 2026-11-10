@@ -75,7 +75,7 @@ defmodule FeudHall.Domain.Hall.Decider do
       withdrawn =
         state.visits
         |> Map.values()
-        |> Enum.filter(&(&1.stall == s and &1.status == :active and &1.dessert == :offered))
+        |> Enum.filter(&(&1.stall == s and &1.dessert == :offered))
         |> Enum.sort_by(& &1.id)
         |> Enum.map(&Settlement.finalize_event(state1, &1, :dessert_offer_withdrawn))
 
@@ -393,16 +393,18 @@ defmodule FeudHall.Domain.Hall.Decider do
     end
   end
 
+  # Live visits only: a finalized visit has left live state, so it is unknown.
   defp diner_visit(state, v, ctx) do
     case {state.visits[v], ctx.actor} do
       {nil, _} -> {:error, :unknown_visit}
-      {%{status: :finalized}, _} -> {:error, :visit_finalized}
       {%{source: :guest, principal: who} = visit, {:principal, who}} -> {:ok, visit}
       {%{source: :simulated} = visit, {:system, :demand}} -> {:ok, visit}
       _ -> {:error, :forbidden}
     end
   end
 
+  # A served tray stays live (`:tray_settled`) only while its visit's dessert is
+  # open; a finalized visit's tray has left live state and is unknown.
   defp active_tray(state, t) do
     case state.trays[t] do
       nil -> {:error, :unknown_tray}

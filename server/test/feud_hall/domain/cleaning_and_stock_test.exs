@@ -39,15 +39,15 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       assert before.trays[tray_id("visit-prepared")].status == :accepted
 
       # Nothing is served at exactly 03:00: the gate closes first.
-      {state, events} = advance_hall(w, @three)
+      {state, events} = cut = advance_hall(w, @three)
       assert state.access == :cleaning
 
       for id <- ["visit-prepared", "visit-waiting"] do
-        visit = state.visits[visit_id(id)]
-        assert visit.status == :finalized
-        assert visit.outcome.reason == :cleaning
-        assert visit.outcome.score == nil
-        refute visit.outcome.competitive
+        refute Map.has_key?(state.visits, visit_id(id))
+        outcome = visit_outcome(cut, visit_id(id))
+        assert outcome.reason == :cleaning
+        assert outcome.score == nil
+        refute outcome.competitive
       end
 
       after_ledger = state.restaurants["r1"].ledger
@@ -79,11 +79,11 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       # The 30 s window (12 game minutes) is capped at 03:00.
       assert state.visits[vid].dessert_offer_deadline == @three
 
-      {state, events} = advance_hall(w, @three)
-      assert state.visits[vid].outcome.reason == :cleaning
-      assert state.visits[vid].outcome.score == 10_000
+      {state, events} = cut = advance_hall(w, @three)
+      assert visit_outcome(cut, vid).reason == :cleaning
+      assert visit_outcome(cut, vid).score == 10_000
       # Guest visits are never competitive.
-      refute state.visits[vid].outcome.competitive
+      refute visit_outcome(cut, vid).competitive
       Oracle.assert_settled!(state, events)
     end
 
@@ -103,16 +103,17 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       w = {put_in(state, [:catalog, :rules, :handover_ms], 30 * Clock.minute()), log}
       w = advance_hall(w, @three - Clock.ratio())
       {before, _} = w
-      assert before.visits[vid].status == :active
+      assert Map.has_key?(before.visits, vid)
+      assert visit_outcome(w, vid) == nil
       assert before.orders[dessert_id].status != :served
 
-      {state, events} = advance_hall(w, @three)
-      assert state.orders[dessert_id].status == :cancelled
-      assert state.orders[dessert_id].cancel_reason == :cleaning
+      {state, events} = cut = advance_hall(w, @three)
+      assert order_status(cut, dessert_id) == :cancelled
+      assert order_cancel_reason(cut, dessert_id) == :cleaning
       assert Enum.any?(events, &(&1.type == :dessert_cancelled and &1.reason == :cleaning))
-      assert state.visits[vid].outcome.reason == :cleaning
-      assert state.visits[vid].outcome.score == 10_000
-      assert state.visits[vid].outcome.competitive
+      assert visit_outcome(cut, vid).reason == :cleaning
+      assert visit_outcome(cut, vid).score == 10_000
+      assert visit_outcome(cut, vid).competitive
       Oracle.assert_settled!(state, events)
     end
 
@@ -121,10 +122,11 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       w = stocked_world() |> advance_hall(@three - 15 * Clock.minute())
       w = simulated_visit(w, "d1", "bean_tacos")
       # Dessert work no longer fits before the cutoff, so no offer is made.
-      {state, events} = serve_tray(w, tray_id("visit-d1"))
+      {state, events} = served = serve_tray(w, tray_id("visit-d1"))
 
-      assert state.visits[visit_id("visit-d1")].status == :finalized
-      assert state.visits[visit_id("visit-d1")].outcome.score == 10_000
+      # Finalized at service.
+      refute Map.has_key?(state.visits, visit_id("visit-d1"))
+      assert visit_outcome(served, visit_id("visit-d1")).score == 10_000
       Oracle.assert_settled!(state, events)
     end
   end
@@ -139,16 +141,16 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       cilantro = state.restaurants["r1"].batches |> Map.values() |> Enum.find(&(&1.product == "cilantro"))
       assert cilantro.expires_at == queued.now + 2 * Clock.minute()
 
-      {state, events} = advance_hall(w, cilantro.expires_at)
+      {state, events} = expired = advance_hall(w, cilantro.expires_at)
 
       for i <- 1..6 do
         expected = if i <= 4, do: :accepted, else: :cancelled
-        assert state.trays[tray_id("visit-d#{i}")].status == expected
+        assert tray_status(expired, tray_id("visit-d#{i}")) == expected
       end
 
-      assert state.visits[visit_id("visit-d6")].outcome.reason == :main_failed
-      [main] = state.trays[tray_id("visit-d6")].components
-      assert state.orders[main].cancel_reason == :ingredient_expired
+      assert visit_outcome(expired, visit_id("visit-d6")).reason == :main_failed
+      [main] = queued.trays[tray_id("visit-d6")].components
+      assert order_cancel_reason(expired, main) == :ingredient_expired
       refute Map.has_key?(state.restaurants["r1"].batches, cilantro.id)
       # Spoilage writes off the remaining batch once; the unprepared orders add no waste.
       spoiled = Enum.filter(events, &(&1.type == :stock_spoiled and &1.batch_id == cilantro.id))

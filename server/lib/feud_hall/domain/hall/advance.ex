@@ -130,7 +130,6 @@ defmodule FeudHall.Domain.Hall.Advance do
 
     offers =
       for {vid, v} <- state.visits,
-          v.status == :active,
           v.dessert == :offered,
           do: {v.dessert_offer_deadline, vid, {:offer_timeout, vid}}
 
@@ -185,14 +184,19 @@ defmodule FeudHall.Domain.Hall.Advance do
 
     {state, events} =
       Enum.reduce(affected, {state, []}, fn oid, {st, acc} ->
-        # A sibling component's cancellation may already have settled this one.
-        order = st.orders[oid]
+        # A sibling component's cancellation may already have settled this one
+        # (and retired it with its finalized visit).
+        case st.orders[oid] do
+          %{status: :queued_prep} = order ->
+            if Enum.any?(order.reservations, &(&1.batch_id == bid)) do
+              events = replace_or_cancel(st, rid, bid, order)
+              {Enum.reduce(events, st, &Evolver.evolve(&2, &1)), acc ++ events}
+            else
+              {st, acc}
+            end
 
-        if order.status == :queued_prep and Enum.any?(order.reservations, &(&1.batch_id == bid)) do
-          events = replace_or_cancel(st, rid, bid, order)
-          {Enum.reduce(events, st, &Evolver.evolve(&2, &1)), acc ++ events}
-        else
-          {st, acc}
+          _settled_or_retired ->
+            {st, acc}
         end
       end)
 
@@ -215,7 +219,7 @@ defmodule FeudHall.Domain.Hall.Advance do
           do: {:dessert, o.id}
 
     offers =
-      for {_, v} <- Enum.sort(state.visits), v.status == :active, v.dessert == :offered, do: {:offer, v.id}
+      for {_, v} <- Enum.sort(state.visits), v.dessert == :offered, do: {:offer, v.id}
 
     {_, events} =
       Enum.reduce(trays ++ desserts ++ offers, {state, []}, fn item, {st, acc} ->

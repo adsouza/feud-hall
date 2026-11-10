@@ -1000,11 +1000,29 @@ Implementation decisions within the contracts above:
   slice) derive from the command ID, so a decision is a pure function of state,
   command, and context, and a retry cannot mint a second entity. IDs the
   platform derives itself share that namespace, so `CommandWorkflow` refuses
-  client and NPC command IDs that begin `adv:`, `tick:`, `recovery:`,
-  `start:`, or `DS:` (a simulated diner's dessert, `"DS:" <> visit_id`), or
-  have the simulated-arrival shape `A<day>-<seq>`; NPCs may use `npc:` only.
-  `Admission` also refuses a derived visit, tray, or order ID that already
-  exists, because the evolver inserts those entities unconditionally.
+  client command IDs that begin `adv:`, `tick:`, `recovery:`, `start:`, or
+  `npc:`; NPC actors may use `npc:` only, and system actors any of these. The
+  entity IDs the clock advance mints itself are refused to every actor, system
+  ones included: the simulated-arrival shape `A<day>-<seq>` and the `DS:`
+  prefix of a simulated diner's dessert (`"DS:" <> visit_id`). With receipts
+  binding every other command ID to its first request, no visit, tray, or
+  order ID is minted twice over the hall's history. `Admission` also refuses
+  a derived visit, tray, or order ID that a live entity holds, because the
+  evolver inserts those entities unconditionally; finished entities have left
+  live state, so the history-wide guarantee is the boundary's (see the
+  `Admission` moduledoc for the argument per ID family).
+- **Live state holds only unfinished work.** A visit's single `visit_finalized`
+  removes the visit, its tray, and its orders from the hall state in the same
+  transition, after every reservation, funding slice, counter claim, and cost
+  of the visit has settled; a visit whose main is served stays live while its
+  dessert is offered, accepted, or in the kitchen. History lives in the log
+  and its projections (the ledger, stats, and day counters already hold each
+  finished visit's effects), so hall state, snapshot size, and the cost of
+  each advance step are bounded by live work rather than by history. Orders
+  are numbered by a monotonic `order_seq`, so FIFO keys are never reused after
+  removals. A command naming a finished visit or tray is refused as unknown
+  (`:unknown_visit`, `:unknown_tray`); `:tray_settled` remains for a served
+  tray whose visit's dessert is still open.
 - **Temporary seams removed.** Kitchen progress is no longer decided from
   `{:system, :kitchen}` commands and purchases no longer fill instantly at the
   base price. The commands `start_preparation`, `complete_preparation`,
@@ -1080,12 +1098,13 @@ Implementation decisions within the contracts above:
   runs cannot double-count. `PostgresEventStore.rebuild_projections/1` and
   `Postgres.DailyActivityProjector.rebuild/1` recompute derived tables from the
   log.
-- **Snapshots, evolution 4.** A snapshot encodes the hall and control states at
+- **Snapshots, evolution 5.** A snapshot encodes the hall and control states at
   a position and is accepted only for the current evolution version; version 1
   (hall only), version 2 (before the shared simulation's layout, seed, NPCs,
   market requests, stall counters, order stage fields, demand bookkeeping and
-  simulated-arrival stats) and version 3 (before the last recorded operating
-  list) are rejected as incompatible. Recovery uses only verified
+  simulated-arrival stats), version 3 (before the last recorded operating
+  list) and version 4 (finished visits, trays and orders still in live state,
+  no `order_seq`) are rejected as incompatible. Recovery uses only verified
   snapshots, skips one beyond the store head, and falls back to older ones or
   genesis. Snapshots never justify skipping history that fails to replay.
 - **Unavailable storage.** On PostgreSQL, connection errors (and lock timeouts,

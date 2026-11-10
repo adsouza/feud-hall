@@ -303,13 +303,14 @@ defmodule FeudHall.Domain.DemandForecastTest do
     test "a visit that was served but declined dessert is not counted as having left" do
       world = stocked_world() |> simulated_visit("d1", "chicken_tacos", nil, "unrestricted", 100_000)
       world = serve_tray(world, tray_id("visit-d1"))
-      {state, _} = world
-      assert state.visits[visit_id("visit-d1")].dessert == :declined
+      {_state, log} = world
+      vid = visit_id("visit-d1")
+      assert Enum.any?(log, &match?(%{type: :dessert_declined, visit_id: ^vid}, &1))
 
-      {state, events} = advance_hall(world, @day)
+      {_state, events} = closed_world = advance_hall(world, @day)
       [closed] = day_closed(events)
 
-      assert state.visits[visit_id("visit-d1")].status == :finalized
+      assert %{reason: :completed} = visit_outcome(closed_world, vid)
       assert closed.summary.left == %{}
       assert closed.summary.trays_served == 1
     end

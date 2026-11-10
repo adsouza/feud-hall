@@ -18,8 +18,15 @@ defmodule FeudHall.Domain.Hall.Evolver do
   * customer visit: requirement bundle, carbohydrate commitments, course slots,
     finalization
   * tray / component order: bill, reservations, work stage (see
-    `FeudHall.Domain.Kitchen`), funding
+    `FeudHall.Domain.Kitchen`), funding; `order_seq` numbers accepted orders
   * dining wallet: funded credit slices and their spending reservations
+
+  Live state holds only unfinished work. A visit's single `visit_finalized`
+  retires the visit, its tray and its orders from `visits`, `trays` and
+  `orders` in that same transition: by then every reservation, funding slice,
+  counter claim and cost of the visit has settled (the events that settle
+  them precede finalization), and the ledger, stats and day counters already
+  hold their effects. The finished facts stay in the log and its projections.
 
   Ledger accounts per restaurant are signed so the trial balance
   `cash + raw + wip + cost_of_sales + waste + capex == capital + revenue`
@@ -63,6 +70,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
       visits: %{},
       trays: %{},
       orders: %{},
+      order_seq: 0,
       wallets: %{},
       active_visits: %{},
       stats: %{
@@ -240,8 +248,6 @@ defmodule FeudHall.Domain.Hall.Evolver do
       dessert: :none,
       dessert_offer_deadline: nil,
       dessert_order: nil,
-      status: :active,
-      outcome: nil,
       # Drawn for simulated arrivals; guests decide on dessert themselves.
       dessert_appetite?: Map.get(e, :dessert_appetite?, false)
     }
@@ -393,23 +399,36 @@ defmodule FeudHall.Domain.Hall.Evolver do
     |> release_counter(visit.stall, {:dessert, e.order_id})
   end
 
+  # The visit's one finalized outcome: its counts are taken, then it retires.
   def evolve(state, %{type: :visit_finalized} = e) do
     visit = state.visits[e.visit_id]
-    outcome = Map.take(e, [:reason, :components, :score, :competitive])
 
     state
-    |> update_in([:visits, e.visit_id], fn v ->
-      dessert = if v.dessert == :offered, do: :expired, else: v.dessert
-      %{v | status: :finalized, outcome: outcome, dessert: dessert, dessert_offer_deadline: nil}
-    end)
     |> update_in([:active_visits], fn active ->
       if Map.get(active, visit.principal) == e.visit_id, do: Map.delete(active, visit.principal), else: active
     end)
     |> update_in([:stats, :finalized_visits], &(&1 + 1))
     |> update_in([:demand], &Demand.count_finalized(&1, e))
+    |> retire_visit(visit)
   end
 
   # -- helpers -------------------------------------------------------------
+
+  # Removes a finalized visit with its tray and every order it holds (tray
+  # components and dessert). Nothing live refers to them any more: their
+  # reservations, funding, counter claims and costs settled before
+  # finalization, and the finalization event records their outcomes.
+  defp retire_visit(state, visit) do
+    tray = visit.tray && state.trays[visit.tray]
+    order_ids = if(tray, do: tray.components, else: []) ++ List.wrap(visit.dessert_order)
+
+    %{
+      state
+      | visits: Map.delete(state.visits, visit.id),
+        trays: if(tray, do: Map.delete(state.trays, tray.id), else: state.trays),
+        orders: Map.drop(state.orders, order_ids)
+    }
+  end
 
   # An NPC operator's planning record is recorded with its restaurant.
   defp put_npc(state, %{owner_kind: :npc, npc: npc} = e) do
@@ -444,7 +463,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
       consumed_cost: 0,
       prep_ms: Map.get(c, :prep_ms, recipe.prep_ms),
       finish_ms: Map.get(c, :finish_ms, recipe.finish_ms),
-      seq: map_size(state.orders),
+      seq: state.order_seq,
       queued_at: state.now,
       stage_done_at: nil,
       ready_at: nil,
@@ -458,6 +477,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
     state
     |> put_in([:orders, c.order_id], order)
+    |> Map.update!(:order_seq, &(&1 + 1))
     |> update_in([:restaurants, rid, :batches], &Inventory.adjust_reserved(&1, c.reservations, 1))
     |> reserve_funding(e.visit_id, c.funding, c.price)
     |> update_in([:visits, e.visit_id, :carbs_reserved], &(&1 + carbs))

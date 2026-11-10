@@ -227,8 +227,8 @@ defmodule FeudHall.Application.CommandWorkflow do
       not String.printable?(id) -> {:error, :malformed_command_id}
       kind not in @commands and kind not in @control_commands -> {:error, :unknown_command}
       not valid_actor?(actor) -> {:error, :unauthenticated}
+      minted_id?(id) -> {:error, :reserved_command_id}
       reserved_prefix?(id) and not reserved_allowed?(id, actor) -> {:error, :reserved_command_id}
-      arrival_id?(id) and not match?({:system, _}, actor) -> {:error, :reserved_command_id}
       true -> :ok
     end
   end
@@ -243,7 +243,8 @@ defmodule FeudHall.Application.CommandWorkflow do
   cannot pre-claim an ID the platform derives later. `DS:` is the entity ID of
   a simulated diner's dessert (`"DS:" <> visit_id`), from which the clock
   advance derives that dessert's order ID exactly as a guest's dessert order
-  is derived from its command ID.
+  is derived from its command ID; unlike the others it is refused to system
+  actors too.
   """
   @spec reserved_prefix?(term()) :: boolean()
   def reserved_prefix?(command_id) when is_binary(command_id),
@@ -255,13 +256,20 @@ defmodule FeudHall.Application.CommandWorkflow do
   True when `command_id` has the form of a simulated arrival's entity ID
   (`"A<day>-<seq>"`). The clock advance derives that arrival's visit, tray and
   order IDs from it exactly as a command derives them from its command ID, so
-  only system actors may use such an ID.
+  no actor may use such an ID (see `minted_id?/1`).
   """
   @spec arrival_id?(term()) :: boolean()
   def arrival_id?(command_id) when is_binary(command_id), do: Regex.match?(~r/\AA\d+-\d+\z/, command_id)
   def arrival_id?(_), do: false
 
-  # System actors may use every reserved prefix; NPCs only `npc:`.
+  # Entity IDs the clock advance mints itself: a simulated arrival's
+  # (`A<day>-<seq>`) and a simulated diner's dessert (`DS:<visit_id>`). They are
+  # never command IDs, so every actor, system ones included, is refused them;
+  # with receipts binding every other command ID, no visit, tray or order ID
+  # is minted twice over the hall's history (see `FeudHall.Domain.Hall.Admission`).
+  defp minted_id?(id), do: arrival_id?(id) or String.starts_with?(id, "DS:")
+
+  # System actors may use every other reserved prefix; NPCs only `npc:`.
   defp reserved_allowed?(_id, {:system, _}), do: true
   defp reserved_allowed?(id, {:npc, _}), do: String.starts_with?(id, "npc:")
   defp reserved_allowed?(_id, _actor), do: false

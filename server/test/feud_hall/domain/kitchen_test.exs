@@ -32,7 +32,7 @@ defmodule FeudHall.Domain.KitchenTest do
           tray: "T:" <> id,
           kind: :main,
           status: Map.get(fields, :stage, :queued_prep),
-          seq: map_size(state.orders),
+          seq: state.order_seq,
           queued_at: state.now,
           ready_at: state.now,
           prep_ms: 100,
@@ -41,7 +41,7 @@ defmodule FeudHall.Domain.KitchenTest do
         Map.delete(fields, :stage)
       )
 
-    put_in(state, [:orders, id], order)
+    state |> put_in([:orders, id], order) |> Map.update!(:order_seq, &(&1 + 1))
   end
 
   defp estimate(state, components \\ [@main]),

@@ -79,6 +79,79 @@ defmodule FeudHall.Domain.InvariantsTest do
     refute {:visit_order_mismatch, visit_id("visit-d2"), d2_order} in problems
   end
 
+  describe "live state holds only unfinished work" do
+    # Both trays accepted together: d1's is handed over 4..8 and accepts its dessert, d2's
+    # 8..12 and finalizes, so at 12 d1's dessert is still in the kitchen (live).
+    setup do
+      w = stocked_world(arrivals: false)
+      w = simulated_visit(w, "d1", "bean_tacos", nil, "unrestricted", 10_000, true)
+      w = simulated_visit(w, "d2", "bean_tacos")
+      {before_d2, _} = w = serve_tray(w, tray_id("visit-d1"))
+      {state, _} = serve_tray(w, tray_id("visit-d2"))
+      %{state: state, before_d2: before_d2}
+    end
+
+    test "a live served main with its dessert open passes; the finalized visit is gone", %{state: state} do
+      assert Invariants.check(state) == :ok
+      assert Map.keys(state.visits) == [visit_id("visit-d1")]
+      assert state.trays[tray_id("visit-d1")].status == :served
+      assert %{arrivals: 2, finalized_visits: 1} = state.stats
+    end
+
+    test "a finalized visit kept in state breaks the visit count", %{state: state, before_d2: before} do
+      kept = put_in(state, [:visits, visit_id("visit-d2")], before.visits[visit_id("visit-d2")])
+      assert Invariants.check(kept) == {:error, [{:visit_count_mismatch, 2, 3}]}
+
+      lost = update_in(state, [:visits], &Map.delete(&1, visit_id("visit-d1")))
+      assert {:visit_count_mismatch, 2, 1} in problems_of(Invariants.check(lost))
+    end
+
+    test "a finalized visit's tray or orders kept in state are reported", %{state: state, before_d2: before} do
+      tid = tray_id("visit-d2")
+      [main] = before.trays[tid].components
+
+      kept =
+        state
+        |> put_in([:trays, tid], %{before.trays[tid] | status: :served})
+        |> put_in([:orders, main], %{before.orders[main] | status: :served, reservations: []})
+
+      assert {:error, problems} = Invariants.check(kept)
+      assert {:tray_without_visit, tid} in problems
+      assert {:settled_tray_retained, tid} in problems
+      assert {:order_without_visit, main} in problems
+    end
+
+    test "cancelled work, a served dessert, or a served tray with no open dessert is reported", %{state: state} do
+      vid = visit_id("visit-d1")
+      tid = tray_id("visit-d1")
+      [main] = state.trays[tid].components
+      dessert = state.visits[vid].dessert_order
+
+      cancelled_tray = put_in(state, [:trays, tid, :status], :cancelled)
+      assert {:settled_tray_retained, tid} in problems_of(Invariants.check(cancelled_tray))
+
+      cancelled_main = put_in(state, [:orders, main, :status], :cancelled)
+      assert {:settled_order_retained, main} in problems_of(Invariants.check(cancelled_main))
+
+      served_dessert = put_in(state, [:orders, dessert], %{state.orders[dessert] | status: :served, reservations: []})
+      assert {:settled_order_retained, dessert} in problems_of(Invariants.check(served_dessert))
+
+      declined = put_in(state, [:visits, vid, :dessert], :declined)
+      assert {:settled_tray_retained, tid} in problems_of(Invariants.check(declined))
+
+      other_tray = put_in(state, [:visits, vid, :tray], "T:other")
+      assert {:tray_without_visit, tid} in problems_of(Invariants.check(other_tray))
+    end
+
+    test "the order counter lies above every live order's sequence number", %{state: state} do
+      top = state.orders |> Map.values() |> Enum.map(& &1.seq) |> Enum.max()
+      assert state.order_seq > top
+
+      assert Invariants.check(%{state | order_seq: top}) == {:error, [{:order_seq_behind, top}]}
+      assert Invariants.check(Map.delete(state, :order_seq)) == {:error, [{:order_seq_behind, nil}]}
+    end
+  end
+
   test "restaurant cash never goes negative" do
     state = reserved_world()
     cash = state.restaurants["r1"].ledger.cash

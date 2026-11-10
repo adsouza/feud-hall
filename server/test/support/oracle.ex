@@ -9,16 +9,23 @@ defmodule FeudHall.Oracle do
 
   It never calls the modules it checks (`Market`, `Demand`, `Choice`,
   `Kitchen`, `Planner`, the decider or the evolver); only the calendar
-  (`Clock`) is shared. Checked: per-restaurant accounting (trial balance,
-  cost classified once, cash/revenue/cost of sales from events), order,
-  visit and wallet consistency, station capacity and counter contents,
+  (`Clock`) is shared. Live state holds only unfinished work (a visit, its
+  tray and its orders leave it when the visit finalizes), so facts about
+  finished visits are checked from the events alone. Checked: per-restaurant
+  accounting (trial balance, cost classified once, cash/revenue/cost of sales
+  from events), live order, visit and wallet consistency, station capacity
+  and counter contents,
   stage queues (stage fields, FIFO by `{queued_at, seq}`, no idle station or
   counter while older work waits), the hall's counters and visitor fund, and,
   over a log starting at genesis: market conservation (opening stock +
   replenishments = fills + stock; every request settled exactly and filled
   within its limit; pending requests agree), arrival accounting by source
   (stream, command-admitted simulated, guest) and by leaving reason, and NPC
-  planning-slot monotonicity.
+  planning-slot monotonicity, and visit lifecycles (each visit admitted once
+  and finalized at most once, only after all its courses settled, with
+  outcomes matching their settlement; the live visits, trays and orders are
+  exactly those of unfinalized visits; served mains and finalizations agree
+  with the stats).
   """
 
   @doc "All violations for a hall state and the events that produced it."
@@ -36,7 +43,8 @@ defmodule FeudHall.Oracle do
       wallets(state) ++
       kitchens(state) ++
       stage_queues(state) ++
-      hall(state, events) ++ market(state, events) ++ arrivals(state, events) ++ npcs(state, events)
+      hall(state, events) ++
+      market(state, events) ++ arrivals(state, events) ++ lifecycles(state, events) ++ npcs(state, events)
   end
 
   def assert_settled!(state, events) do
@@ -51,14 +59,14 @@ defmodule FeudHall.Oracle do
 
   defp restaurant(state, rid, r, events) do
     l = r.ledger
-    my_orders = state.orders |> Map.values() |> Enum.filter(&(state.visits[&1.visit].restaurant == rid))
+    my_orders = state.orders |> Map.values() |> Enum.filter(&(get_in(state, [:visits, &1.visit, :restaurant]) == rid))
 
     raw_from_batches = r.batches |> Map.values() |> Enum.map(& &1.cost) |> Enum.sum()
 
     wip_from_orders =
       my_orders |> Enum.filter(&(&1.status in @consumed)) |> Enum.map(& &1.consumed_cost) |> Enum.sum()
 
-    t = event_totals(events, rid, state)
+    t = event_totals(events, rid)
 
     reserved_by_batch =
       my_orders
@@ -94,43 +102,45 @@ defmodule FeudHall.Oracle do
     for {false, problem} <- checks ++ batch_checks ++ orphan_claims, do: {rid, problem}
   end
 
-  # Totals read directly from facts, never from derived state.
-  defp event_totals(events, rid, state) do
+  # Totals read directly from facts, never from derived state. Settled orders
+  # may have left state with their visits, so each order's restaurant is the
+  # one its acceptance recorded (a dessert's is its visit's).
+  defp event_totals(events, rid) do
     zero = %{granted: 0, purchased: 0, unlocked: 0, revenue: 0, served_cost: 0, waste: 0}
 
-    Enum.reduce(events, zero, fn e, t ->
-      case e do
-        %{type: :starter_grant_issued, restaurant_id: ^rid, amount: a} -> %{t | granted: t.granted + a}
-        %{type: :stock_purchased, restaurant_id: ^rid, cost: c} -> %{t | purchased: t.purchased + c}
-        %{type: :market_cleared, fills: fs} -> %{t | purchased: t.purchased + fill_cost(fs, rid)}
-        %{type: :recipe_unlocked, restaurant_id: ^rid, cost: c} -> %{t | unlocked: t.unlocked + c}
-        %{type: :stock_spoiled, restaurant_id: ^rid, cost: c} -> %{t | waste: t.waste + c}
-        %{type: :tray_served, components: cs} -> sum_served(t, cs, rid, state)
-        %{type: :dessert_served} = c -> sum_served(t, [c], rid, state)
-        %{type: :tray_cancelled, components: cs} -> sum_waste(t, cs, rid, state)
-        %{type: :dessert_cancelled} = c -> sum_waste(t, [c], rid, state)
-        _ -> t
-      end
-    end)
+    {t, _owners} =
+      Enum.reduce(events, {zero, %{visits: %{}, orders: %{}}}, fn e, {t, owners} ->
+        mine? = &(Map.get(owners.orders, &1.order_id) == rid)
+
+        case e do
+          %{type: :visit_admitted} -> {t, put_in(owners, [:visits, e.visit_id], e.restaurant_id)}
+          %{type: :tray_accepted} -> {t, own(owners, e.components, e.restaurant_id)}
+          %{type: :dessert_accepted} -> {t, own(owners, [e.order], owners.visits[e.visit_id])}
+          %{type: :starter_grant_issued, restaurant_id: ^rid, amount: a} -> {%{t | granted: t.granted + a}, owners}
+          %{type: :stock_purchased, restaurant_id: ^rid, cost: c} -> {%{t | purchased: t.purchased + c}, owners}
+          %{type: :market_cleared, fills: fs} -> {%{t | purchased: t.purchased + fill_cost(fs, rid)}, owners}
+          %{type: :recipe_unlocked, restaurant_id: ^rid, cost: c} -> {%{t | unlocked: t.unlocked + c}, owners}
+          %{type: :stock_spoiled, restaurant_id: ^rid, cost: c} -> {%{t | waste: t.waste + c}, owners}
+          %{type: :tray_served, components: cs} -> {sum_served(t, Enum.filter(cs, mine?)), owners}
+          %{type: :dessert_served} = c -> {sum_served(t, Enum.filter([c], mine?)), owners}
+          %{type: :tray_cancelled, components: cs} -> {sum_waste(t, Enum.filter(cs, mine?)), owners}
+          %{type: :dessert_cancelled} = c -> {sum_waste(t, Enum.filter([c], mine?)), owners}
+          _ -> {t, owners}
+        end
+      end)
+
+    t
   end
+
+  defp own(owners, components, rid),
+    do: Enum.reduce(components, owners, &put_in(&2, [:orders, &1.order_id], rid))
 
   defp fill_cost(fills, rid), do: fills |> Enum.filter(&(&1.restaurant_id == rid)) |> Enum.map(& &1.cost) |> Enum.sum()
 
-  defp mine?(state, order_id, rid), do: state.visits[state.orders[order_id].visit].restaurant == rid
+  defp sum_served(t, cs),
+    do: Enum.reduce(cs, t, &%{&2 | revenue: &2.revenue + &1.price, served_cost: &2.served_cost + &1.cost})
 
-  defp sum_served(t, cs, rid, state) do
-    Enum.reduce(cs, t, fn c, t ->
-      if mine?(state, c.order_id, rid),
-        do: %{t | revenue: t.revenue + c.price, served_cost: t.served_cost + c.cost},
-        else: t
-    end)
-  end
-
-  defp sum_waste(t, cs, rid, state) do
-    Enum.reduce(cs, t, fn c, t ->
-      if mine?(state, c.order_id, rid), do: %{t | waste: t.waste + c.waste_cost}, else: t
-    end)
-  end
+  defp sum_waste(t, cs), do: Enum.reduce(cs, t, &%{&2 | waste: &2.waste + &1.waste_cost})
 
   defp orders(state) do
     Enum.flat_map(state.orders, fn {oid, o} ->
@@ -145,6 +155,7 @@ defmodule FeudHall.Oracle do
         {tray == nil or tray_consistent?(tray, o), {:tray_component_mismatch, oid}},
         {o.kind != :dessert or o.tray == nil, {:dessert_in_tray, oid}},
         {o.kind == :dessert or o.tray != nil, {:course_outside_tray, oid}},
+        {Map.has_key?(state.visits, o.visit), {:order_without_visit, oid}},
         {state.access == :open or o.status in [:served, :cancelled], {:active_order_during_cleaning, oid}}
       ]
       |> failures()
@@ -155,37 +166,43 @@ defmodule FeudHall.Oracle do
   defp tray_consistent?(%{status: :served}, o), do: o.status == :served
   defp tray_consistent?(%{status: :cancelled}, o), do: o.status == :cancelled
 
+  # Live visits only: a visit leaves state when it finalizes, so each one here
+  # still has unfinished work (a live course or an open dessert offer).
   defp visits(state) do
     by_visit = state.orders |> Map.values() |> Enum.group_by(& &1.visit)
 
-    Enum.flat_map(state.visits, fn {vid, v} ->
-      os = Map.get(by_visit, vid, [])
-      active = Enum.filter(os, &(&1.status in @live))
-      served = Enum.filter(os, &(&1.status == :served))
-      count = fn kind -> Enum.count(os, &(&1.kind == kind)) end
-      carb = fn list -> list |> Enum.map(&(&1.carbs_mg || 0)) |> Enum.sum() end
-      ceiling = v.requirement.carb_ceiling_mg
+    held =
+      for {who, vid} <- state.active_visits,
+          not match?(%{source: :guest, principal: ^who}, Map.get(state.visits, vid)),
+          do: {:dangling_active_visit, who}
 
-      [
-        {count.(:main) == 1, {:main_count, vid}},
-        {count.(:drink) <= 1, {:drink_count, vid}},
-        {count.(:dessert) <= 1, {:dessert_count, vid}},
-        {v.carbs_reserved == carb.(active), {:carbs_reserved_mismatch, vid}},
-        {v.carbs_served == carb.(served), {:carbs_served_mismatch, vid}},
-        {ceiling == nil or v.carbs_reserved + v.carbs_served <= ceiling, {:carb_ceiling_exceeded, vid}},
-        {v.status != :finalized or (active == [] and v.dessert != :offered), {:finalized_with_open_work, vid}},
-        {v.status == :finalized or active != [] or v.dessert == :offered, {:stranded_active_visit, vid}},
-        {v.dessert != :offered or state.access == :open, {:offer_during_cleaning, vid}},
-        {v.source != :simulated or v.budget_committed <= v.budget, {:over_budget, vid}},
-        {v.source != :simulated or
-           v.budget_committed == os |> Enum.reject(&(&1.status == :cancelled)) |> Enum.map(& &1.price) |> Enum.sum(),
-         {:budget_commitment_mismatch, vid}},
-        {v.source != :guest or v.status == :finalized or state.active_visits[v.principal] == vid,
-         {:untracked_active_guest_visit, vid}},
-        {v.dessert != :accepted or count.(:dessert) == 1, {:dessert_slot_mismatch, vid}}
-      ]
-      |> failures()
-    end)
+    held ++
+      Enum.flat_map(state.visits, fn {vid, v} ->
+        os = Map.get(by_visit, vid, [])
+        active = Enum.filter(os, &(&1.status in @live))
+        served = Enum.filter(os, &(&1.status == :served))
+        count = fn kind -> Enum.count(os, &(&1.kind == kind)) end
+        carb = fn list -> list |> Enum.map(&(&1.carbs_mg || 0)) |> Enum.sum() end
+        ceiling = v.requirement.carb_ceiling_mg
+
+        [
+          {count.(:main) == 1, {:main_count, vid}},
+          {count.(:drink) <= 1, {:drink_count, vid}},
+          {count.(:dessert) <= 1, {:dessert_count, vid}},
+          {v.carbs_reserved == carb.(active), {:carbs_reserved_mismatch, vid}},
+          {v.carbs_served == carb.(served), {:carbs_served_mismatch, vid}},
+          {ceiling == nil or v.carbs_reserved + v.carbs_served <= ceiling, {:carb_ceiling_exceeded, vid}},
+          {active != [] or v.dessert == :offered, {:stranded_active_visit, vid}},
+          {v.dessert != :offered or state.access == :open, {:offer_during_cleaning, vid}},
+          {v.source != :simulated or v.budget_committed <= v.budget, {:over_budget, vid}},
+          {v.source != :simulated or
+             v.budget_committed == os |> Enum.reject(&(&1.status == :cancelled)) |> Enum.map(& &1.price) |> Enum.sum(),
+           {:budget_commitment_mismatch, vid}},
+          {v.source != :guest or state.active_visits[v.principal] == vid, {:untracked_active_guest_visit, vid}},
+          {v.dessert != :accepted or count.(:dessert) == 1, {:dessert_slot_mismatch, vid}}
+        ]
+        |> failures()
+      end)
   end
 
   defp wallets(state) do
@@ -211,7 +228,7 @@ defmodule FeudHall.Oracle do
   # components are all ready and whose handover is still running.
   defp kitchens(state) do
     %{prep_stations: prep_n, finish_stations: finish_n} = state.catalog.rules.kitchen
-    by_stall = state.orders |> Map.values() |> Enum.group_by(&state.visits[&1.visit].stall)
+    by_stall = state.orders |> Map.values() |> Enum.group_by(&get_in(state, [:visits, &1.visit, :stall]))
 
     Enum.flat_map(state.stalls, fn {sid, stall} ->
       os = Map.get(by_stall, sid, [])
@@ -252,7 +269,7 @@ defmodule FeudHall.Oracle do
   defp stage_queues(%{access: :open} = state) do
     %{prep_stations: prep_n, finish_stations: finish_n} = state.catalog.rules.kitchen
     live = state.orders |> Map.values() |> Enum.filter(&(&1.status in @live))
-    by_stall = Enum.group_by(live, &state.visits[&1.visit].stall)
+    by_stall = Enum.group_by(live, &get_in(state, [:visits, &1.visit, :stall]))
 
     fields =
       Enum.flat_map(live, fn o ->
@@ -297,23 +314,136 @@ defmodule FeudHall.Oracle do
   defp item_of(%{kind: :dessert, id: id}), do: {:dessert, id}
   defp item_of(%{tray: tray}), do: {:tray, tray}
 
+  # The visit counts here read the state alone: every admitted visit is either
+  # finalized or still live. Per-visit facts are checked from the events in
+  # `lifecycles/2`.
   defp hall(state, events) do
     granted = for(%{type: :allowance_granted, amount: a} <- events, do: a) |> Enum.sum()
     initial = state.catalog.rules.visitor_fund
-    served_mains = Enum.count(state.orders, fn {_, o} -> o.kind == :main and o.status == :served end)
-    finalized = Enum.count(state.visits, fn {_, v} -> v.status == :finalized end)
-    finalize_events = Enum.count(events, &(&1.type == :visit_finalized))
 
     [
       # The event-sourced gate must agree with the calendar definition.
       {state.access == :cleaning == FeudHall.Domain.Clock.cleaning?(state.now), {:access_gate_mismatch, state.now}},
       {state.visitor_fund + granted == initial, :visitor_fund_not_conserved},
-      {state.stats.arrivals == map_size(state.visits), :arrival_count},
-      {state.stats.served_mains == served_mains, :served_main_count},
-      {state.stats.finalized_visits == finalized, :finalized_count},
-      {finalize_events == finalized, :visit_finalized_more_than_once}
+      {state.stats.arrivals == state.stats.finalized_visits + map_size(state.visits), :live_visit_count}
     ]
     |> failures()
+  end
+
+  # Visit lifecycles, from the facts alone, over a log starting at genesis: each
+  # visit ID is admitted once; courses are accepted, settled and offered only
+  # while their visit is live, each order ID once; a visit finalizes once, only
+  # after every course it accepted has settled, naming exactly those courses
+  # with outcomes matching how each settled (served ones scored, cancelled ones
+  # failed or exempt). The state's visits, trays and orders are exactly those
+  # of the visits not yet finalized, and the hall's counts of admitted and
+  # finalized visits and served mains agree with the facts.
+  defp lifecycles(state, [%{type: :hall_initialized} | _] = events) do
+    zero = %{visits: %{}, orders: %{}, trays: %{}, admitted: 0, finalized: 0, served_mains: 0, problems: []}
+
+    t =
+      Enum.reduce(events, zero, fn e, t ->
+        case e do
+          %{type: :visit_admitted, visit_id: vid} ->
+            t
+            |> check([{not Map.has_key?(t.visits, vid), {:visit_id_reused, vid}}])
+            |> Map.update!(:visits, &Map.put(&1, vid, %{orders: [], tray: nil, finalized: false}))
+            |> Map.update!(:admitted, &(&1 + 1))
+
+          %{type: :tray_accepted, visit_id: vid} ->
+            t
+            |> accept(vid, e.components)
+            |> put_in([:trays, e.tray_id], vid)
+            |> update_in([:visits, vid], &(&1 && %{&1 | tray: e.tray_id}))
+
+          %{type: :dessert_accepted, visit_id: vid} ->
+            accept(t, vid, [e.order])
+
+          %{type: :tray_served, components: cs} ->
+            served_mains = Enum.count(cs, &(get_in(t, [:orders, &1.order_id, :kind]) == :main))
+            %{settle(t, cs, :served) | served_mains: t.served_mains + served_mains}
+
+          %{type: :dessert_served} ->
+            settle(t, [e], :served)
+
+          %{type: type} when type in [:tray_cancelled, :dessert_cancelled] ->
+            settle(t, Map.get(e, :components, [e]), :cancelled)
+
+          %{type: type, visit_id: vid} when type in [:dessert_offered, :dessert_declined] ->
+            check(t, [{live_visit?(t, vid), {:work_after_finalization, vid}}])
+
+          %{type: :visit_finalized, visit_id: vid} ->
+            finalize(t, vid, e)
+
+          _ ->
+            t
+        end
+      end)
+
+    live = for {vid, %{finalized: false}} <- t.visits, into: MapSet.new(), do: vid
+    live_orders = for {oid, o} <- t.orders, MapSet.member?(live, o.visit), into: MapSet.new(), do: oid
+    live_trays = for {tid, vid} <- t.trays, MapSet.member?(live, vid), into: MapSet.new(), do: tid
+    keys = &(&1 |> Map.keys() |> MapSet.new())
+
+    t.problems ++
+      failures([
+        {state.stats.arrivals == t.admitted, :arrival_count},
+        {state.stats.finalized_visits == t.finalized, :finalized_count},
+        {state.stats.served_mains == t.served_mains, :served_main_count},
+        {keys.(state.visits) == live, :live_visits_mismatch},
+        {keys.(state.trays) == live_trays, :live_trays_mismatch},
+        {keys.(state.orders) == live_orders, :live_orders_mismatch}
+      ])
+  end
+
+  defp lifecycles(_state, _events), do: []
+
+  defp check(t, checks), do: %{t | problems: t.problems ++ failures(checks)}
+
+  defp live_visit?(t, vid), do: match?(%{finalized: false}, t.visits[vid])
+
+  defp accept(t, vid, components) do
+    Enum.reduce(components, check(t, [{live_visit?(t, vid), {:work_after_finalization, vid}}]), fn c, t ->
+      t
+      |> check([{not Map.has_key?(t.orders, c.order_id), {:order_id_reused, c.order_id}}])
+      |> put_in([:orders, c.order_id], %{visit: vid, kind: c.kind, settled: nil})
+      |> update_in([:visits, vid], &(&1 && %{&1 | orders: &1.orders ++ [c.order_id]}))
+    end)
+  end
+
+  defp settle(t, components, how) do
+    Enum.reduce(components, t, fn %{order_id: oid}, t ->
+      order = t.orders[oid]
+
+      t
+      |> check([
+        {match?(%{settled: nil}, order), {:order_settled_twice, oid}},
+        {order != nil and live_visit?(t, order.visit), {:settled_outside_live_visit, oid}}
+      ])
+      |> then(&if(order, do: put_in(&1, [:orders, oid, :settled], how), else: &1))
+    end)
+  end
+
+  defp finalize(t, vid, e) do
+    visit = t.visits[vid]
+    orders = if visit, do: visit.orders, else: []
+    settled = Enum.map(orders, &t.orders[&1].settled)
+
+    outcomes_match? =
+      Enum.map(e.components, & &1.order_id) == orders and
+        Enum.all?(e.components, fn c ->
+          t.orders[c.order_id].settled == :served == (c.outcome == :served)
+        end)
+
+    t
+    |> check([
+      {visit != nil, {:finalized_unknown_visit, vid}},
+      {visit == nil or not visit.finalized, :visit_finalized_more_than_once},
+      {Enum.all?(settled, &(&1 != nil)), {:finalized_with_open_work, vid}},
+      {visit == nil or outcomes_match?, {:finalized_outcome_mismatch, vid}}
+    ])
+    |> then(&if(visit, do: put_in(&1, [:visits, vid, :finalized], true), else: &1))
+    |> Map.update!(:finalized, &(&1 + 1))
   end
 
   # Market conservation, replayed from the facts alone: the opening stock, plus
@@ -409,9 +539,19 @@ defmodule FeudHall.Oracle do
   # simulated visits admitted by command, and guests. The hall's stats agree
   # with the facts per source (stream arrivals, stream admissions, leavers per
   # reason, and all visits) and partition the stream arrivals; each visit's
-  # source matches its admission. Only checked over a log that starts at genesis.
+  # source matches its admission (for the visits still live). Only checked over
+  # a log that starts at genesis.
   defp arrivals(state, [%{type: :hall_initialized} | _] = events) do
-    zero = %{now: 0, arrivals: 0, left: %{}, ids: MapSet.new(), admitted: %{}, sources: %{}, problems: []}
+    zero = %{
+      now: 0,
+      arrivals: 0,
+      left: %{},
+      ids: MapSet.new(),
+      admitted: %{},
+      sources: %{},
+      finalized: MapSet.new(),
+      problems: []
+    }
 
     t =
       events
@@ -444,6 +584,9 @@ defmodule FeudHall.Oracle do
 
           {t, if(admitted?, do: e.arrival_id)}
 
+        [%{type: :visit_finalized, visit_id: vid}, _next], {t, _arrival} ->
+          {%{t | finalized: MapSet.put(t.finalized, vid)}, nil}
+
         [%{type: :visit_admitted} = e, _next], {t, arrival} ->
           origin =
             cond do
@@ -465,8 +608,11 @@ defmodule FeudHall.Oracle do
       end)
       |> elem(0)
 
+    # Finished visits have left state: the live ones carry the sources their
+    # admissions recorded, and the recorded sources partition the admissions.
     visit_sources = Map.new(state.visits, fn {id, v} -> {id, v.source} end)
-    by_source = state.visits |> Map.values() |> Enum.frequencies_by(& &1.source)
+    live_sources = Map.drop(t.sources, MapSet.to_list(t.finalized))
+    by_source = t.sources |> Map.values() |> Enum.frequencies()
     stats = state.stats
     admitted = fn origin -> Map.get(t.admitted, origin, 0) end
 
@@ -481,7 +627,7 @@ defmodule FeudHall.Oracle do
         {Map.get(by_source, :simulated, 0) == admitted.(:stream) + admitted.(:simulated_command),
          :simulated_visit_count},
         {Map.get(by_source, :guest, 0) == admitted.(:guest), :guest_visit_count},
-        {visit_sources == t.sources, :visit_sources_mismatch}
+        {visit_sources == live_sources, :visit_sources_mismatch}
       ])
   end
 

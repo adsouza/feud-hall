@@ -22,8 +22,9 @@ defmodule FeudHall.Domain.Kitchen do
   FIFO rules: each stage queue is served by `{queued_at, seq}` on the
   earliest-free station; the counter takes the item whose last component
   became ready first, ties by its first component's `seq`. A new order's
-  `seq` is the next one the evolver assigns, so it sorts after every order
-  already accepted.
+  `seq` is the hall's `order_seq`, the counter the evolver numbers accepted
+  orders with, so it sorts after every order already accepted and no number
+  is reused after finished orders leave live state.
   """
 
   @stages [:queued_prep, :prep, :queued_finish, :finish, :ready]
@@ -154,7 +155,7 @@ defmodule FeudHall.Domain.Kitchen do
   end
 
   @doc "The sequence number the evolver gives the next accepted order."
-  def next_seq(state), do: map_size(state.orders)
+  def next_seq(state), do: state.order_seq
 
   @doc """
   Whether the stall can take another customer order: accepted-but-unserved

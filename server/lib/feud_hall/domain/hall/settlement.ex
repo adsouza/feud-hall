@@ -145,9 +145,9 @@ defmodule FeudHall.Domain.Hall.Settlement do
   defp simulated_dessert_decision(state, visit, true) when visit.dessert_appetite? do
     # Eligibility just quoted this exact state, so acceptance must succeed; any
     # other error here is a bug and must not be swallowed as a decline. An order
-    # ID already taken (`DS:` is reserved for system actors, so only a damaged
-    # or pre-reservation history can hold one) declines instead of raising
-    # inside the clock advance, so the hall keeps running.
+    # ID held by a live order (no actor may use the `DS:` prefix as a command
+    # ID, so only a damaged or pre-reservation history can hold one) declines
+    # instead of raising inside the clock advance, so the hall keeps running.
     case Admission.accept_dessert(state, visit, nil, "DS:" <> visit.id) do
       {:ok, [accepted]} -> [accepted]
       {:error, :order_id_taken} -> simulated_dessert_decision(state, visit, false)
