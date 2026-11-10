@@ -70,16 +70,16 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     test "the dessert shares the visit's ceiling with the already served tray" do
       # 90 g ceiling: dessert alone (67,400 mg) fits, main + dessert does not.
       catalog = put_in(SliceCatalog.catalog(), [:profiles, "carb_conscious", :carb_ceiling_mg], 90_000)
-      w = stocked_world(catalog: catalog) |> simulated_visit("c1", "chicken_tacos", nil, "carb_conscious")
+      w = stocked_world(catalog: catalog) |> simulated_visit("c1", "chicken_tacos", nil, "carb_conscious", 10_000, true)
       w = serve_tray(w, tray_id("visit-c1"))
       {state, _} = w
       assert state.visits[visit_id("visit-c1")].status == :finalized
 
-      # The same diner profile with an unrestricted first course gets the offer.
-      w = stocked_world(catalog: catalog) |> simulated_visit("u1", "chicken_tacos", nil, "unrestricted")
+      # The same diner profile with an unrestricted first course gets the dessert.
+      w = stocked_world(catalog: catalog) |> simulated_visit("u1", "chicken_tacos", nil, "unrestricted", 10_000, true)
       w = serve_tray(w, tray_id("visit-u1"))
       {state, _} = w
-      assert state.visits[visit_id("visit-u1")].dessert == :offered
+      assert state.visits[visit_id("visit-u1")].dessert == :accepted
     end
 
     test "portion carbohydrate rounds up exactly once after the whole bill" do

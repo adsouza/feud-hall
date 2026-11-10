@@ -213,6 +213,7 @@ defmodule FeudHall.Domain.Hall.Decider do
           drink: p[:drink],
           profile_id: p[:profile_id],
           confirmed: p[:confirmed],
+          dessert_appetite?: p[:dessert_appetite?],
           deadline_cap: nil
         },
         ctx.command_id

@@ -11,8 +11,8 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     %{world: stocked_world(arrivals: false)}
   end
 
-  test "main + drink tray settles jointly, offers dessert, and finalizes once with 4:1:2 weights", %{world: w} do
-    w = simulated_visit(w, "d1", "bean_tacos", "horchata")
+  test "main + drink tray settles jointly, accepts dessert, and finalizes once with 4:1:2 weights", %{world: w} do
+    w = simulated_visit(w, "d1", "bean_tacos", "horchata", "unrestricted", 10_000, true)
     {state, _events} = w
     tray = state.trays[tray_id("visit-d1")]
     assert length(tray.components) == 2
@@ -25,13 +25,11 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     Oracle.assert_settled!(state, events)
 
     visit = state.visits[visit_id("visit-d1")]
-    assert visit.dessert == :offered
+    assert visit.dessert == :accepted
     assert state.stats.served_mains == 1
     assert state.stats.served_drinks == 1
     assert state.restaurants["r1"].ledger.revenue == 900 + 350
 
-    w = run!(w, {:accept_dessert, %{visit_id: visit.id}}, {:system, :demand}, "dessert")
-    {state, _} = w
     dessert = state.orders[state.visits[visit.id].dessert_order]
     w = serve_dessert(w, dessert.id)
     {state, events} = w
@@ -68,8 +66,8 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     assert state.orders[main].penalty == 3
 
     w = serve_tray(w, tray.id)
-    w = run!(w, {:decline_dessert, %{visit_id: visit_id("visit-d2")}}, {:system, :demand}, "decline")
     {state, events} = w
+    assert state.visits[visit_id("visit-d2")].dessert == :declined
     outcome = state.visits[visit_id("visit-d2")].outcome
     # Main only: score is the main's quality; declining dessert carries no penalty.
     assert outcome.score == 9_700
@@ -188,10 +186,10 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
   end
 
   test "an unaccepted dessert offer times out after 30 available-service seconds", %{world: w} do
-    w = simulated_visit(w, "d1", "bean_tacos")
-    w = serve_tray(w, tray_id("visit-d1"))
+    w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "d1", "bean_tacos")
+    w = serve_tray(w, tray_id("d1"))
     {state, _} = w
-    vid = visit_id("visit-d1")
+    vid = visit_id("d1")
     deadline = state.visits[vid].dessert_offer_deadline
     assert deadline == state.now + Clock.service_duration(30_000)
 
@@ -248,5 +246,100 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     assert state.orders[main].cancel_reason == :ready_food_expired
     refute Enum.any?(events, &(&1.type == :tray_served))
     Oracle.assert_settled!(state, events)
+  end
+
+  describe "simulated dessert" do
+    defp service_batch(events, tray),
+      do: events |> Enum.drop_while(&(&1[:tray_id] != tray or &1.type != :tray_served))
+
+    test "appetite and an eligible, affordable dessert accept it in the service batch; the kitchen serves it", %{
+      world: w
+    } do
+      w = simulated_visit(w, "d1", "bean_tacos", nil, "unrestricted", 10_000, true)
+      vid = visit_id("visit-d1")
+      w = serve_tray(w, tray_id("visit-d1"))
+      {state, events} = w
+
+      assert [%{type: :tray_served}, %{type: :dessert_accepted, visit_id: ^vid} | _] =
+               service_batch(events, tray_id("visit-d1"))
+
+      refute Enum.any?(events, &(&1.type == :dessert_offered))
+
+      visit = state.visits[vid]
+      assert visit.status == :active
+      assert visit.dessert == :accepted
+      assert visit.dessert_offer_deadline == nil
+      order = state.orders[visit.dessert_order]
+      assert order.kind == :dessert
+      assert String.contains?(order.id, "DS:" <> vid)
+      Oracle.assert_settled!(state, events)
+
+      w = serve_dessert(w, order.id)
+      {state, events} = w
+      final = state.visits[vid]
+      assert final.outcome.reason == :completed
+      assert Enum.map(final.outcome.components, & &1.kind) == [:main, :dessert]
+      assert final.outcome.score == 10_000
+      assert final.outcome.competitive
+      assert state.stats.served_desserts == 1
+      assert state.stats.arrivals == 1
+      assert state.demand.today.left == %{}
+      Oracle.assert_settled!(state, events)
+    end
+
+    test "no appetite declines and finalizes in the service batch", %{world: w} do
+      w = simulated_visit(w, "d1", "bean_tacos")
+      vid = visit_id("visit-d1")
+      w = serve_tray(w, tray_id("visit-d1"))
+      {state, events} = w
+
+      assert [%{type: :tray_served}, %{type: :dessert_declined, visit_id: ^vid}, %{type: :visit_finalized} = fin | _] =
+               service_batch(events, tray_id("visit-d1"))
+
+      assert fin.reason == :completed
+      assert fin.score == 10_000
+      visit = state.visits[vid]
+      assert visit.status == :finalized
+      assert visit.dessert == :declined
+      refute Enum.any?(events, &(&1.type in [:dessert_offered, :dessert_accepted]))
+      # A served main followed by a declined dessert is not a visit that left.
+      assert state.demand.today.left == %{}
+      Oracle.assert_settled!(state, events)
+    end
+
+    test "a dessert over the carbohydrate ceiling finalizes without penalty despite appetite", %{world: w} do
+      w = simulated_visit(w, "c1", "chicken_tacos", nil, "carb_conscious", 10_000, true)
+      w = serve_tray(w, tray_id("visit-c1"))
+      {state, events} = w
+      visit = state.visits[visit_id("visit-c1")]
+
+      assert visit.status == :finalized
+      assert Enum.map(visit.outcome.components, & &1.kind) == [:main]
+      assert visit.outcome.score == 10_000
+      assert visit.outcome.reason == :completed
+      refute Enum.any?(events, &(&1.type in [:dessert_offered, :dessert_accepted]))
+      Oracle.assert_settled!(state, events)
+    end
+
+    test "a dessert that does not fit the remaining budget is declined", %{world: w} do
+      w = simulated_visit(w, "d1", "bean_tacos", nil, "unrestricted", 900, true)
+      w = serve_tray(w, tray_id("visit-d1"))
+      {state, events} = w
+
+      assert state.visits[visit_id("visit-d1")].status == :finalized
+      refute Enum.any?(events, &(&1.type == :dessert_accepted))
+      Oracle.assert_settled!(state, events)
+    end
+
+    test "guests keep the timed dessert offer", %{world: w} do
+      w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "g1", "bean_tacos")
+      w = serve_tray(w, tray_id("g1"))
+      {state, events} = w
+      visit = state.visits[visit_id("g1")]
+
+      assert visit.dessert == :offered
+      assert visit.dessert_offer_deadline == state.now + Clock.service_duration(30_000)
+      assert [%{type: :tray_served}, %{type: :dessert_offered} | _] = service_batch(events, tray_id("g1"))
+    end
   end
 end

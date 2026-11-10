@@ -71,10 +71,10 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
     test "an open dessert offer is closed by the cutoff, keeping the served tray's score" do
       # Served at 02:48 (eight minutes of work): the dessert still fits before 03:00.
       w = stocked_world() |> advance_hall(@three - 20 * Clock.minute())
-      w = simulated_visit(w, "d1", "bean_tacos")
-      w = serve_tray(w, tray_id("visit-d1"))
+      w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "d1", "bean_tacos")
+      w = serve_tray(w, tray_id("d1"))
       {state, _} = w
-      vid = visit_id("visit-d1")
+      vid = visit_id("d1")
       assert state.visits[vid].dessert == :offered
       # The 30 s window (12 game minutes) is capped at 03:00.
       assert state.visits[vid].dessert_offer_deadline == @three
@@ -82,7 +82,8 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       {state, events} = advance_hall(w, @three)
       assert state.visits[vid].outcome.reason == :cleaning
       assert state.visits[vid].outcome.score == 10_000
-      assert state.visits[vid].outcome.competitive
+      # Guest visits are never competitive.
+      refute state.visits[vid].outcome.competitive
       Oracle.assert_settled!(state, events)
     end
 

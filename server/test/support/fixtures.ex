@@ -184,7 +184,19 @@ defmodule FeudHall.Fixtures do
     do:
       {:submit_purchase_request, %{restaurant_id: "r1", product: product, qty: qty, max_price_per_kunit: 1_000_000_000}}
 
-  def simulated_visit(world, id, main, drink \\ nil, profile \\ "unrestricted", budget \\ 10_000) do
+  @doc """
+  Admits a simulated visit as the demand system would. `dessert_appetite?` is
+  the flag a stream arrival draws; it decides dessert at main service.
+  """
+  def simulated_visit(
+        world,
+        id,
+        main,
+        drink \\ nil,
+        profile \\ "unrestricted",
+        budget \\ 10_000,
+        dessert_appetite? \\ false
+      ) do
     run!(
       world,
       {:admit_visit,
@@ -195,7 +207,8 @@ defmodule FeudHall.Fixtures do
          stall_id: @stall,
          main: main,
          drink: drink,
-         profile_id: profile
+         profile_id: profile,
+         dessert_appetite?: dessert_appetite?
        }},
       {:system, :demand},
       "visit-" <> id

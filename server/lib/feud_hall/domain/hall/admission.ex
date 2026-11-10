@@ -74,10 +74,14 @@ defmodule FeudHall.Domain.Hall.Admission do
     end
   end
 
-  @doc "Accepts the optional dessert for an already-resolved, authorized visit."
+  @doc """
+  Accepts the optional dessert for an already-resolved, authorized visit. A
+  guest accepts inside the timed offer; a simulated diner decides at main
+  service, with no offer, once its tray has been served.
+  """
   def accept_dessert(state, visit, confirmed, entity_id) do
-    with :ok <- ensure(visit.dessert == :offered, :no_dessert_offer),
-         :ok <- ensure(state.now < visit.dessert_offer_deadline, :dessert_offer_expired),
+    with :ok <- ensure(dessert_open?(state, visit), :no_dessert_offer),
+         :ok <- ensure(simulated_decision?(visit) or state.now < visit.dessert_offer_deadline, :dessert_offer_expired),
          {:ok, quote} <- Offers.quote_dessert(state, visit),
          {:ok, deadline} <- bind_deadline(visit.source, quote, confirmed),
          {:ok, funding} <- fund_dessert(state, visit, quote),
@@ -95,6 +99,13 @@ defmodule FeudHall.Domain.Hall.Admission do
        ]}
     end
   end
+
+  defp simulated_decision?(visit), do: visit.source == :simulated
+
+  defp dessert_open?(state, %{source: :simulated} = visit),
+    do: visit.dessert == :none and visit.tray != nil and state.trays[visit.tray].status == :served
+
+  defp dessert_open?(_state, visit), do: visit.dessert == :offered
 
   defp cap_deadline(deadline, nil), do: deadline
   defp cap_deadline(deadline, cap) when is_integer(cap), do: min(deadline, cap)

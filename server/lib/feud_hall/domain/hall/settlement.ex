@@ -15,7 +15,7 @@ defmodule FeudHall.Domain.Hall.Settlement do
   """
 
   alias FeudHall.Domain.{Clock, Offers}
-  alias FeudHall.Domain.Hall.Evolver
+  alias FeudHall.Domain.Hall.{Admission, Evolver}
 
   @doc "Cancels an unserved tray and finalizes its visit."
   def cancel_tray(state, tray, reason) do
@@ -59,13 +59,19 @@ defmodule FeudHall.Domain.Hall.Settlement do
 
     state1 = Evolver.evolve(state, served)
     visit = state1.visits[tray.visit]
+    eligible? = dessert_eligible?(state1, visit)
 
-    if dessert_eligible?(state1, visit) do
-      cutoff = Clock.service_cutoff(state1.now)
-      window = Clock.service_duration(state1.catalog.rules.dessert_window_service_ms)
-      [served, %{type: :dessert_offered, visit_id: visit.id, deadline: min(state1.now + window, cutoff)}]
-    else
-      [served, finalize_event(state1, visit, :completed)]
+    cond do
+      visit.source == :simulated ->
+        [served | simulated_dessert_decision(state1, visit, eligible?)]
+
+      eligible? ->
+        cutoff = Clock.service_cutoff(state1.now)
+        window = Clock.service_duration(state1.catalog.rules.dessert_window_service_ms)
+        [served, %{type: :dessert_offered, visit_id: visit.id, deadline: min(state1.now + window, cutoff)}]
+
+      true ->
+        [served, finalize_event(state1, visit, :completed)]
     end
   end
 
@@ -132,6 +138,20 @@ defmodule FeudHall.Domain.Hall.Settlement do
   defp visit_reason(:cleaning), do: :cleaning
   defp visit_reason(:guest_cancelled), do: :guest_cancelled
   defp visit_reason(_), do: :main_failed
+
+  # A simulated diner decides at service from the appetite drawn at arrival:
+  # an eligible, affordable dessert is accepted in the same batch (the quote's
+  # deadline binds); otherwise the visit ends with no offer window.
+  defp simulated_dessert_decision(state, visit, eligible?) do
+    with true <- eligible? and visit.dessert_appetite?,
+         {:ok, [accepted]} <- Admission.accept_dessert(state, visit, nil, "DS:" <> visit.id) do
+      [accepted]
+    else
+      _ ->
+        declined = %{type: :dessert_declined, visit_id: visit.id}
+        [declined, finalize_event(Evolver.evolve(state, declined), visit, :completed)]
+    end
+  end
 
   # A served main unlocks one optional same-stall dessert only when it can be
   # quoted (stall open, unlocked, on menu, compatible, reservable, finishes

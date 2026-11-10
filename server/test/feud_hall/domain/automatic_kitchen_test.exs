@@ -268,7 +268,11 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
   end
 
   test "drinks and mains share the stage queues and a dessert uses the counter after the main trays" do
-    w = stocked_world() |> simulated_visit("a", "bean_tacos", "horchata") |> simulated_visit("b", "bean_tacos")
+    w =
+      stocked_world()
+      |> simulated_visit("a", "bean_tacos", "horchata", "unrestricted", 10_000, true)
+      |> simulated_visit("b", "bean_tacos")
+
     {state, _} = w
     [main_a, drink_a] = state.trays[tray_id("visit-a")].components
     [main_b] = state.trays[tray_id("visit-b")].components
@@ -282,13 +286,12 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     assert served_at(events, tray_id("visit-a")) == [@t0 + 9 * @min]
 
     vid = visit_id("visit-a")
-    assert state.visits[vid].dessert == :offered
+    # a's appetite accepted the dessert in the service batch.
+    assert state.visits[vid].dessert == :accepted
     # b's tray took the counter at 9 min; the dessert is ready at 12 but waits until 13.
     handover_done = @t0 + 13 * @min
     assert %{item: {:tray, "T:visit-b"}, done_at: ^handover_done} = state.stalls[@stall].counter
 
-    w = run!(w, {:accept_dessert, %{visit_id: vid}}, {:system, :demand}, "dessert")
-    {state, _} = w
     dessert = state.orders[state.visits[vid].dessert_order]
     assert dessert.estimated_completion == @t0 + 17 * @min
 
