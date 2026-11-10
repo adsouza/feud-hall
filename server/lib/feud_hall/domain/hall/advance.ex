@@ -78,8 +78,12 @@ defmodule FeudHall.Domain.Hall.Advance do
 
   # Who operated over the interval is decided from the state it starts in and
   # recorded; the evolver only reads it. Every state change inside a day is a
-  # boundary or a command, so the list is constant between them.
-  defp clock_advanced(state, to), do: %{type: :clock_advanced, to: to, operating: Demand.operating(state)}
+  # boundary or a command, so the list is constant between them. The list is
+  # written only when it differs from the last one recorded (`demand.operating`),
+  # which depends on the state alone, so partitioning a span changes which
+  # `clock_advanced` events carry it but neither any other event nor the state.
+  defp clock_advanced(state, to),
+    do: Map.merge(%{type: :clock_advanced, to: to}, Demand.operating_change(state.demand, Demand.operating(state)))
 
   defp next_due(state, target) do
     classes()

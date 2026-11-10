@@ -164,8 +164,10 @@ defmodule FeudHall.Domain.ChoiceTest do
 
     test "a hall with no open stall is nothing a diner can choose", %{state: state} do
       closed = put_in(state, [:stalls, "s001", :mode], :closed)
+      rng = Random.new(3)
 
-      assert {{:leave, :no_compatible_main}, _} = Choice.choose(closed, diner(state), Random.new(3))
+      assert {{:leave, :no_open_stall}, ^rng} = Choice.choose(closed, diner(state), rng)
+      assert {{:leave, :no_open_stall}, ^rng} = Choice.choose(%{state | access: :cleaning}, diner(state), rng)
     end
 
     test "a stall with a full queue is not a candidate", %{state: state} do
@@ -173,7 +175,39 @@ defmodule FeudHall.Domain.ChoiceTest do
 
       assert Choice.stall_weights(full, diner(state)) == []
       assert [_] = Choice.stall_weights(state, diner(state))
-      assert {{:leave, :no_compatible_main}, _} = Choice.choose(full, diner(state), Random.new(3))
+      assert {{:leave, :no_open_stall}, _} = Choice.choose(full, diner(state), Random.new(3))
+    end
+
+    test "an open stall that cannot supply any main from stock has nothing available", %{state: state} do
+      sold_out = put_in(state, [:restaurants, "r1", :batches], %{})
+      rng = Random.new(3)
+
+      assert {{:leave, :nothing_available}, ^rng} = Choice.choose(sold_out, diner(state), rng)
+      # Even for a diner with a budget too small for anything: availability comes first.
+      assert {{:leave, :nothing_available}, _} = Choice.choose(sold_out, diner(state, %{budget: 1}), rng)
+    end
+
+    test "an open stall with no main on its menu has nothing available", %{state: state} do
+      no_mains = only_mains(state, ["horchata", "arroz_con_leche"])
+
+      assert {{:leave, :nothing_available}, _} = Choice.choose(no_mains, diner(state), Random.new(3))
+    end
+
+    test "a compatible main that is out of stock is not a dietary incompatibility", %{state: state} do
+      # Vegan diner: chicken tacos are incompatible, bean tacos compatible but their beans are gone.
+      menu = only_mains(state, ["chicken_tacos", "bean_tacos"])
+
+      no_beans =
+        update_in(menu, [:restaurants, "r1", :batches], fn batches ->
+          Map.reject(batches, fn {_id, b} -> b.product == "black_beans_dried" end)
+        end)
+
+      diner = diner(state, %{requirement: requirement(state, "vegan")})
+
+      assert {{:leave, :no_compatible_main}, _} =
+               Choice.choose(only_mains(state, ["chicken_tacos"]), diner, Random.new(3))
+
+      assert {{:leave, :nothing_available}, _} = Choice.choose(no_beans, diner, Random.new(3))
     end
   end
 

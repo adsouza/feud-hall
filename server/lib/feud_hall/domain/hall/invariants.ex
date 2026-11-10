@@ -8,11 +8,15 @@ defmodule FeudHall.Domain.Hall.Invariants do
   checksum is intact. Checked:
 
     * each restaurant's trial balance
-      (`cash + raw + wip + cost_of_sales + waste + capex == capital + revenue`);
+      (`cash + raw + wip + cost_of_sales + waste + capex == capital + revenue`),
+      its cash is never negative, and its on-hand stock fits its storage
+      capacity (`Inventory.storage_used/2`);
     * each warehouse batch's reservation stays within `0..qty` and equals the
       claims of the restaurant's still-reserved orders, and no claim names a
       batch the restaurant no longer holds;
-    * every tray component names an existing order;
+    * every tray component names an existing order; every order names an
+      existing visit, and each visit's tray components and dessert order name
+      that visit (an order replaced under a reused ID breaks this);
     * the access gate matches the cleaning calendar (`Clock.cleaning?/1`);
     * the market's pending purchase requests and their `{restaurant, product}`
       index agree, each names an existing restaurant, market stock is never
@@ -21,6 +25,8 @@ defmodule FeudHall.Domain.Hall.Invariants do
       remainder is less than one arrival, the day's arrivals do not exceed its
       accumulated quota, the recorded next arrival is the one the accumulator
       implies and lies after the clock, and the next midnight lies after it;
+      the last recorded operating list is a list of distinct existing
+      restaurant IDs;
     * simulated arrival counts: `arrivals_simulated` is the admitted plus the
       left arrivals, the day's `arrival_seq` does not exceed it, and the
       admitted ones do not exceed the hall's simulated visits;
@@ -35,13 +41,17 @@ defmodule FeudHall.Domain.Hall.Invariants do
       clock, on no other counter.
 
   Problems are terms naming the broken invariant: `{restaurant_id, problem}`
-  for restaurant checks, `{:missing_tray_component, tray_id, order_id}`,
+  for restaurant checks (`:trial_balance`, `:negative_cash`,
+  `:storage_over_capacity`, and the batch problems),
+  `{:missing_tray_component, tray_id, order_id}`,
+  `{:order_without_visit, order_id}`, `{:visit_order_mismatch, visit_id, order_id}`,
   `{:access_gate_mismatch, hall_ms}`, `{:unindexed_purchase_request, id}`,
   `{:dangling_request_index, id}`, `{:request_for_unknown_restaurant, id}`,
   `{:negative_market_stock, product}`, `{:market_clearing_overdue, at}`,
   `{:bad_demand_rng, rng}`, `{:arrival_accumulator_out_of_range, acc_millis}`,
   `{:arrivals_beyond_quota, seq}`, `{:arrival_overdue, at}`,
   `{:arrival_schedule_mismatch, recorded, implied}`, `{:day_close_overdue, at}`,
+  `:bad_operating_record`,
   `{:simulated_stats_mismatch, arrivals, admitted_plus_left}`,
   `{:arrival_seq_beyond_stats, seq}`, `{:admitted_beyond_visits, admitted, visits}`,
   `{:npc_without_restaurant, operator}`, `{:bad_npc_rng, operator}`,
@@ -51,7 +61,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   `{:counter_overdue, stall_id}`, and `{:item_on_two_counters, item}`.
   """
 
-  alias FeudHall.Domain.{Clock, Demand, Market}
+  alias FeudHall.Domain.{Clock, Demand, Inventory, Market}
 
   @spec check(map() | nil) :: :ok | {:error, [term()]}
   def check(nil), do: :ok
@@ -59,6 +69,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   def check(state) do
     case restaurants(state) ++
            trays(state) ++
+           orders(state) ++
            access(state) ++ market(state) ++ arrivals(state) ++ stats(state) ++ npcs(state) ++ kitchen(state) do
       [] -> :ok
       problems -> {:error, problems}
@@ -75,7 +86,10 @@ defmodule FeudHall.Domain.Hall.Invariants do
       reserved = Map.get(claims, rid, %{})
 
       balance = [
-        {l.cash + l.raw + l.wip + l.cost_of_sales + l.waste + l.capex == l.capital + l.revenue, :trial_balance}
+        {l.cash + l.raw + l.wip + l.cost_of_sales + l.waste + l.capex == l.capital + l.revenue, :trial_balance},
+        {l.cash >= 0, :negative_cash},
+        {Inventory.storage_used(r.batches, state.catalog) <= state.catalog.rules.storage_capacity,
+         :storage_over_capacity}
       ]
 
       batches =
@@ -116,6 +130,27 @@ defmodule FeudHall.Domain.Hall.Invariants do
         oid <- tray.components,
         not Map.has_key?(state.orders, oid),
         do: {:missing_tray_component, tid, oid}
+  end
+
+  # Orders and visits agree on ownership both ways.
+  defp orders(state) do
+    orphans =
+      for {oid, o} <- Enum.sort(state.orders),
+          not Map.has_key?(state.visits, o.visit),
+          do: {:order_without_visit, oid}
+
+    mismatched =
+      for {vid, v} <- Enum.sort(state.visits),
+          oid <- visit_orders(state, v),
+          match?(%{visit: other} when other != vid, Map.get(state.orders, oid)),
+          do: {:visit_order_mismatch, vid, oid}
+
+    orphans ++ mismatched
+  end
+
+  defp visit_orders(state, visit) do
+    tray = if visit.tray, do: state.trays |> Map.get(visit.tray, %{components: []}) |> Map.get(:components), else: []
+    tray ++ List.wrap(visit.dessert_order)
   end
 
   # Pending requests and their one-per-key index agree, each names an existing
@@ -160,12 +195,20 @@ defmodule FeudHall.Domain.Hall.Invariants do
       {at == nil or at > state.now, {:arrival_overdue, at}},
       {at == implied, {:arrival_schedule_mismatch, at, implied}},
       {not Demand.closes_days?(state.catalog) or demand.next_day_at > state.now,
-       {:day_close_overdue, demand.next_day_at}}
+       {:day_close_overdue, demand.next_day_at}},
+      {operating_record?(state, Map.get(demand, :operating)), :bad_operating_record}
     ]
     |> problems()
   end
 
   defp arrivals(_state), do: []
+
+  # The last recorded operating list: distinct, existing restaurant IDs (in the
+  # stall order `Demand.operating/1` lists them, so no order is required here).
+  defp operating_record?(state, operating) do
+    is_list(operating) and operating == Enum.uniq(operating) and
+      Enum.all?(operating, &Map.has_key?(state.restaurants, &1))
+  end
 
   # Simulated arrivals are counted both in the cumulative stats and in the day's sequence.
   defp stats(%{stats: stats, demand: demand, visits: visits}) do

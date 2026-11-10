@@ -78,10 +78,11 @@ defmodule FeudHall.Domain.Hall.Evolver do
     }
   end
 
-  # `operating` is the list recorded for the interval; events written before it
-  # existed observe nothing.
+  # `operating`, when present, is the list recorded for the interval; without it
+  # the interval credits the last recorded list (empty until one is recorded,
+  # so events written before the list existed observe nothing).
   def evolve(state, %{type: :clock_advanced, to: to} = e) when to >= state.now do
-    state = update_in(state, [:demand], &Demand.observe(&1, Map.get(e, :operating, []), to - state.now))
+    state = update_in(state, [:demand], &Demand.observe_interval(&1, e, to - state.now))
     %{state | now: to}
   end
 
@@ -188,6 +189,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
   end
 
   # Every pending request is settled by the clearing: filled, unfilled, or both.
+  # The next clearing instant is recorded; clearings written before it was fall
+  # back to the hall's (fixed) catalog interval.
   def evolve(state, %{type: :market_cleared} = e) do
     state = Enum.reduce(e.fills, state, &receive_stock(&2, &1))
 
@@ -198,7 +201,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
           requests: %{},
           by_key: %{},
           batch: e.batch + 1,
-          next_clear_at: market.next_clear_at + clear_interval(state.catalog)
+          next_clear_at: Map.get_lazy(e, :next_clear_at, fn -> market.next_clear_at + clear_interval(state.catalog) end)
       }
     end)
   end

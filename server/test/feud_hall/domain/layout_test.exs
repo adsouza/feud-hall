@@ -44,6 +44,7 @@ defmodule FeudHall.Domain.LayoutTest do
     assert state.demand == %{
              rng: event.demand.rng,
              observed_ms: %{},
+             operating: [],
              supply_scale_millis: rules.demand.equivalent_floor_millis,
              today: %{arrivals: 0, admitted: 0, left: %{}, trays_served: 0},
              summaries: [],

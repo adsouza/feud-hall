@@ -349,6 +349,57 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
       Oracle.assert_settled!(state, events)
     end
 
+    # A simulated diner's dessert order is `"O:DS:" <> visit_id <> ":dessert"`; a guest's is
+    # `"O:" <> command_id <> ":dessert"`. The workflow reserves `DS:` for system actors; the domain
+    # itself must also never let one order replace another.
+    test "a dessert acceptance whose order ID is already taken is refused", %{world: w} do
+      w = simulated_visit(w, "d1", "bean_tacos", nil, "unrestricted", 10_000, true)
+      w = serve_tray(w, tray_id("visit-d1"))
+      taken = "O:DS:" <> visit_id("visit-d1") <> ":dessert"
+      assert Map.has_key?(elem(w, 0).orders, taken)
+
+      w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "g1", "bean_tacos")
+      w = serve_tray(w, tray_id("g1"))
+      {state, _} = w
+      vid = visit_id("g1")
+      {:ok, quote} = Offers.quote_dessert(state, state.visits[vid])
+      accept = {:accept_dessert, %{visit_id: vid, confirmed: Offers.terms(quote)}}
+
+      assert {:error, :order_id_taken} =
+               Hall.decide(state, accept, ctx({:principal, "gina"}, "DS:" <> visit_id("visit-d1")))
+
+      assert {:ok, _} = Hall.decide(state, accept, ctx({:principal, "gina"}, "g1-dessert"))
+    end
+
+    test "a simulated diner whose dessert order ID is pre-claimed declines and finalizes", %{world: w} do
+      w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "g1", "bean_tacos")
+      w = serve_tray(w, tray_id("g1"))
+      {state, _} = w
+      gid = visit_id("g1")
+      {:ok, quote} = Offers.quote_dessert(state, state.visits[gid])
+      claimed = "DS:" <> visit_id("visit-d1")
+
+      w =
+        run!(w, {:accept_dessert, %{visit_id: gid, confirmed: Offers.terms(quote)}}, {:principal, "gina"}, claimed)
+
+      order_id = "O:" <> claimed <> ":dessert"
+      assert elem(w, 0).orders[order_id].visit == gid
+
+      w = simulated_visit(w, "d1", "bean_tacos", nil, "unrestricted", 10_000, true)
+      w = serve_tray(w, tray_id("visit-d1"))
+      {state, events} = w
+      sid = visit_id("visit-d1")
+
+      assert [%{type: :tray_served}, %{type: :dessert_declined, visit_id: ^sid}, %{type: :visit_finalized} | _] =
+               service_batch(events, tray_id("visit-d1"))
+
+      assert %{status: :finalized, dessert: :declined, dessert_order: nil} = state.visits[sid]
+      assert state.orders[order_id].visit == gid
+      assert state.visits[gid].dessert_order == order_id
+      assert :ok = FeudHall.Domain.Hall.Invariants.check(state)
+      Oracle.assert_settled!(state, events)
+    end
+
     test "guests keep the timed dessert offer", %{world: w} do
       w = grant(w, "gina", 2_500, "grant") |> guest_visit("gina", "g1", "bean_tacos")
       w = serve_tray(w, tray_id("g1"))

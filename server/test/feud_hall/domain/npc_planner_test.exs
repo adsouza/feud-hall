@@ -280,6 +280,20 @@ defmodule FeudHall.Domain.NpcPlannerTest do
       assert Enum.all?(requests, &(&1.qty <= 1_000_000))
     end
 
+    test "a product that takes no storage is not limited by storage room" do
+      {state, _} = stocked_world(arrivals: false, stock: %{})
+      [%{product: product, qty: qty} | _] = for {:submit_purchase_request, p} <- actions(state, @budget), do: p
+      weightless = put_in(state, [:catalog, :products, product, :storage_per_kunit], 0)
+
+      # Content allows zero storage; the planner must not divide by it.
+      requests = for {:submit_purchase_request, p} <- actions(weightless, @budget), into: %{}, do: {p.product, p.qty}
+      assert requests[product] == qty
+
+      # With no room left at all, only the weightless product is still bought.
+      full = put_in(weightless, [:catalog, :rules, :storage_capacity], 0)
+      assert [{^product, ^qty}] = for({:submit_purchase_request, p} <- actions(full, @budget), do: {p.product, p.qty})
+    end
+
     test "with no day summary yet it still restocks a deterministic minimum" do
       {state, _} = stocked_world(arrivals: false, stock: %{})
       assert state.demand.summaries == []

@@ -188,10 +188,13 @@ defmodule FeudHall.Domain.Npc.Planner do
     |> Enum.reduce(0, &(&1.qty + &2))
   end
 
-  # Largest quantity whose storage footprint fits in `room`.
-  defp fit(_catalog, _product, room) when room <= 0, do: 0
-
+  # Largest quantity whose storage footprint fits in `room`. A product that
+  # takes no storage (content allows 0) is not limited by room, as at clearing.
   defp fit(catalog, product, room) do
-    max(0, div(room * 1000, catalog.products[product].storage_per_kunit))
+    case catalog.products[product].storage_per_kunit do
+      0 -> @max_qty
+      _per_kunit when room <= 0 -> 0
+      per_kunit -> div(room * 1000, per_kunit)
+    end
   end
 end

@@ -64,6 +64,9 @@ defmodule FeudHall.AppTest do
 
     setup do
       {hall, _log} = FeudHall.EventFixtureScenarios.world()
+      # Every leave reason, as the day's counters would hold them: atoms only `Choice` defines.
+      left = Map.new(FeudHall.Domain.Choice.leave_reasons(), &{&1, 1})
+      hall = update_in(hall, [:demand, :today, :left], &Map.merge(&1, left))
       control = Control.replay([%{type: :availability_started, epoch_id: "e1"}], nil)
       snapshot = Snapshot.take(%{hall: hall, control: control}, 7)
       receipts = receipts()

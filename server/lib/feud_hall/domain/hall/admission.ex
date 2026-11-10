@@ -6,8 +6,11 @@ defmodule FeudHall.Domain.Hall.Admission do
   the tray (or dessert) is quoted from current state, its terms are bound,
   each course is funded, and its ingredient claims are reserved. Entity IDs
   are derived from `entity_id`, so a decision is deterministic and a retried
-  command cannot mint a second order. Authorization of the caller stays in
-  the decider; this module only decides facts.
+  command cannot mint a second order. A derived visit, tray or order ID that
+  already exists is refused (`:visit_id_taken`, `:order_id_taken`): the
+  evolver inserts these entities unconditionally, so a decision must never
+  name an existing one. Authorization of the caller stays in the decider; this
+  module only decides facts.
   """
 
   alias FeudHall.Domain.{Dietary, Inventory, Offers, Substitution}
@@ -53,7 +56,7 @@ defmodule FeudHall.Domain.Hall.Admission do
 
       batches = state.restaurants[quote.restaurant_id].batches
 
-      case reserve_components(batches, quote.components, funding, state.now, entity_id) do
+      case reserve_components(state, batches, quote.components, funding, entity_id) do
         {:ok, components} ->
           accepted = %{
             type: :tray_accepted,
@@ -86,7 +89,7 @@ defmodule FeudHall.Domain.Hall.Admission do
          {:ok, deadline} <- bind_deadline(visit.source, quote, confirmed),
          {:ok, funding} <- fund_dessert(state, visit, quote),
          batches = state.restaurants[visit.restaurant].batches,
-         {:ok, [order]} <- reserve_components(batches, quote.components, funding, state.now, entity_id) do
+         {:ok, [order]} <- reserve_components(state, batches, quote.components, funding, entity_id) do
       {:ok,
        [
          %{
@@ -151,32 +154,33 @@ defmodule FeudHall.Domain.Hall.Admission do
     take(pool, need - amount, [%{slice_id: id, amount: amount} | used])
   end
 
-  defp reserve_components(batches, components, funding, now, entity_id) do
+  defp reserve_components(state, batches, components, funding, entity_id) do
     components
     |> Enum.zip(funding)
     |> Enum.reduce_while({:ok, [], batches}, fn {c, slices}, {:ok, acc, batches} ->
-      case reserve_lines(batches, c.lines, now) do
-        {:ok, claims} ->
-          order =
-            c
-            |> Map.take([
-              :kind,
-              :recipe_id,
-              :recipe_version,
-              :price,
-              :lines,
-              :penalty,
-              :quality,
-              :carbs_mg,
-              :prep_ms,
-              :finish_ms
-            ])
-            |> Map.merge(%{order_id: "O:#{entity_id}:#{c.kind}", reservations: claims, funding: slices})
+      order_id = "O:#{entity_id}:#{c.kind}"
 
-          {:cont, {:ok, acc ++ [order], Inventory.adjust_reserved(batches, claims, 1)}}
+      with :ok <- ensure(not Map.has_key?(state.orders, order_id), :order_id_taken),
+           {:ok, claims} <- reserve_lines(batches, c.lines, state.now) do
+        order =
+          c
+          |> Map.take([
+            :kind,
+            :recipe_id,
+            :recipe_version,
+            :price,
+            :lines,
+            :penalty,
+            :quality,
+            :carbs_mg,
+            :prep_ms,
+            :finish_ms
+          ])
+          |> Map.merge(%{order_id: order_id, reservations: claims, funding: slices})
 
-        error ->
-          {:halt, error}
+        {:cont, {:ok, acc ++ [order], Inventory.adjust_reserved(batches, claims, 1)}}
+      else
+        error -> {:halt, error}
       end
     end)
     |> case do

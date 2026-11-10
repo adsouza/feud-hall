@@ -17,9 +17,11 @@ defmodule FeudHall.Infrastructure.EventFixturesTest do
     diner_arrived_admitted diner_arrived_left npc_planned
   )
   # Changed shapes of older events.
-  @changed ~w(hall_initialized clock_advanced_operating tray_accepted dessert_accepted restaurant_created_npc visit_admitted_simulated)
-  # Milestone 1 / Project A events the decider no longer emits; they must keep decoding and evolving.
-  @historical ~w(stock_purchased preparation_started preparation_completed)
+  @changed ~w(hall_initialized clock_advanced_operating clock_advanced_unchanged tray_accepted dessert_accepted
+               restaurant_created_npc visit_admitted_simulated)
+  # Milestone 1 / Project A events the decider no longer emits, and earlier shapes of events it
+  # still emits; they must keep decoding and evolving.
+  @historical ~w(stock_purchased preparation_started preparation_completed market_cleared_without_next_clear_at)
 
   @entries Map.new(EventFixtureScenarios.entries(), &{&1.name, &1})
 
@@ -110,12 +112,48 @@ defmodule FeudHall.Infrastructure.EventFixturesTest do
     end
   end
 
+  describe "recorded facts replace recomputation" do
+    test "a clock_advanced without the operating list credits the last recorded list" do
+      %{event: e, pre: pre} = entry("clock_advanced_unchanged")
+      refute Map.has_key?(e, :operating)
+      assert [_ | _] = operating = pre.demand.operating
+      post = Evolver.evolve(pre, e)
+
+      for rid <- operating,
+          do: assert(post.demand.observed_ms[rid] == Map.get(pre.demand.observed_ms, rid, 0) + e.to - pre.now)
+
+      assert post.demand.operating == operating
+    end
+
+    test "market_cleared applies its recorded next clearing; an older one without it adds the interval" do
+      %{event: e, pre: pre} = entry("market_cleared")
+      assert Evolver.evolve(pre, e).market.next_clear_at == e.next_clear_at
+
+      %{event: old, pre: pre} = entry("market_cleared_without_next_clear_at")
+      refute Map.has_key?(old, :next_clear_at)
+      interval = pre.catalog.rules.market.clear_every_hall_ms
+      assert Evolver.evolve(pre, old).market.next_clear_at == pre.market.next_clear_at + interval
+      assert e.next_clear_at == pre.market.next_clear_at + interval
+    end
+  end
+
   test "every event of the whole scenario round-trips, so the allowlist covers what the domain emits" do
     {_state, log} = EventFixtureScenarios.world()
     assert length(log) > 200
     assert log |> Enum.map(& &1.type) |> Enum.uniq() |> length() >= 25
 
     for event <- log do
+      assert {:ok, ^event} = event |> EventCodec.encode!() |> EventCodec.decode()
+    end
+  end
+
+  test "every leave reason a simulated arrival can record round-trips" do
+    {:ok, left} = @dir |> Path.join("diner_arrived_left.json") |> File.read!() |> EventCodec.decode()
+    reasons = FeudHall.Domain.Choice.leave_reasons() ++ [:admission_failed]
+    assert :no_open_stall in reasons and :nothing_available in reasons
+
+    for reason <- reasons do
+      event = %{left | reason: reason}
       assert {:ok, ^event} = event |> EventCodec.encode!() |> EventCodec.decode()
     end
   end

@@ -235,12 +235,15 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   defp validate(_), do: {:error, :malformed_envelope}
 
-  @reserved_prefixes ~w(adv: tick: recovery: start: npc:)
+  @reserved_prefixes ~w(adv: tick: recovery: start: npc: DS:)
 
   @doc """
   True when `command_id` begins with a prefix reserved for system and NPC
-  actors (`adv:`, `tick:`, `recovery:`, `start:`, `npc:`), so a client cannot
-  pre-claim an ID the platform derives later.
+  actors (`adv:`, `tick:`, `recovery:`, `start:`, `npc:`, `DS:`), so a client
+  cannot pre-claim an ID the platform derives later. `DS:` is the entity ID of
+  a simulated diner's dessert (`"DS:" <> visit_id`), from which the clock
+  advance derives that dessert's order ID exactly as a guest's dessert order
+  is derived from its command ID.
   """
   @spec reserved_prefix?(term()) :: boolean()
   def reserved_prefix?(command_id) when is_binary(command_id),

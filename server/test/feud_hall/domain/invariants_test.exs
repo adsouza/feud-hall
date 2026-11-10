@@ -3,7 +3,7 @@ defmodule FeudHall.Domain.InvariantsTest do
 
   import FeudHall.Fixtures
 
-  alias FeudHall.Domain.{Clock, Demand, Hall, Hall.Invariants, Market}
+  alias FeudHall.Domain.{Clock, Demand, Hall, Hall.Invariants, Inventory, Market}
 
   # A hall with an accepted, still-reserved tray (two components claiming stock).
   defp reserved_world do
@@ -55,6 +55,50 @@ defmodule FeudHall.Domain.InvariantsTest do
     assert order
     assert {:error, problems} = Invariants.check(state)
     assert {:missing_tray_component, tray_id, order_id} in problems
+  end
+
+  test "every order names an existing visit, and each visit's tray and dessert orders name it back" do
+    {state, _} = stocked_world() |> simulated_visit("d1", "bean_tacos") |> simulated_visit("d2", "bean_tacos")
+    assert Invariants.check(state) == :ok
+    [d1_order] = state.trays[tray_id("visit-d1")].components
+    [d2_order] = state.trays[tray_id("visit-d2")].components
+
+    orphan = put_in(state, [:orders, d1_order, :visit], "V:nobody")
+    assert {:error, problems} = Invariants.check(orphan)
+    assert {:order_without_visit, d1_order} in problems
+
+    # One order replaced by another visit's: the tray's visit no longer owns its component.
+    moved = put_in(state, [:orders, d1_order, :visit], visit_id("visit-d2"))
+    assert {:error, problems} = Invariants.check(moved)
+    assert {:visit_order_mismatch, visit_id("visit-d1"), d1_order} in problems
+
+    # A dessert slot naming another visit's order.
+    borrowed = put_in(state, [:visits, visit_id("visit-d2"), :dessert_order], d1_order)
+    assert {:error, problems} = Invariants.check(borrowed)
+    assert {:visit_order_mismatch, visit_id("visit-d2"), d1_order} in problems
+    refute {:visit_order_mismatch, visit_id("visit-d2"), d2_order} in problems
+  end
+
+  test "restaurant cash never goes negative" do
+    state = reserved_world()
+    cash = state.restaurants["r1"].ledger.cash
+    assert cash > 0
+
+    # The trial balance still holds: the missing cash is booked as waste.
+    negative =
+      update_in(state, [:restaurants, "r1", :ledger], fn l -> %{l | cash: -1, waste: l.waste + cash + 1} end)
+
+    assert Invariants.check(negative) == {:error, [{"r1", :negative_cash}]}
+  end
+
+  test "on-hand stock never exceeds the storage capacity" do
+    state = reserved_world()
+    used = Inventory.storage_used(state.restaurants["r1"].batches, state.catalog)
+    assert used > 0
+    assert Invariants.check(put_in(state, [:catalog, :rules, :storage_capacity], used)) == :ok
+
+    assert Invariants.check(put_in(state, [:catalog, :rules, :storage_capacity], used - 1)) ==
+             {:error, [{"r1", :storage_over_capacity}]}
   end
 
   test "an NPC must own the restaurant its record names and hold a 64-bit random state" do
@@ -188,6 +232,28 @@ defmodule FeudHall.Domain.InvariantsTest do
       state = elem(stocked_world(), 0)
       assert {:error, problems} = Invariants.check(put_in(state, [:demand, :next_arrival_at], state.now))
       assert {:arrival_overdue, state.now} in problems
+    end
+
+    test "the last recorded operating list names existing restaurants, once each" do
+      {state, _} = stocked_world() |> advance_hall(Clock.hour())
+      assert state.demand.operating == ["r1"]
+      assert Invariants.check(state) == :ok
+      assert Invariants.check(put_in(state, [:demand, :operating], [])) == :ok
+
+      # `Demand.operating/1` lists restaurants in stall order: npc-budget (s041) after r1 (s001).
+      {state, _} =
+        run!(
+          {state, []},
+          {:create_restaurant, %{restaurant_id: "npc-budget", stall_id: "s041", name: "NPC", cuisine: "mexican"}},
+          {:npc, "budget"},
+          "npc:budget:create"
+        )
+
+      assert Invariants.check(put_in(state, [:demand, :operating], ["r1", "npc-budget"])) == :ok
+
+      for bad <- [["ghost"], ["r1", "r1"], nil] do
+        assert Invariants.check(put_in(state, [:demand, :operating], bad)) == {:error, [:bad_operating_record]}
+      end
     end
 
     test "the next midnight must lie after the clock" do

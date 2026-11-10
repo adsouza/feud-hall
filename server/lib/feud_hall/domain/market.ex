@@ -11,7 +11,8 @@ defmodule FeudHall.Domain.Market do
   state only; the clearing result is a plain event-shaped map.
 
   Clearing never mutates anything: `clear/1` returns the `:market_cleared`
-  facts and the caller (the decider) is responsible for appending them.
+  facts, including the instant of the next clearing (`next_clear_at`), and
+  the caller (the decider) is responsible for appending them.
 
   Allocation order is total and deterministic. Restaurants are processed by ID
   and each restaurant's requests by product ID, so cash and storage budgets are
@@ -94,7 +95,14 @@ defmodule FeudHall.Domain.Market do
       |> Enum.sort_by(&{&1.restaurant_id, &1.product, &1.reason})
       |> Enum.map(&Map.take(&1, [:request_id, :qty, :reason]))
 
-    %{type: :market_cleared, batch: market.batch, prices: prices, fills: fills, unfilled: unfilled}
+    %{
+      type: :market_cleared,
+      batch: market.batch,
+      prices: prices,
+      fills: fills,
+      unfilled: unfilled,
+      next_clear_at: market.next_clear_at + catalog.rules.market.clear_every_hall_ms
+    }
   end
 
   @doc "Market stock after applying a `clear/1` result."

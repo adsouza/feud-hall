@@ -161,6 +161,20 @@ defmodule FeudHall.Application.RecoveryTest do
     :crypto.hash(:sha256, body) <> body
   end
 
+  # An evolution 3 snapshot as the shared simulation's first release wrote it: its demand state
+  # lacks the last recorded operating list, which `clock_advanced` events without the key need.
+  defp evolution_3_snapshot(rt) do
+    hall = update_in(rt.state, [:demand], &Map.delete(&1, :operating))
+
+    body =
+      :erlang.term_to_binary(
+        %{position: rt.position, evolution: 3, state: %{hall: hall, control: rt.control}},
+        [:deterministic]
+      )
+
+    :crypto.hash(:sha256, body) <> body
+  end
+
   defp resumed(state, id), do: Hall.replay([%{type: :hall_resumed, recovery_id: id}], state)
 
   defp batches_after(mod, store, position) do
@@ -269,8 +283,24 @@ defmodule FeudHall.Application.RecoveryTest do
         assert recovered.state == resumed(rt.state, "recovery:boot:1")
       end
 
+      test "an evolution 3 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
+        assert Snapshot.evolution_version() == 4
+
+        rt = live({mod, store})
+        {rt, old} = save_snapshot(rt, evolution_3_snapshot(rt), rt.position)
+        assert Snapshot.evolution_of(evolution_3_snapshot(rt)) == 3
+        assert {:error, :incompatible_snapshot} = Snapshot.load(evolution_3_snapshot(rt))
+        rt = run(rt, later_commands())
+
+        assert {:ok, recovered, report} = recover_from_snapshots(mod, rt.store, "b")
+        assert report.snapshot == :genesis
+        assert report.skipped == [{old, :incompatible_snapshot}]
+        assert report.tail_batches == rt.position
+        assert recovered.state == resumed(rt.state, "recovery:boot:1")
+      end
+
       test "an evolution 2 snapshot is skipped as incompatible and never loaded", %{mod: mod, store: store} do
-        assert Snapshot.evolution_version() == 3
+        assert Snapshot.evolution_version() == 4
 
         rt = live({mod, store})
         {rt, old} = save_snapshot(rt, evolution_2_snapshot(rt), rt.position)

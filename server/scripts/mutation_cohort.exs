@@ -162,6 +162,9 @@ defmodule MutationCohort do
       {"B13b day_closed replenishment not applied to market stock", "lib/feud_hall/domain/hall/evolver.ex",
        "update_in(state, [:market, :stock], &add_stock(&1, e.replenishment))",
        "update_in(state, [:market, :stock], &add_stock(&1, %{}))", [@forecast]},
+      {"B14 an accepted dessert may reuse an existing order ID (domain guard removed)",
+       "lib/feud_hall/domain/hall/admission.ex",
+       "with :ok <- ensure(not Map.has_key?(state.orders, order_id), :order_id_taken),", "with :ok <- :ok,", [@tray]},
       {"authority charges the gap instead of recovering", "lib/feud_hall/infrastructure/hall_authority.ex",
        "if elapsed > s.max_gap_ms do", "if false do", [@authority]}
     ]

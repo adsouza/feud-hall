@@ -143,10 +143,15 @@ defmodule FeudHall.Domain.Hall.Settlement do
   # an eligible, affordable dessert is accepted in the same batch (the quote's
   # deadline binds); otherwise the visit ends with no offer window.
   defp simulated_dessert_decision(state, visit, true) when visit.dessert_appetite? do
-    # Eligibility just quoted this exact state, so acceptance must succeed; an
-    # error here is a bug and must not be swallowed as a decline.
-    {:ok, [accepted]} = Admission.accept_dessert(state, visit, nil, "DS:" <> visit.id)
-    [accepted]
+    # Eligibility just quoted this exact state, so acceptance must succeed; any
+    # other error here is a bug and must not be swallowed as a decline. An order
+    # ID already taken (`DS:` is reserved for system actors, so only a damaged
+    # or pre-reservation history can hold one) declines instead of raising
+    # inside the clock advance, so the hall keeps running.
+    case Admission.accept_dessert(state, visit, nil, "DS:" <> visit.id) do
+      {:ok, [accepted]} -> [accepted]
+      {:error, :order_id_taken} -> simulated_dessert_decision(state, visit, false)
+    end
   end
 
   defp simulated_dessert_decision(state, visit, _eligible?) do

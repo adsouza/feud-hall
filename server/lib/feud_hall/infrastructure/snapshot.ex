@@ -9,7 +9,7 @@ defmodule FeudHall.Infrastructure.Snapshot do
   alias FeudHall.Domain.{Control, Hall}
 
   # Bump when the shape of evolved state changes.
-  @evolution_version 3
+  @evolution_version 4
 
   @doc "The evolved-state shape version this module writes and accepts."
   def evolution_version, do: @evolution_version
@@ -17,8 +17,10 @@ defmodule FeudHall.Infrastructure.Snapshot do
   @doc """
   Encodes `%{hall: hall_state, control: control_state}` at `position`. Evolution version 2 added
   the control state; version 3 the shared simulation's hall state (layout, seed, NPCs, market
-  requests, stall counters, order stage fields, demand bookkeeping, simulated-arrival stats).
-  Older snapshots are rejected as incompatible, so recovery replays from genesis instead.
+  requests, stall counters, order stage fields, demand bookkeeping, simulated-arrival stats);
+  version 4 the demand state's last recorded operating list (`demand.operating`), which a
+  `clock_advanced` written without the list credits. Older snapshots are rejected as
+  incompatible, so recovery replays from genesis instead.
   """
   def take(%{hall: _, control: _} = state, position) do
     body = :erlang.term_to_binary(%{position: position, evolution: @evolution_version, state: state}, [:deterministic])

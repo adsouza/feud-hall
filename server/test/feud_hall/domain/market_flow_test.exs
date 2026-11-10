@@ -178,6 +178,20 @@ defmodule FeudHall.Domain.MarketFlowTest do
       Oracle.assert_settled!(state, events)
     end
 
+    test "each clearing records the next clearing instant, and the evolver takes it from the event" do
+      {state, events} = advance_hall(bare_world(), 2 * @interval)
+      assert Enum.map(cleared(events), & &1.next_clear_at) == [2 * @interval, 3 * @interval]
+      assert state.market.next_clear_at == 3 * @interval
+
+      # Replay applies the recorded instant rather than recomputing it from the rules.
+      {before, _} = bare_world()
+      event = Market.clear(%{before | now: before.market.next_clear_at})
+      assert Hall.replay([%{event | next_clear_at: 7 * @interval}], before).market.next_clear_at == 7 * @interval
+
+      # A clearing recorded before the key existed falls back to the catalog interval.
+      assert Hall.replay([Map.delete(event, :next_clear_at)], before).market.next_clear_at == 2 * @interval
+    end
+
     test "a request submitted at 03:30 fills at the 03:32 clearing during cleaning" do
       w = advance_hall(bare_world(), Clock.cleaning_start_of(0) + 30 * Clock.minute())
       assert elem(w, 0).access == :cleaning

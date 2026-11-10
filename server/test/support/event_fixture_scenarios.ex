@@ -13,7 +13,9 @@ defmodule FeudHall.EventFixtureScenarios do
   The Milestone 1 / Project A events the decider no longer emits
   (`stock_purchased`, `preparation_started`, `preparation_completed`) are
   assembled from facts of real events of the same shape, following the base
-  branch's decider, so historical decoding stays pinned.
+  branch's decider, so historical decoding stays pinned. Likewise an earlier
+  shape of a still-emitted event (`market_cleared` before it recorded
+  `next_clear_at`).
 
   Regenerate (only when a golden shape is meant to change):
 
@@ -77,11 +79,15 @@ defmodule FeudHall.EventFixtureScenarios do
     )
   end
 
-  # `{file name, event predicate}`: the first event matching each is the fixture.
+  # `{file name, event predicate}`: the first event matching each is the fixture. With
+  # `{:after, name}` the search starts after an earlier selection's event.
   defp selections do
     [
       {"hall_initialized", &(&1.type == :hall_initialized)},
       {"clock_advanced_operating", &(&1.type == :clock_advanced and &1[:operating] not in [nil, []])},
+      # The first interval after that one that restates nothing: it credits the recorded list.
+      {"clock_advanced_unchanged", {:after, "clock_advanced_operating"},
+       &(&1.type == :clock_advanced and not Map.has_key?(&1, :operating))},
       {"restaurant_created_npc", &(&1.type == :restaurant_created and &1[:owner_kind] == :npc)},
       {"purchase_requested", &(&1.type == :purchase_requested)},
       {"purchase_request_cancelled", &(&1.type == :purchase_request_cancelled)},
@@ -104,6 +110,8 @@ defmodule FeudHall.EventFixtureScenarios do
   # Historical events, built from a real event's facts: `{name, source selection name, builder}`.
   defp historical do
     [
+      {"market_cleared_without_next_clear_at", "market_cleared",
+       fn market_cleared, _log -> Map.delete(market_cleared, :next_clear_at) end},
       {"stock_purchased", "market_cleared",
        fn _market_cleared, log ->
          fill = log |> Enum.find(&(&1.type == :market_cleared and &1.fills != [])) |> Map.fetch!(:fills) |> hd()
@@ -131,11 +139,21 @@ defmodule FeudHall.EventFixtureScenarios do
   def entries do
     {_state, log} = world()
 
+    indexed =
+      Enum.reduce(selections(), [], fn selection, acc ->
+        {name, from, matches?} =
+          case selection do
+            {name, {:after, earlier}, matches?} -> {name, Enum.find(acc, &(&1.name == earlier)).index + 1, matches?}
+            {name, matches?} -> {name, 0, matches?}
+          end
+
+        offset = log |> Enum.drop(from) |> Enum.find_index(matches?) || raise "scenario produced no event for #{name}"
+        acc ++ [%{name: name, index: from + offset}]
+      end)
+
     real =
-      for {name, matches?} <- selections() do
-        index = Enum.find_index(log, matches?) || raise "scenario produced no event for #{name}"
-        %{name: name, event: Enum.at(log, index), pre: replay(Enum.take(log, index))}
-      end
+      for %{name: name, index: index} <- indexed,
+          do: %{name: name, event: Enum.at(log, index), pre: replay(Enum.take(log, index))}
 
     historic =
       for {name, source, build} <- historical() do

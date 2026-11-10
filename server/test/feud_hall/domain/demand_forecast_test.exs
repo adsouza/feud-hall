@@ -69,21 +69,77 @@ defmodule FeudHall.Domain.DemandForecastTest do
       assert millis < 1000
     end
 
-    test "each clock_advanced records who operated over the interval and the evolver adds the elapsed time" do
+    test "clock_advanced records the operating list only when it changes; the evolver credits the last one" do
       world = stocked_world()
-      {state, events} = advance_hall(world, @t0 + 5 * @min)
+      # Stocking ran with no stock on hand: nothing operated, which is the initial recorded list.
+      assert elem(world, 0).demand.operating == []
 
-      assert %{type: :clock_advanced, to: to, operating: ["r1"]} = List.last(events)
-      assert to == @t0 + 5 * @min
+      {state, events} = world |> advance_hall(@t0 + 5 * @min)
+      ticks = events |> Enum.drop(length(elem(world, 1))) |> Enum.filter(&(&1.type == :clock_advanced))
+      # The first interval records the change; the later ones in the span (past a market clearing) do not.
+      assert [%{operating: ["r1"]} | unchanged] = ticks
+      assert unchanged != [] and Enum.all?(unchanged, &(not Map.has_key?(&1, :operating)))
+      assert List.last(ticks).to == @t0 + 5 * @min
+      assert state.demand.operating == ["r1"]
       assert state.demand.observed_ms == %{"r1" => 5 * @min}
+
+      before = length(events)
+      {state, events} = advance_hall({state, events}, @t0 + 10 * @min)
+      later = Enum.drop(events, before)
+      assert [_ | _] = ticks = Enum.filter(later, &(&1.type == :clock_advanced))
+      refute Enum.any?(ticks, &Map.has_key?(&1, :operating))
+      assert state.demand.observed_ms == %{"r1" => 10 * @min}
     end
 
-    test "a clock_advanced recorded without the key observes nothing" do
+    test "a clock_advanced recorded without the key credits the last recorded list" do
       {state, _} = stocked_world()
       next = Evolver.evolve(state, %{type: :clock_advanced, to: state.now + @min})
 
+      # Nothing recorded yet (as for events written before the list existed): nothing observed.
       assert next.now == state.now + @min
       assert next.demand.observed_ms == state.demand.observed_ms
+
+      recorded = Evolver.evolve(state, %{type: :clock_advanced, to: state.now + @min, operating: ["r1"]})
+      assert recorded.demand.operating == ["r1"]
+      after_ = Evolver.evolve(recorded, %{type: :clock_advanced, to: recorded.now + @min})
+      assert after_.demand.observed_ms == %{"r1" => 2 * @min}
+      assert after_.demand.operating == ["r1"]
+
+      emptied = Evolver.evolve(after_, %{type: :clock_advanced, to: after_.now + @min, operating: []})
+
+      assert Evolver.evolve(emptied, %{type: :clock_advanced, to: emptied.now + @min}).demand.observed_ms ==
+               after_.demand.observed_ms
+    end
+
+    test "an idle day writes the operating list only at its changes" do
+      {_state, events} = stocked_world() |> advance_hall(@t0 + @day)
+      ticks = Enum.filter(events, &(&1.type == :clock_advanced))
+      keyed = Enum.filter(ticks, &Map.has_key?(&1, :operating))
+
+      assert length(ticks) > 300
+      # Opened, closed for cleaning, reopened: three changes.
+      assert Enum.map(keyed, & &1.operating) == [["r1"], [], ["r1"]]
+    end
+
+    test "a log that restates the list at every instant, as older releases wrote it, replays identically" do
+      world = stocked_world() |> grant("g1", 2_000, "grant-g1") |> guest_visit("g1", "gv1", "chicken_tacos")
+      {start, _} = world
+      {final, log} = advance_hall(world, @t0 + @day)
+      tail = Enum.drop(log, length(elem(world, 1)))
+
+      {restated, _last} =
+        Enum.map_reduce(tail, start.demand.operating, fn
+          %{type: :clock_advanced} = e, last ->
+            operating = Map.get(e, :operating, last)
+            {Map.put(e, :operating, operating), operating}
+
+          e, last ->
+            {e, last}
+        end)
+
+      assert Enum.count(restated, &Map.has_key?(&1, :operating)) > Enum.count(tail, &Map.has_key?(&1, :operating))
+      assert FeudHall.Domain.Hall.replay(restated, start) == final
+      assert FeudHall.Domain.Hall.replay(tail, start) == final
     end
 
     test "observation stops while no main can be quoted and resumes on restock" do

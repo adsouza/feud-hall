@@ -7,7 +7,12 @@ defmodule FeudHall.Domain.Demand do
 
     * `rng` - the demand PRNG state (drawn from by arrivals, never here);
     * `observed_ms` - `%{restaurant_id => operating hall ms}` since the last
-      midnight, fed only by the `operating` list recorded in `clock_advanced`;
+      midnight, fed only by the `operating` lists recorded in `clock_advanced`;
+    * `operating` - the last `operating` list a `clock_advanced` recorded
+      (initially empty). The advance writes the list only when it differs
+      from this one, and an interval recorded without it credits this list,
+      so replay stays a fold over recorded facts and never recomputes who
+      operated;
     * `supply_scale_millis` - the scale fixed at the previous midnight, used
       to replenish the market at the next one (a one-day delay); a new hall
       starts at the content floor;
@@ -70,6 +75,7 @@ defmodule FeudHall.Domain.Demand do
     Map.merge(
       %{
         observed_ms: %{},
+        operating: [],
         supply_scale_millis: scale,
         today: blank_day(),
         summaries: [],
@@ -181,7 +187,8 @@ defmodule FeudHall.Domain.Demand do
   @doc """
   Restaurants operating now: an open stall in an open hall with queue room, and
   at least one main that can be quoted for the unrestricted requirement against
-  current availability. Sorted by restaurant ID.
+  current availability. Listed once each, in the order of their stalls' IDs
+  (not sorted by restaurant ID).
   """
   def operating(state) do
     state.stalls
@@ -207,6 +214,25 @@ defmodule FeudHall.Domain.Demand do
       {:error, _} ->
         false
     end
+  end
+
+  @doc """
+  The `operating` key a `clock_advanced` must carry for an interval during
+  which `operating` restaurants operated: `%{operating: operating}` when it
+  differs from the last recorded list, otherwise nothing (`%{}`).
+  """
+  def operating_change(demand, operating),
+    do: if(operating == demand.operating, do: %{}, else: %{operating: operating})
+
+  @doc """
+  Applies a `clock_advanced` interval of `elapsed` hall ms: the event's
+  `operating` list when it carries one (which becomes the last recorded list),
+  otherwise the last recorded list. A log that restates the list on every
+  interval, as earlier releases wrote it, folds to the same result.
+  """
+  def observe_interval(demand, event, elapsed) do
+    operating = Map.get(event, :operating, demand.operating)
+    observe(%{demand | operating: operating}, operating, elapsed)
   end
 
   @doc "Adds `elapsed` hall ms to every restaurant in `operating`."

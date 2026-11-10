@@ -168,7 +168,9 @@ details live in the architecture's
 - **Command-ID namespaces** — to be implemented first in Project B: the
   prefixes `adv:`, `tick:`, `recovery:`, `start:`, and `npc:` are reserved for
   system and NPC actors; `CommandWorkflow` rejects them from other actors,
-  because a client could otherwise pre-claim an internal ID.
+  because a client could otherwise pre-claim an internal ID. Project B adds
+  `DS:` and the simulated-arrival shape `A<day>-<seq>` (see
+  [Decisions recorded during Project B](#decisions-recorded-during-project-b)).
 
 ### Project B: shared simulation
 
@@ -427,6 +429,48 @@ live in the architecture's
   unfilled emits no `market_cleared` diagnostic (about 8,600 empty records a
   day otherwise). "The clearing ran with nothing pending" is visible only in the
   event log.
+- **A full queue is not operating (ruling R23).** A stall whose queue is full
+  does not count as operating for business equivalents: `Demand.operating`
+  uses the same main-gated stall check as diner choice
+  (`Offers.open_stall_for_main`), so time spent at the queue limit adds
+  nothing to the next day's scale. Reason: an equivalent measures capacity to
+  take new diners. Counting a full stall instead is a one-line change to
+  `Demand.operating`.
+- **NPC planner tuning in code.** The planner keeps three tuning values as
+  module attributes (`@unlock_cash_multiple 4`, `@price_limit_permille 1_500`,
+  `@fallback_trays_per_day 10`) until a content pass moves them into the
+  catalog. Safe for replay: planner output is recorded in `npc_planned` and its
+  action events, and replay never reruns the planner.
+- **Finished work stays in live state (ruling R22).** Finalized visits and
+  their trays and orders stay in the hall state, and the advance scans them.
+  Measured: about 48 ms per idle wake-up and about 161 MB of state at 100,000
+  finished visits. This is a known scaling limit deferred to the start of
+  Project C: its first task removes finalized visits, trays and orders from
+  live state (or indexes live orders) and replaces `seq: map_size(state.orders)`
+  with a counter.
+- **Leave reasons.** A simulated diner who leaves records one reason, the first
+  that applies: `:no_open_stall` (no stall open and accepting new mains),
+  `:no_compatible_main` (every offered main is dietary-incompatible),
+  `:nothing_available` (no main can be quoted: none on a menu, none suppliable
+  from stock, or none can finish in time), `:nothing_affordable`,
+  `:wait_too_long`, `:chose_to_leave` (plus `:admission_failed` when the
+  admission of a chosen tray fails). Reason: stock-outs and closed or full
+  stalls were recorded as `:nothing_affordable` or `:no_compatible_main`, which
+  are permanent facts in `diner_arrived` and the day summary. The order keeps
+  the design's four reasons in their order and places the two supply-side
+  reasons where they first apply (`Choice` moduledoc).
+- **`DS:` is a reserved command-ID prefix.** A simulated diner's dessert order
+  derives from `"DS:" <> visit_id` just as a guest's derives from its command
+  ID, so `CommandWorkflow` refuses `DS:` IDs from clients and NPCs, and
+  `Admission` refuses any derived visit, tray or order ID that already exists
+  (`:visit_id_taken`, `:order_id_taken`). If the guard ever fires in the
+  advance, the simulated diner declines dessert instead.
+- **Operating lists recorded on change.** `clock_advanced` carries `operating`
+  only when the list differs from the last one recorded (kept in
+  `demand.operating`, initially empty); an interval without it credits the
+  last list. Older logs that restate it on every interval replay to the same
+  state. Reason: an idle one-stall hall wrote about 630 copies of the list a
+  day. Snapshot evolution is 4.
 
 ### Project C: the 150-stall measurement
 

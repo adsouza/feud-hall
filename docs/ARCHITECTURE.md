@@ -998,7 +998,13 @@ Implementation decisions within the contracts above:
   explicitly through `Clock.service_duration/1`.
 - **Deterministic identities.** Entity IDs (visit, tray, order, batch, wallet
   slice) derive from the command ID, so a decision is a pure function of state,
-  command, and context, and a retry cannot mint a second entity.
+  command, and context, and a retry cannot mint a second entity. IDs the
+  platform derives itself share that namespace, so `CommandWorkflow` refuses
+  client and NPC command IDs that begin `adv:`, `tick:`, `recovery:`,
+  `start:`, or `DS:` (a simulated diner's dessert, `"DS:" <> visit_id`), or
+  have the simulated-arrival shape `A<day>-<seq>`; NPCs may use `npc:` only.
+  `Admission` also refuses a derived visit, tray, or order ID that already
+  exists, because the evolver inserts those entities unconditionally.
 - **Temporary seams removed.** Kitchen progress is no longer decided from
   `{:system, :kitchen}` commands and purchases no longer fill instantly at the
   base price. The commands `start_preparation`, `complete_preparation`,
@@ -1025,6 +1031,15 @@ Implementation decisions within the contracts above:
   | 7 | Market clearing | Every `clear_every_hall_ms` (cleaning included): one `market_cleared` event, even when nothing is pending. |
   | 8 | Simulated arrival | The diner is drawn from the demand PRNG, chooses through `Choice`, and a chosen tray goes through `Admission`; `diner_arrived` records the draws and the PRNG continuation. |
   | 9 | Kitchen dispatch | Starts queued stages and counter handovers on free stations, only while customer access is open; due at the current instant. |
+
+  Between boundaries the advance writes `clock_advanced` (`to`, and
+  `operating` only when the list of restaurants operating over the interval
+  differs from the last one recorded). The evolver credits each interval to the
+  recorded list, or to the last recorded list (`demand.operating`) when the
+  event carries none, so replay never recomputes who operated, and a log that
+  restates the list on every interval replays to the same state. Each
+  `market_cleared` records the next clearing instant (`next_clear_at`); a
+  clearing recorded before that key falls back to the catalog interval.
 
   Work a command accepts begins at the next advance, at the acceptance instant.
   This is the implemented subset of the full ordering in
@@ -1065,11 +1080,12 @@ Implementation decisions within the contracts above:
   runs cannot double-count. `PostgresEventStore.rebuild_projections/1` and
   `Postgres.DailyActivityProjector.rebuild/1` recompute derived tables from the
   log.
-- **Snapshots, evolution 3.** A snapshot encodes the hall and control states at
+- **Snapshots, evolution 4.** A snapshot encodes the hall and control states at
   a position and is accepted only for the current evolution version; version 1
-  (hall only) and version 2 (before the shared simulation's layout, seed, NPCs,
+  (hall only), version 2 (before the shared simulation's layout, seed, NPCs,
   market requests, stall counters, order stage fields, demand bookkeeping and
-  simulated-arrival stats) are rejected as incompatible. Recovery uses only verified
+  simulated-arrival stats) and version 3 (before the last recorded operating
+  list) are rejected as incompatible. Recovery uses only verified
   snapshots, skips one beyond the store head, and falls back to older ones or
   genesis. Snapshots never justify skipping history that fails to replay.
 - **Unavailable storage.** On PostgreSQL, connection errors (and lock timeouts,

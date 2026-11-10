@@ -48,7 +48,8 @@ defmodule FeudHall.Infrastructure.EventCodec do
     day_closed operating equivalents_millis scale_millis replenishment summary arrivals admitted left
     trays_served menu_prices_median
     diner_arrived arrival_id segment patience_hall_ms drink? dessert_appetite? hour_quotas_millis
-    no_compatible_main nothing_affordable wait_too_long chose_to_leave admission_failed
+    no_compatible_main nothing_affordable wait_too_long chose_to_leave admission_failed no_open_stall
+    nothing_available
     npc_planned operator slot next_slot_at outcomes result accepted rejected action other
     open_stall close_stall unlock_recipe set_menu_price remove_menu_item set_substitution_policy
     submit_purchase_request cancel_purchase_request

@@ -116,7 +116,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
       assert Enum.map(timed, &elem(&1, 0)) == Enum.map(1..270, &expected_at(0, 0, quotas, &1))
 
       # An empty hall: every diner leaves without a draw for a stall.
-      assert Enum.all?(timed, fn {_, e} -> e.outcome == :left and e.reason == :no_compatible_main end)
+      assert Enum.all?(timed, fn {_, e} -> e.outcome == :left and e.reason == :no_open_stall end)
       assert Enum.map(timed, fn {_, e} -> e.arrival_id end) == Enum.map(0..269, &"A0-#{&1}")
       # Nothing carried into day 1: 270,000 milli-arrivals is whole.
       assert %{acc_millis: 0, arrival_seq: 0} = state.demand

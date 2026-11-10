@@ -89,6 +89,22 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     assert {:accepted, _, _} = Workflow.execute(rt, env("A-1", {:principal, "alice"}, purchase(10)))
   end
 
+  # The clock advance derives a simulated diner's dessert order from `"DS:" <> visit_id`; a client
+  # accepting its own dessert under that ID would mint the same order ID first.
+  test "a simulated diner's dessert entity ID is refused as a client command ID" do
+    rt = runtime()
+    accept = {:accept_dessert, %{visit_id: "V:g1", confirmed: nil}}
+
+    for actor <- [{:principal, "bob"}, {:npc, "budget"}] do
+      assert {:error, :reserved_command_id, _} = Workflow.execute(rt, env("DS:V:A0-1", actor, accept))
+    end
+
+    assert Workflow.reserved_prefix?("DS:V:A0-1")
+
+    assert {:rejected, %{outcome: {:rejected, :unknown_visit}}, _} =
+             Workflow.execute(rt, env("D:V:A0-1", {:principal, "bob"}, accept))
+  end
+
   test "system actors may use reserved prefixes" do
     rt = runtime()
 

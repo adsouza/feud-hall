@@ -21,6 +21,33 @@ defmodule FeudHall.Domain.Choice do
 
   A leave decided without any candidate draws nothing and returns the PRNG
   state unchanged.
+
+  ## Leave reasons
+
+  A diner who leaves records exactly one reason, the first that applies in
+  this priority order:
+
+    1. `:no_open_stall` - no stall is open and accepting new mains (closed,
+       cleaning, or its queue is full);
+    2. `:no_compatible_main` - open stalls offer mains, and every one of them
+       is incompatible with the diner's dietary requirement over its resolved
+       portion;
+    3. `:nothing_available` - no main can be quoted at all: none is on a menu,
+       none can be supplied from stock (a stock-out masks dietary
+       compatibility, because the bill is resolved before it is checked), or
+       none can finish before cleaning or within the service window;
+    4. `:nothing_affordable` - quotable mains exist but none fits the budget;
+    5. `:wait_too_long` - affordable mains exist but none finishes within the
+       diner's patience;
+    6. `:chose_to_leave` - eligible stalls existed and the weighted draw (or a
+       zero total stall weight) chose leaving.
+
+  This keeps the spec's leaving reasons in their order (no compatible main,
+  nothing affordable, wait too long, chose to leave) and splits out the two
+  supply-side causes that are not the diner's preference: no open stall comes
+  first because without one no main is evaluated, and nothing available sits
+  after dietary incompatibility because it describes what could be served,
+  not what the diner would eat.
   """
 
   alias FeudHall.Domain.{Offers, Random}
@@ -34,6 +61,13 @@ defmodule FeudHall.Domain.Choice do
         }
 
   @type choice :: {:stall, String.t(), String.t(), String.t() | nil} | {:leave, atom()}
+
+  @leave_reasons ~w(no_open_stall no_compatible_main nothing_available nothing_affordable wait_too_long
+                    chose_to_leave)a
+
+  @doc "Every reason `choose/3` can leave with, in priority order (see the moduledoc)."
+  @spec leave_reasons() :: [atom()]
+  def leave_reasons, do: @leave_reasons
 
   @spec choose(map(), diner(), Random.state()) :: {choice(), Random.state()}
   def choose(state, diner, rng) do
@@ -51,7 +85,8 @@ defmodule FeudHall.Domain.Choice do
   def stall_weights(state, diner), do: state |> evaluate_all(diner) |> elem(0)
 
   defp evaluate_all(state, diner) do
-    evaluated = state |> open_stalls() |> Enum.flat_map(&evaluate_stall(state, &1, diner))
+    open = open_stalls(state)
+    evaluated = Enum.flat_map(open, &evaluate_stall(state, &1, diner))
 
     stalls =
       for(%{outcome: :candidate} = c <- evaluated, do: c)
@@ -60,7 +95,7 @@ defmodule FeudHall.Domain.Choice do
       |> Enum.map(fn {_stall_id, candidates} -> stall_entry(state, diner, candidates) end)
       |> Enum.filter(fn {_choice, weight} -> weight > 0 end)
 
-    {stalls, leave_reason(evaluated)}
+    {stalls, leave_reason(open, evaluated)}
   end
 
   defp draw(rng, stalls, leave_weight) do
@@ -174,11 +209,14 @@ defmodule FeudHall.Domain.Choice do
     segment.price_weight * value + segment.quality_weight * quality + segment.wait_weight * slack + preference
   end
 
-  defp leave_reason(evaluated) do
+  # The priority order is documented in the moduledoc.
+  defp leave_reason(open, evaluated) do
     candidates = for %{outcome: :candidate} = c <- evaluated, do: c
 
     cond do
-      Enum.all?(evaluated, &(&1.outcome == :incompatible)) -> :no_compatible_main
+      open == [] -> :no_open_stall
+      evaluated != [] and Enum.all?(evaluated, &(&1.outcome == :incompatible)) -> :no_compatible_main
+      candidates == [] -> :nothing_available
       not Enum.any?(candidates, & &1.affordable) -> :nothing_affordable
       not Enum.any?(candidates, &(&1.affordable and &1.in_time)) -> :wait_too_long
       true -> :chose_to_leave
