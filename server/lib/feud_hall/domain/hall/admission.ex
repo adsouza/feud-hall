@@ -16,7 +16,8 @@ defmodule FeudHall.Domain.Hall.Admission do
   Admits a visit and accepts its tray atomically.
 
   `deadline_cap`, when an integer, lowers the bound deadline to at most that
-  hall time.
+  hall time. A simulated diner's drawn `dessert_appetite?`, when given, is
+  recorded on the visit.
   """
   def admit(state, p, entity_id) do
     %{source: source, principal: principal, budget: budget} = p
@@ -43,6 +44,11 @@ defmodule FeudHall.Domain.Hall.Admission do
         requirement: requirement,
         budget: budget
       }
+
+      admitted =
+        if source == :simulated and is_boolean(p[:dessert_appetite?]),
+          do: Map.put(admitted, :dessert_appetite?, p.dessert_appetite?),
+          else: admitted
 
       batches = state.restaurants[quote.restaurant_id].batches
 

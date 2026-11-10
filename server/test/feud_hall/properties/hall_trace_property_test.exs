@@ -34,7 +34,9 @@ defmodule FeudHall.Properties.HallTraceTest do
       spoiled: 0,
       stale_rejected: 0,
       trace_fills: 0,
-      requests_cancelled: 0
+      requests_cancelled: 0,
+      arrivals_admitted: 0,
+      arrivals_left: 0
     })
 
     # A large initial size yields long traces while still letting shrinking
@@ -95,7 +97,9 @@ defmodule FeudHall.Properties.HallTraceTest do
           spoiled: 10,
           stale_rejected: 10,
           trace_fills: 25,
-          requests_cancelled: 5
+          requests_cancelled: 5,
+          arrivals_admitted: 100,
+          arrivals_left: 1_000
         ] do
       assert progress[key] >= min, "too little #{key} across runs: #{inspect(progress)}"
     end
@@ -109,6 +113,11 @@ defmodule FeudHall.Properties.HallTraceTest do
     bump(:cancellations, count.(:tray_cancelled) + count.(:dessert_cancelled))
     bump(:spoiled, count.(:stock_spoiled))
     bump(:requests_cancelled, count.(:purchase_request_cancelled))
+
+    # Simulated arrivals from the demand stream (the trace catalog has demand rules).
+    arrived = for %{type: :diner_arrived, outcome: outcome} <- events, do: outcome
+    bump(:arrivals_admitted, Enum.count(arrived, &(&1 == :admitted)))
+    bump(:arrivals_left, Enum.count(arrived, &(&1 == :left)))
 
     # Fills of requests the trace submitted (IDs "PR:c<n>"), not the fixture's opening stock.
     fills = for %{type: :market_cleared, fills: fs} <- events, %{request_id: "PR:c" <> _} <- fs, do: 1

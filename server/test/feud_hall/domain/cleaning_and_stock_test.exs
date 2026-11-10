@@ -12,13 +12,14 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
 
   describe "03:00 cleaning cutoff" do
     test "admission requires completion strictly before 03:00" do
-      w = stocked_world()
+      # An idle kitchen: no simulated diner queues ahead.
+      w = stocked_world(arrivals: false)
       # Main work (4 min) plus handover (4 min) must finish before 03:00.
       w = advance_hall(w, @three - 8 * Clock.minute())
       {state, _} = w
       assert {:error, :cannot_finish_before_cleaning} = admit(state, "late")
 
-      w = advance_hall(stocked_world(), @three - 8 * Clock.minute() - Clock.ratio())
+      w = advance_hall(stocked_world(arrivals: false), @three - 8 * Clock.minute() - Clock.ratio())
       {state, _} = w
       assert {:ok, _} = admit(state, "just-in-time")
     end

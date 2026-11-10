@@ -9,6 +9,15 @@ defmodule FeudHall.Fixtures do
   @stall "s001"
 
   def ctx(actor, id), do: %{command_id: id, actor: actor}
+
+  @doc """
+  `catalog` with no simulated arrivals (zero arrivals per equivalent), for
+  tests about something other than demand: no diner buys food, takes stock or
+  queues unless the test admits one. The midnight forecast still runs.
+  """
+  def quiet_catalog(catalog \\ SliceCatalog.catalog()),
+    do: put_in(catalog, [:rules, :demand, :arrivals_per_equivalent], 0)
+
   def owner(id \\ "alice"), do: {:principal, id}
 
   @doc "Runs a command that must succeed; returns `{state, events}`."
@@ -39,7 +48,9 @@ defmodule FeudHall.Fixtures do
   A hall with alice's open restaurant fully unlocked and stocked. The stock is
   bought through purchase requests filled at the first market clearing (hall
   time `clear_every_hall_ms`), so a stocked world starts at that instant; with
-  `stock: %{}` nothing is bought and the hall stays at time 0.
+  `stock: %{}` nothing is bought and the hall stays at time 0. Simulated
+  diners arrive as the catalog's demand rules say; `arrivals: false` uses
+  `quiet_catalog/1` instead.
   """
   def stocked_world(opts \\ []) do
     world =
@@ -61,6 +72,7 @@ defmodule FeudHall.Fixtures do
   """
   def stocked_world_steps(opts \\ []) do
     catalog = Keyword.get(opts, :catalog, SliceCatalog.catalog())
+    catalog = if Keyword.get(opts, :arrivals, true), do: catalog, else: quiet_catalog(catalog)
     fixed = fn command, actor, id -> fn _state -> {command, actor, id} end end
 
     unlocks =

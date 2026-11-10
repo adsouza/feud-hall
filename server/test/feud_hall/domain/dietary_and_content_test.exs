@@ -319,6 +319,14 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
       for v <- [%{"ghost" => 1}, %{"vegan" => -1}, %{"vegan" => 0}, %{}, :x] do
         has?(bad([:rules, :demand, :profile_mix], v), {:demand, :bad_profile_mix})
       end
+
+      # Arrivals draw only enabled profiles: a mix weighting only disabled ones cannot be drawn.
+      has?(bad([:rules, :demand, :profile_mix], %{"keto_style" => 3, "vegan" => 0}), {:demand, :bad_profile_mix})
+    end
+
+    test "arrivals per equivalent may be zero (a hall without simulated diners) but not negative" do
+      assert :ok = Content.validate(bad([:rules, :demand, :arrivals_per_equivalent], 0))
+      has?(bad([:rules, :demand, :arrivals_per_equivalent], -1), {:demand, :malformed})
     end
 
     test "hourly weights with zero total, and variety" do

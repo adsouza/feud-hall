@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.DemandForecastTest do
   use ExUnit.Case, async: true
 
-  import FeudHall.Fixtures
+  import FeudHall.Fixtures, except: [stocked_world: 0, stocked_world: 1]
 
   alias FeudHall.Domain.{Clock, Demand, Market}
   alias FeudHall.Domain.Content.SliceCatalog
@@ -18,6 +18,10 @@ defmodule FeudHall.Domain.DemandForecastTest do
   @t0 SliceCatalog.rules().market.clear_every_hall_ms
 
   defp day_closed(events), do: Enum.filter(events, &(&1.type == :day_closed))
+
+  # Observation and the forecast are counted exactly here, so no simulated
+  # diner arrives (and buys stock) unless a test admits one.
+  defp stocked_world(opts \\ []), do: FeudHall.Fixtures.stocked_world(Keyword.put(opts, :arrivals, false))
 
   # Ten times the stock per equivalent at a tenth of the floor: the same opening
   # stock, so a stocked world works, while one operating business can exceed the floor.

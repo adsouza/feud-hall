@@ -16,13 +16,18 @@ defmodule FeudHall.Domain.Hall.Invariants do
     * the access gate matches the cleaning calendar (`Clock.cleaning?/1`);
     * the market's pending purchase requests and their `{restaurant, product}`
       index agree, each names an existing restaurant, market stock is never
-      negative, and the next clearing lies after the clock.
+      negative, and the next clearing lies after the clock;
+    * the arrival accumulator: the PRNG state is a 64-bit integer, the carried
+      remainder is less than one arrival, the day's arrivals do not exceed its
+      accumulated quota, and the next arrival lies after the clock.
 
   Problems are terms naming the broken invariant: `{restaurant_id, problem}`
   for restaurant checks, `{:missing_tray_component, tray_id, order_id}`,
   `{:access_gate_mismatch, hall_ms}`, `{:unindexed_purchase_request, id}`,
   `{:dangling_request_index, id}`, `{:request_for_unknown_restaurant, id}`,
-  `{:negative_market_stock, product}`, and `{:market_clearing_overdue, at}`.
+  `{:negative_market_stock, product}`, `{:market_clearing_overdue, at}`,
+  `{:bad_demand_rng, rng}`, `{:arrival_accumulator_out_of_range, acc_millis}`,
+  `{:arrivals_beyond_quota, seq}`, and `{:arrival_overdue, at}`.
   """
 
   alias FeudHall.Domain.Clock
@@ -31,7 +36,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   def check(nil), do: :ok
 
   def check(state) do
-    case restaurants(state) ++ trays(state) ++ access(state) ++ market(state) do
+    case restaurants(state) ++ trays(state) ++ access(state) ++ market(state) ++ arrivals(state) do
       [] -> :ok
       problems -> {:error, problems}
     end
@@ -118,6 +123,22 @@ defmodule FeudHall.Domain.Hall.Invariants do
 
     indexed ++ dangling ++ orphaned ++ negative ++ overdue
   end
+
+  # States recorded before the arrival stream carry no accumulator.
+  defp arrivals(%{demand: %{acc_millis: acc, arrival_seq: seq, hour_quotas_millis: quotas} = demand} = state) do
+    rng = demand.rng
+    at = demand.next_arrival_at
+
+    [
+      {is_integer(rng) and rng >= 0 and rng < 0x1_0000_0000_0000_0000, {:bad_demand_rng, rng}},
+      {is_integer(acc) and acc >= 0 and acc < 1000, {:arrival_accumulator_out_of_range, acc}},
+      {is_integer(seq) and seq >= 0 and 1000 * seq <= acc + Enum.sum(quotas), {:arrivals_beyond_quota, seq}},
+      {at == nil or at > state.now, {:arrival_overdue, at}}
+    ]
+    |> Enum.flat_map(fn {ok, problem} -> if ok, do: [], else: [problem] end)
+  end
+
+  defp arrivals(_state), do: []
 
   defp clears?(state), do: (get_in(state.catalog, [:rules, :market, :clear_every_hall_ms]) || 0) > 0
 

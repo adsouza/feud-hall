@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.LayoutTest do
   use ExUnit.Case, async: true
 
-  alias FeudHall.Domain.{Clock, Hall, Random}
+  alias FeudHall.Domain.{Clock, Demand, Hall, Random}
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Infrastructure.EventCodec
 
@@ -38,13 +38,23 @@ defmodule FeudHall.Domain.LayoutTest do
     # The event records only the PRNG; the forecast fields start from defaults at the floor scale.
     assert event.demand == %{rng: Random.new(Random.derive(rules.seed, "demand"))}
 
+    quotas = Demand.hour_quotas(rules.demand, rules.demand.equivalent_floor_millis)
+    [hour0 | _] = quotas
+
     assert state.demand == %{
              rng: event.demand.rng,
              observed_ms: %{},
              supply_scale_millis: rules.demand.equivalent_floor_millis,
              today: %{arrivals: 0, admitted: 0, left: %{}, trays_served: 0},
              summaries: [],
-             next_day_at: Clock.day()
+             next_day_at: Clock.day(),
+             # Day 0's arrival quotas at the floor scale, an empty accumulator
+             # anchored at 00:00, and the first arrival inside hour 0.
+             hour_quotas_millis: quotas,
+             acc_millis: 0,
+             acc_at: 0,
+             arrival_seq: 0,
+             next_arrival_at: div(1000 * Clock.hour() + hour0 - 1, hour0) - 1
            }
 
     # Stock starts at the per-equivalent target times the three-equivalent floor.

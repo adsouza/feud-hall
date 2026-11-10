@@ -62,7 +62,16 @@ defmodule FeudHall.Domain.Hall.Evolver do
       orders: %{},
       wallets: %{},
       active_visits: %{},
-      stats: %{arrivals: 0, served_mains: 0, served_drinks: 0, served_desserts: 0, finalized_visits: 0}
+      stats: %{
+        arrivals: 0,
+        served_mains: 0,
+        served_drinks: 0,
+        served_desserts: 0,
+        finalized_visits: 0,
+        arrivals_simulated: 0,
+        admitted_simulated: 0,
+        left_simulated: %{}
+      }
     }
   end
 
@@ -74,8 +83,24 @@ defmodule FeudHall.Domain.Hall.Evolver do
   end
 
   def evolve(state, %{type: :day_closed} = e) do
-    state = Map.update!(state, :demand, &Demand.close(&1, e))
+    state = Map.update!(state, :demand, &Demand.close(&1, e, state.catalog))
     update_in(state, [:market, :stock], &add_stock(&1, e.replenishment))
+  end
+
+  # A simulated arrival: the recorded draws and PRNG continuation are taken as
+  # they are (replay never draws), and the arrival is counted. An admitted
+  # arrival's visit follows in the same batch.
+  def evolve(state, %{type: :diner_arrived} = e) do
+    state
+    |> Map.update!(:demand, &Demand.arrive(&1, e))
+    |> Map.update!(:stats, fn stats ->
+      stats = %{stats | arrivals_simulated: stats.arrivals_simulated + 1}
+
+      case e.outcome do
+        :admitted -> %{stats | admitted_simulated: stats.admitted_simulated + 1}
+        :left -> %{stats | left_simulated: Map.update(stats.left_simulated, e.reason, 1, &(&1 + 1))}
+      end
+    end)
   end
 
   def evolve(state, %{type: :hall_resumed, recovery_id: id}), do: %{state | last_recovery_id: id}
@@ -204,7 +229,9 @@ defmodule FeudHall.Domain.Hall.Evolver do
       dessert_offer_deadline: nil,
       dessert_order: nil,
       status: :active,
-      outcome: nil
+      outcome: nil,
+      # Drawn for simulated arrivals; guests decide on dessert themselves.
+      dessert_appetite?: Map.get(e, :dessert_appetite?, false)
     }
 
     state = put_in(state, [:visits, e.visit_id], visit)

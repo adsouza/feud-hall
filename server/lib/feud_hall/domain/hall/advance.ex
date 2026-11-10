@@ -19,7 +19,12 @@ defmodule FeudHall.Domain.Hall.Advance do
        clearing sees the replenished stock);
     7. market clearing every `clear_every_hall_ms`, cleaning included: one
        `market_cleared` batch that settles every pending purchase request;
-    8. arrivals (reserved);
+    8. a simulated arrival at `demand.next_arrival_at` (see
+       `FeudHall.Domain.Demand`): the diner is drawn from the demand PRNG,
+       chooses through `FeudHall.Domain.Choice`, and a chosen tray is admitted
+       through `FeudHall.Domain.Hall.Admission` exactly as a guest's would be;
+       `diner_arrived` records the draws, the outcome and the PRNG
+       continuation, followed by the admission events;
     9. kitchen dispatch: start queued stages on free stations and select the
        counter's next ready item, only while customer access is open.
 
@@ -31,16 +36,15 @@ defmodule FeudHall.Domain.Hall.Advance do
   batch commits.
   """
 
-  alias FeudHall.Domain.{Clock, Demand, Inventory, Kitchen, Market}
-  alias FeudHall.Domain.Hall.{Evolver, Settlement}
+  alias FeudHall.Domain.{Choice, Clock, Demand, Dietary, Inventory, Kitchen, Market}
+  alias FeudHall.Domain.Hall.{Admission, Evolver, Settlement}
 
   @doc "Returns the events that advance `state` to hall time `target`."
   def run(state, target), do: loop(state, target, [])
 
   @doc """
   The boundary classes in same-timestamp order: `{class, due_fun}` where
-  `due_fun.(state)` lists `{at, entity_id, ref}`. Later work plugs in its own
-  class (8 arrivals) here.
+  `due_fun.(state)` lists `{at, entity_id, ref}`.
   """
   def classes do
     [
@@ -51,22 +55,24 @@ defmodule FeudHall.Domain.Hall.Advance do
       {5, &reopening/1},
       {6, &day_boundary/1},
       {7, &market_clearing/1},
+      {8, &arrival/1},
       {9, &dispatch/1}
     ]
   end
 
+  # `acc` holds the batches handled so far, newest first.
   defp loop(state, target, acc) do
     case next_due(state, target) do
       nil ->
         tail = if target > state.now, do: [clock_advanced(state, target)], else: []
-        acc ++ tail
+        [tail | acc] |> Enum.reverse() |> Enum.concat()
 
       {at, _class, _id, ref} ->
         tick = if at > state.now, do: [clock_advanced(state, at)], else: []
         state = Enum.reduce(tick, state, &Evolver.evolve(&2, &1))
         events = handle(state, ref)
         state = Enum.reduce(events, state, &Evolver.evolve(&2, &1))
-        loop(state, target, acc ++ tick ++ events)
+        loop(state, target, [events, tick | acc])
     end
   end
 
@@ -146,6 +152,14 @@ defmodule FeudHall.Domain.Hall.Advance do
        do: [{at, "market", {:market_clear}}]
 
   defp market_clearing(_state), do: []
+
+  # Class 8: the next simulated arrival, if the day's quotas hold one.
+  defp arrival(%{demand: demand}) do
+    case Map.get(demand, :next_arrival_at) do
+      nil -> []
+      at -> [{at, "arrival", {:arrival}}]
+    end
+  end
 
   # Class 9.
   defp dispatch(%{access: :open} = state) do
@@ -235,6 +249,67 @@ defmodule FeudHall.Domain.Hall.Advance do
   defp handle(state, {:day_close}), do: [Demand.close_day(state)]
 
   defp handle(state, {:market_clear}), do: [Market.clear(state)]
+
+  defp handle(state, {:arrival}) do
+    day = Clock.day_of(state.now)
+    seq = state.demand.arrival_seq
+    arrival_id = "A#{day}-#{seq}"
+    {draw, rng} = Demand.draw_diner(state.catalog, state.demand.rng)
+    {:ok, requirement} = Dietary.requirement(state.catalog, draw.profile_id)
+
+    diner = %{
+      segment: draw.segment,
+      budget: draw.budget,
+      requirement: requirement,
+      patience_hall_ms: draw.patience_hall_ms,
+      drink?: draw.drink?
+    }
+
+    {choice, rng} = Choice.choose(state, diner, rng)
+
+    {outcome, reason, admission} =
+      case choice do
+        {:leave, reason} ->
+          {:left, reason, []}
+
+        {:stall, stall_id, main, drink} ->
+          request = %{
+            source: :simulated,
+            principal: "diner:D#{day}-#{seq}",
+            budget: draw.budget,
+            stall_id: stall_id,
+            main: main,
+            drink: drink,
+            profile_id: draw.profile_id,
+            confirmed: nil,
+            deadline_cap: min(state.now + draw.patience_hall_ms, Clock.service_cutoff(state.now)),
+            dessert_appetite?: draw.dessert_appetite?
+          }
+
+          # Choice quoted this tray against the same state, so admission
+          # should not fail; if it does, the diner leaves instead.
+          case Admission.admit(state, request, arrival_id) do
+            {:ok, events} -> {:admitted, nil, events}
+            {:error, _} -> {:left, :admission_failed, []}
+          end
+      end
+
+    arrived = %{
+      type: :diner_arrived,
+      arrival_id: arrival_id,
+      segment: draw.segment.id,
+      budget: draw.budget,
+      patience_hall_ms: draw.patience_hall_ms,
+      profile_id: draw.profile_id,
+      drink?: draw.drink?,
+      dessert_appetite?: draw.dessert_appetite?,
+      outcome: outcome,
+      reason: reason,
+      rng: rng
+    }
+
+    [arrived | admission]
+  end
 
   defp handle(state, {:dispatch, sid}), do: dispatch_stall(state, sid, [])
 

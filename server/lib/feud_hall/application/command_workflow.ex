@@ -228,6 +228,7 @@ defmodule FeudHall.Application.CommandWorkflow do
       kind not in @commands and kind not in @control_commands -> {:error, :unknown_command}
       not valid_actor?(actor) -> {:error, :unauthenticated}
       reserved_prefix?(id) and not reserved_allowed?(id, actor) -> {:error, :reserved_command_id}
+      arrival_id?(id) and not match?({:system, _}, actor) -> {:error, :reserved_command_id}
       true -> :ok
     end
   end
@@ -246,6 +247,16 @@ defmodule FeudHall.Application.CommandWorkflow do
     do: Enum.any?(@reserved_prefixes, &String.starts_with?(command_id, &1))
 
   def reserved_prefix?(_), do: false
+
+  @doc """
+  True when `command_id` has the form of a simulated arrival's entity ID
+  (`"A<day>-<seq>"`). The clock advance derives that arrival's visit, tray and
+  order IDs from it exactly as a command derives them from its command ID, so
+  only system actors may use such an ID.
+  """
+  @spec arrival_id?(term()) :: boolean()
+  def arrival_id?(command_id) when is_binary(command_id), do: Regex.match?(~r/\AA\d+-\d+\z/, command_id)
+  def arrival_id?(_), do: false
 
   # System actors may use every reserved prefix; NPCs only `npc:`.
   defp reserved_allowed?(_id, {:system, _}), do: true

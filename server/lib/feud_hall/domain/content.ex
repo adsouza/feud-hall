@@ -126,7 +126,8 @@ defmodule FeudHall.Domain.Content do
 
     well_formed =
       is_map(d) and Enum.all?(@demand_keys, &Map.has_key?(d, &1)) and
-        Enum.all?([:arrivals_per_equivalent, :equivalent_floor_millis, :operating_hours_ms], &pos_int?(d[&1])) and
+        nonneg_int?(d[:arrivals_per_equivalent]) and
+        Enum.all?([:equivalent_floor_millis, :operating_hours_ms], &pos_int?(d[&1])) and
         is_list(segments) and segments != [] and Enum.all?(segments, &(is_map(&1) and Map.has_key?(&1, :id)))
 
     if well_formed do
@@ -151,9 +152,11 @@ defmodule FeudHall.Domain.Content do
     do: if(nonneg_int?(d.variety_weight) and nonneg_int?(d.variety_cap), do: [], else: [{:demand, :bad_variety}])
 
   defp profile_mix_problems(catalog, mix) do
+    # Arrivals draw only enabled profiles, so their weights must be positive in total.
     ok =
       is_map(mix) and mix != %{} and Enum.all?(Map.keys(mix), &Map.has_key?(catalog.profiles, &1)) and
-        weights_ok?(Map.values(mix))
+        weights_ok?(Map.values(mix)) and
+        weights_ok?(for({id, w} <- mix, catalog.profiles[id][:enabled] == true, do: w))
 
     if ok, do: [], else: [{:demand, :bad_profile_mix}]
   end

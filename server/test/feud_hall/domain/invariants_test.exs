@@ -62,9 +62,16 @@ defmodule FeudHall.Domain.InvariantsTest do
     refute Clock.cleaning?(state.now)
     assert Invariants.check(%{state | access: :cleaning}) == {:error, [{:access_gate_mismatch, state.now}]}
 
-    # Jump the clock (keeping the next market clearing ahead of it).
+    # Jump the clock (keeping the next market clearing and arrival ahead of it).
     three = Clock.cleaning_start_of(0)
-    cleaning = %{state | now: three, market: %{state.market | next_clear_at: three + Clock.minute()}}
+
+    cleaning = %{
+      state
+      | now: three,
+        market: %{state.market | next_clear_at: three + Clock.minute()},
+        demand: %{state.demand | next_arrival_at: Clock.cleaning_end_of(0) + Clock.minute()}
+    }
+
     assert Invariants.check(cleaning) == {:error, [{:access_gate_mismatch, cleaning.now}]}
     assert Invariants.check(%{cleaning | access: :cleaning}) == :ok
   end

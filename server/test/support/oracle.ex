@@ -19,7 +19,8 @@ defmodule FeudHall.Oracle do
   def violations(state, events) do
     Enum.flat_map(state.restaurants, fn {rid, r} -> restaurant(state, rid, r, events) end) ++
       orders(state) ++
-      visits(state) ++ wallets(state) ++ kitchens(state) ++ hall(state, events) ++ market(state, events)
+      visits(state) ++
+      wallets(state) ++ kitchens(state) ++ hall(state, events) ++ market(state, events) ++ arrivals(state, events)
   end
 
   def assert_settled!(state, events) do
@@ -301,6 +302,67 @@ defmodule FeudHall.Oracle do
   end
 
   defp market(_state, _events), do: []
+
+  # Arrival accounting, counted from the facts alone. Every simulated arrival
+  # either opened its visit (the next event admits `"V:" <> arrival_id`) or
+  # left with a reason; none fell during cleaning; the stats agree; and each
+  # visit's source matches the admissions recorded for it (stream arrivals,
+  # fixture-admitted simulated visits, and guests). Only checked over a log
+  # that starts at genesis.
+  defp arrivals(state, [%{type: :hall_initialized} | _] = events) do
+    zero = %{now: 0, arrivals: 0, admitted: 0, left: %{}, ids: MapSet.new(), sources: %{}, problems: []}
+
+    t =
+      events
+      |> Enum.chunk_every(2, 1, [nil])
+      |> Enum.reduce(zero, fn
+        [%{type: :clock_advanced, to: to}, _next], t ->
+          %{t | now: to}
+
+        [%{type: :diner_arrived} = e, next], t ->
+          admitted? = e.outcome == :admitted
+
+          checks = [
+            {not MapSet.member?(t.ids, e.arrival_id), {:duplicate_arrival, e.arrival_id}},
+            {not FeudHall.Domain.Clock.cleaning?(t.now), {:arrival_during_cleaning, e.arrival_id}},
+            {admitted? == match?(%{type: :visit_admitted, source: :simulated}, next) and
+               (not admitted? or next.visit_id == "V:" <> e.arrival_id), {:arrival_outcome_mismatch, e.arrival_id}},
+            {admitted? or (e.outcome == :left and is_atom(e.reason) and e.reason != nil),
+             {:arrival_without_reason, e.arrival_id}}
+          ]
+
+          left = if admitted?, do: t.left, else: Map.update(t.left, e.reason, 1, &(&1 + 1))
+
+          %{
+            t
+            | arrivals: t.arrivals + 1,
+              admitted: t.admitted + if(admitted?, do: 1, else: 0),
+              left: left,
+              ids: MapSet.put(t.ids, e.arrival_id),
+              problems: t.problems ++ failures(checks)
+          }
+
+        [%{type: :visit_admitted} = e, _next], t ->
+          %{t | sources: Map.put(t.sources, e.visit_id, e.source)}
+
+        _other, t ->
+          t
+      end)
+
+    visit_sources = Map.new(state.visits, fn {id, v} -> {id, v.source} end)
+    stats = state.stats
+
+    t.problems ++
+      failures([
+        {stats.arrivals_simulated == t.arrivals, :simulated_arrival_count},
+        {stats.admitted_simulated == t.admitted, :simulated_admitted_count},
+        {stats.left_simulated == t.left, :simulated_left_count},
+        {t.arrivals == t.admitted + Enum.sum(Map.values(t.left)), :arrivals_not_partitioned},
+        {visit_sources == t.sources, :visit_sources_mismatch}
+      ])
+  end
+
+  defp arrivals(_state, _events), do: []
 
   defp failures(checks), do: for({false, problem} <- checks, do: problem)
 end

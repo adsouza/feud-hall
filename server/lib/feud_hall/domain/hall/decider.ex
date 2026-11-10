@@ -222,6 +222,9 @@ defmodule FeudHall.Domain.Hall.Decider do
 
   defp visit_source(%{source: :guest}, %{actor: {:principal, who}}), do: {:ok, :guest, who, nil}
 
+  # Simulated diners arrive inside the clock advance (`Advance`, class 8); the
+  # authority never issues this command. It remains a test-fixture path that
+  # admits through the same `Admission.admit/3`.
   defp visit_source(%{source: :simulated, diner_id: d, budget: b}, %{actor: {:system, :demand}})
        when is_binary(d) and is_integer(b) and b > 0 and b <= @max_price,
        do: {:ok, :simulated, "diner:" <> d, b}

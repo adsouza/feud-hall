@@ -6,8 +6,9 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
   alias FeudHall.Domain.{Clock, Dietary, Hall, Offers}
   alias FeudHall.Oracle
 
+  # Lifecycle counts are exact here: no simulated diner arrives unless admitted.
   setup do
-    %{world: stocked_world()}
+    %{world: stocked_world(arrivals: false)}
   end
 
   test "main + drink tray settles jointly, offers dessert, and finalizes once with 4:1:2 weights", %{world: w} do

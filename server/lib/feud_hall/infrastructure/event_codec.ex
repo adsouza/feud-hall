@@ -47,6 +47,8 @@ defmodule FeudHall.Infrastructure.EventCodec do
     prices fills unfilled price_above_limit insufficient_cash insufficient_storage stock_exhausted
     day_closed operating equivalents_millis scale_millis replenishment summary arrivals admitted left
     trays_served menu_prices_median
+    diner_arrived arrival_id segment patience_hall_ms drink? dessert_appetite? hour_quotas_millis
+    no_compatible_main nothing_affordable wait_too_long chose_to_leave admission_failed
   )a
 
   @by_name Map.new(@atoms, &{Atom.to_string(&1), &1})

@@ -76,6 +76,19 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     refute Workflow.reserved_prefix?("buy-1")
   end
 
+  test "simulated arrivals' entity IDs are refused as client command IDs" do
+    rt = runtime()
+
+    for actor <- [{:principal, "alice"}, {:npc, "budget"}] do
+      assert {:error, :reserved_command_id, _} = Workflow.execute(rt, env("A0-12", actor, purchase(10)))
+    end
+
+    assert Workflow.arrival_id?("A12-0")
+    refute Workflow.arrival_id?("A12-0x")
+    refute Workflow.arrival_id?("buy-A1-2")
+    assert {:accepted, _, _} = Workflow.execute(rt, env("A-1", {:principal, "alice"}, purchase(10)))
+  end
+
   test "system actors may use reserved prefixes" do
     rt = runtime()
 
