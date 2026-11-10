@@ -81,6 +81,21 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   incarnation**: two processes must never share an owner name, or a paused
   one could mistake its successor's acquisition for its own.
 
+  ## NPC owners
+
+  After start-up recovery and after every step that committed a batch, the
+  authority creates each catalog NPC profile's restaurant that does not exist
+  yet (`create_restaurant` as `{:npc, profile_id}`, ID `"npc:<id>:create"`, the
+  slot from `Planner.choose_slot/3`), then, for every NPC (sorted) whose
+  `next_slot_at` has been reached, runs `Planner.plan/5` on the public view and
+  executes one `npc_plan` command (ID `"npc:<op>:<slot>"`) at the latest
+  crossed hour boundary. These commands go through the same workflow without
+  a catch-up advance. A failure emits `:npc_planner_failed` (command ID and
+  reason) and never stops the authority: storage unavailability or a lost
+  reply is retried after the next commit; anything else is not retried for
+  that slot (or, for a create, until restart). A fenced NPC append stops the
+  authority after replying to the step that triggered it.
+
   ## Snapshots
 
   After a committed batch, when at least `snapshot_every_events` events or
@@ -102,7 +117,9 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   use GenServer, restart: :transient
 
   alias FeudHall.Application.{CommandWorkflow, Diagnostics, Recovery}
-  alias FeudHall.Domain.Clock
+  alias FeudHall.Domain.{Clock, PublicView}
+  alias FeudHall.Domain.Hall.Decider
+  alias FeudHall.Domain.Npc.Planner
   alias FeudHall.Infrastructure.{PostgresEventStore, Snapshot, SystemClock}
   alias FeudHall.Infrastructure.Postgres.DailyActivityProjector
 
@@ -127,7 +144,8 @@ defmodule FeudHall.Infrastructure.HallAuthority do
             anchor: 0,
             service_ms: 0,
             snapshot_events: 0,
-            snapshot_service_ms: 0
+            snapshot_service_ms: 0,
+            npc_given_up: %{}
 
   # --- client ------------------------------------------------------------------
 
@@ -224,13 +242,17 @@ defmodule FeudHall.Infrastructure.HallAuthority do
       snapshot_every_service_ms: Keyword.get(opts, :snapshot_every_service_ms, 300_000)
     }
 
-    case recover(s, Keyword.fetch!(opts, :store), nil) do
-      {:ok, s} ->
-        schedule(s)
-        {:ok, s}
-
+    with {:ok, s} <- recover(s, Keyword.fetch!(opts, :store), nil),
+         {:ok, s} <- npc_work(s) do
+      schedule(s)
+      {:ok, s}
+    else
       {:error, reason, _s} ->
         {:stop, {:recovery_failed, reason}}
+
+      {:fenced, s} ->
+        fenced(s)
+        {:stop, {:shutdown, :fenced}}
     end
   end
 
@@ -266,6 +288,9 @@ defmodule FeudHall.Infrastructure.HallAuthority do
       {:stop, reason, s} ->
         {:stop, reason, s}
 
+      {:fenced_after, _value, s} ->
+        {:stop, {:shutdown, :fenced}, fenced(s)}
+
       {_ok_or_error, _value, s} ->
         schedule(s)
         {:noreply, s}
@@ -274,8 +299,13 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   def handle_info(_message, s), do: {:noreply, s}
 
-  # Step results are `{:ok, value, s}`, `{:error, reason, s}`, `{:fenced, s}`, or `{:stop, reason, s}`.
+  # Step results are `{:ok, value, s}`, `{:error, reason, s}`, `{:fenced, s}`, `{:stop, reason, s}`, or
+  # `{:fenced_after, value, s}` (the step itself succeeded, then NPC work found the hall fenced).
   defp reply({:ok, value, s}, to_reply), do: {:reply, to_reply.(value), s}
+
+  defp reply({:fenced_after, value, s}, to_reply),
+    do: {:stop, {:shutdown, :fenced}, to_reply.(value), fenced(s)}
+
   defp reply({:error, reason, s}, _to_reply), do: {:reply, {:error, reason}, s}
   defp reply({:fenced, s}, _to_reply), do: {:stop, {:shutdown, :fenced}, {:error, :fenced}, fenced(s)}
   defp reply({:stop, {:shutdown, reason} = stop, s}, _to_reply), do: {:stop, stop, {:error, reason}, s}
@@ -291,7 +321,27 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   # --- tick and execute --------------------------------------------------------
 
-  defp run_tick(s) do
+  defp run_tick(s), do: with_npc_work(s, &tick_step/1)
+
+  defp run_execute(s, envelope), do: with_npc_work(s, &execute_step(&1, envelope))
+
+  # NPC work follows every step that committed a batch (see "NPC owners").
+  defp with_npc_work(s, step) do
+    before = s.runtime.position
+
+    case step.(s) do
+      {status, value, %{runtime: %{position: position}} = s} when status in [:ok, :error] and position > before ->
+        case npc_work(s) do
+          {:ok, s} -> {status, value, s}
+          {:fenced, s} -> {:fenced_after, value, s}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp tick_step(s) do
     now = now(s)
 
     with {:ok, s} <- check_gap(s, now),
@@ -303,7 +353,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     end
   end
 
-  defp run_execute(s, envelope) do
+  defp execute_step(s, envelope) do
     now = now(s)
     envelope = if is_map(envelope), do: Map.take(envelope, [:command_id, :actor, :command]), else: envelope
 
@@ -407,6 +457,151 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   defp after_commit(%{runtime: rt} = s, before) when rt.position > before and rt.state != nil, do: maybe_snapshot(s)
   defp after_commit(s, _before), do: s
+
+  # --- NPC owners --------------------------------------------------------------
+
+  # After each committed batch (and once after start-up recovery): every NPC
+  # profile without a venture is created, then every NPC whose planning slot
+  # is due plans once, at the latest crossed hour boundary. NPC commands go
+  # through the same workflow as any owner's, with deterministic IDs
+  # (`npc:<op>:create`, `npc:<op>:<slot>`), so a retry after a restart replays
+  # the original receipt. A failure emits `:npc_planner_failed` and never stops
+  # the authority. A transient one (storage unavailable, a lost reply) is
+  # retried after the next committed batch; any other is not retried for the
+  # same slot (or, for a create, until restart), so nothing loops on it.
+  defp npc_work(%{runtime: %{state: nil}} = s), do: {:ok, s}
+
+  defp npc_work(s) do
+    with {:ok, s} <- create_npcs(s), do: plan_npcs(s)
+  end
+
+  defp create_npcs(s) do
+    s.runtime.state.catalog
+    |> Map.get(:npc_profiles, [])
+    |> Enum.sort_by(& &1.id)
+    |> Enum.reduce_while({:ok, s}, fn profile, {:ok, s} ->
+      cond do
+        s.runtime.mode != :ready -> {:halt, {:ok, s}}
+        Map.has_key?(s.runtime.state.owners, {:npc, profile.id}) -> {:cont, {:ok, s}}
+        Map.has_key?(s.npc_given_up, {profile.id, :create}) -> {:cont, {:ok, s}}
+        true -> create_npc(s, profile)
+      end
+    end)
+  end
+
+  defp create_npc(s, profile) do
+    op = profile.id
+    id = "npc:#{op}:create"
+    hall = s.runtime.state
+
+    with {:ok, slot} when slot != nil <-
+           guarded(fn -> Planner.choose_slot(PublicView.build(hall), hall.layout, profile) end),
+         {:ok, cuisine} <- starter_cuisine(hall.catalog) do
+      payload = %{restaurant_id: "npc-#{op}", stall_id: slot, name: "NPC #{op}", cuisine: cuisine}
+      npc_command(s, {op, :create}, %{command_id: id, actor: {:npc, op}, command: {:create_restaurant, payload}})
+    else
+      {:ok, nil} -> {:cont, {:ok, npc_failed(s, {op, :create}, id, :no_vacant_slot, :given_up)}}
+      {:error, reason} -> {:cont, {:ok, npc_failed(s, {op, :create}, id, reason, :given_up)}}
+    end
+  end
+
+  # Every restaurant is Mexican for now: NPCs take the cuisine of the first starter recipe.
+  defp starter_cuisine(catalog) do
+    case catalog.recipes |> Map.values() |> Enum.filter(& &1.starter) |> Enum.min_by(& &1.id, fn -> nil end) do
+      nil -> {:error, :no_starter_recipe}
+      recipe -> {:ok, recipe.cuisine}
+    end
+  end
+
+  defp plan_npcs(s) do
+    hall = s.runtime.state
+    slot = div(hall.now, Clock.hour()) * Clock.hour()
+
+    hall.npcs
+    |> Enum.filter(fn {_op, npc} -> npc.next_slot_at <= hall.now end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, s}, fn op, {:ok, s} ->
+      cond do
+        s.runtime.mode != :ready -> {:halt, {:ok, s}}
+        Map.get(s.npc_given_up, {op, :plan}) == slot -> {:cont, {:ok, s}}
+        true -> plan_npc(s, op, slot)
+      end
+    end)
+  end
+
+  defp plan_npc(s, op, slot) do
+    hall = s.runtime.state
+    npc = hall.npcs[op]
+    id = Decider.npc_plan_id(op, slot)
+
+    with {:ok, profile} <- npc_profile(hall, npc),
+         {:ok, own} <- fetch_restaurant(hall, npc.restaurant_id),
+         {:ok, {actions, rng}} <-
+           guarded(fn -> Planner.plan(PublicView.build(hall), own, profile, hall.catalog, npc.rng) end) do
+      plan = %{operator: op, slot: slot, actions: actions, rng: rng}
+      npc_command(s, {op, :plan}, %{command_id: id, actor: {:npc, op}, command: {:npc_plan, plan}}, slot)
+    else
+      {:error, reason} -> {:cont, {:ok, npc_failed(s, {op, :plan}, id, reason, slot)}}
+    end
+  end
+
+  # Ruling R4: an NPC's profile is the one whose ID is its operator ID.
+  defp npc_profile(hall, npc) do
+    case Enum.find(Map.get(hall.catalog, :npc_profiles, []), &(&1.id == npc.profile_id)) do
+      nil -> {:error, :unknown_npc_profile}
+      profile -> {:ok, profile}
+    end
+  end
+
+  defp fetch_restaurant(hall, id) do
+    case hall.restaurants[id] do
+      nil -> {:error, :unknown_restaurant}
+      restaurant -> {:ok, restaurant}
+    end
+  end
+
+  # Runs one NPC command; `{:cont | :halt, {:ok | :fenced, s}}` for `Enum.reduce_while/3`.
+  defp npc_command(s, key, envelope, given_up \\ :given_up) do
+    case workflow(s, envelope, nil) do
+      {{:error, :fenced}, s} ->
+        {:halt, {:fenced, s}}
+
+      {{status, %{outcome: :accepted}}, s} when status in [:accepted, :replayed] ->
+        {:cont, {:ok, s}}
+
+      {{status, %{outcome: {:rejected, reason}}}, s} when status in [:rejected, :replayed] ->
+        {:cont, {:ok, npc_failed(s, key, envelope.command_id, reason, given_up)}}
+
+      {{:uncertain, _id}, s} ->
+        {:halt, {:ok, npc_failed(s, key, envelope.command_id, :unknown_outcome, nil)}}
+
+      {{:error, reason}, s} when reason in [:unavailable, :conflict, :recovery_required] ->
+        {:halt, {:ok, npc_failed(s, key, envelope.command_id, reason, nil)}}
+
+      {{:error, reason}, s} ->
+        {:cont, {:ok, npc_failed(s, key, envelope.command_id, reason, given_up)}}
+    end
+  end
+
+  # `given_up` (a slot, or `:given_up` for a create) marks the attempt as not to be retried; nil retries it.
+  defp npc_failed(s, key, command_id, reason, given_up) do
+    emit(s, :npc_planner_failed, %{
+      command_id: command_id,
+      reason: Diagnostics.reason(reason),
+      position: s.runtime.position,
+      hall_ms: s.runtime.state && s.runtime.state.now
+    })
+
+    if given_up == nil, do: s, else: %{s | npc_given_up: Map.put(s.npc_given_up, key, given_up)}
+  end
+
+  # The planner is pure, but a defect in it must not take the hall down: it is reported instead.
+  defp guarded(fun) do
+    {:ok, fun.()}
+  rescue
+    _ -> {:error, :planner_crashed}
+  end
 
   # --- recovery ----------------------------------------------------------------
 

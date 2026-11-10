@@ -19,7 +19,9 @@ defmodule FeudHall.Domain.Hall.Invariants do
       negative, and the next clearing lies after the clock;
     * the arrival accumulator: the PRNG state is a 64-bit integer, the carried
       remainder is less than one arrival, the day's arrivals do not exceed its
-      accumulated quota, and the next arrival lies after the clock.
+      accumulated quota, and the next arrival lies after the clock;
+    * each NPC operator owns the restaurant its record names and its PRNG
+      state is a 64-bit integer.
 
   Problems are terms naming the broken invariant: `{restaurant_id, problem}`
   for restaurant checks, `{:missing_tray_component, tray_id, order_id}`,
@@ -27,7 +29,8 @@ defmodule FeudHall.Domain.Hall.Invariants do
   `{:dangling_request_index, id}`, `{:request_for_unknown_restaurant, id}`,
   `{:negative_market_stock, product}`, `{:market_clearing_overdue, at}`,
   `{:bad_demand_rng, rng}`, `{:arrival_accumulator_out_of_range, acc_millis}`,
-  `{:arrivals_beyond_quota, seq}`, and `{:arrival_overdue, at}`.
+  `{:arrivals_beyond_quota, seq}`, `{:arrival_overdue, at}`, `{:npc_without_restaurant, operator}`,
+  and `{:bad_npc_rng, operator}`.
   """
 
   alias FeudHall.Domain.Clock
@@ -36,7 +39,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
   def check(nil), do: :ok
 
   def check(state) do
-    case restaurants(state) ++ trays(state) ++ access(state) ++ market(state) ++ arrivals(state) do
+    case restaurants(state) ++ trays(state) ++ access(state) ++ market(state) ++ arrivals(state) ++ npcs(state) do
       [] -> :ok
       problems -> {:error, problems}
     end
@@ -139,6 +142,21 @@ defmodule FeudHall.Domain.Hall.Invariants do
   end
 
   defp arrivals(_state), do: []
+
+  # A planning slot may lie in the past (a plan not yet committed is due), so only identity and PRNG are checked.
+  defp npcs(state) do
+    state
+    |> Map.get(:npcs, %{})
+    |> Enum.sort()
+    |> Enum.flat_map(fn {op, npc} ->
+      [
+        {state.owners[{:npc, op}] == npc.restaurant_id and Map.has_key?(state.restaurants, npc.restaurant_id),
+         {:npc_without_restaurant, op}},
+        {is_integer(npc.rng) and npc.rng >= 0 and npc.rng < 0x1_0000_0000_0000_0000, {:bad_npc_rng, op}}
+      ]
+      |> Enum.flat_map(fn {ok, problem} -> if ok, do: [], else: [problem] end)
+    end)
+  end
 
   defp clears?(state), do: (get_in(state.catalog, [:rules, :market, :clear_every_hall_ms]) || 0) > 0
 

@@ -395,7 +395,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
           env(
             "create",
             @alice,
-            {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Casa", cuisine: "mexican"}}
+            {:create_restaurant, %{restaurant_id: "r1", stall_id: "s002", name: "Casa", cuisine: "mexican"}}
           )
           |> Map.merge(%{observed_service_ms: 9_000_000, hall_ms: 9_000_000})
 
@@ -664,6 +664,221 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         assert {:error, :fenced} = tick_after(ctx, pid, 1_000)
         assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :fenced}}
         assert [%{fields: %{epoch: ^epoch}}] = records(ctx, :fenced)
+      end
+    end
+  end
+
+  # --- NPCs ------------------------------------------------------------------------
+
+  # Service milliseconds per game hour, so one tick of this length crosses exactly one boundary.
+  @hour_service div(Clock.hour(), Clock.ratio())
+  @operators ~w(budget mainstream premium)
+
+  # Long ticks need a gap limit above the tick length.
+  defp npc_authority(ctx, opts \\ []), do: start_authority(ctx, Keyword.merge([max_gap_ms: 10 * @hour_service], opts))
+
+  defp initialize_with(pid, catalog) do
+    init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: catalog}})
+    assert {:accepted, _receipt} = HallAuthority.execute(pid, init)
+    pid
+  end
+
+  defp events(pid), do: pid |> batches() |> Enum.flat_map(& &1.events)
+  defp planned(pid), do: pid |> events() |> Enum.filter(&(&1.type == :npc_planned))
+  defp planned_slots(pid), do: pid |> planned() |> Enum.map(&{&1.operator, &1.slot})
+  defp npc_ids(pid), do: pid |> command_ids() |> Enum.filter(&String.starts_with?(&1, "npc:"))
+
+  defp restart(ctx, pid, owner) do
+    {store_mod, store} = HallAuthority.store(pid)
+    stop_supervised_authority(pid, ctx)
+    fresh_store = if ctx.adapter == :memory, do: {store_mod, store}, else: FaultyStore.wrap(store_for(:postgres))
+    npc_authority(ctx, store: fresh_store, owner: owner)
+  end
+
+  for adapter <- [:memory, :postgres] do
+    describe "#{adapter} adapter NPCs" do
+      @describetag adapter: adapter
+
+      test "initializing the hall creates one NPC restaurant per profile in its preferred tier", ctx do
+        pid = ctx |> npc_authority() |> initialize()
+        hall = HallAuthority.state(pid).hall
+
+        for {op, tier} <- Enum.zip(@operators, [:quiet, :standard, :prime]) do
+          rid = hall.owners[{:npc, op}]
+          name = "NPC " <> op
+          assert %{owner_kind: :npc, owner: ^op, name: ^name} = hall.restaurants[rid]
+          assert [%{tier: ^tier, mode: :closed}] = for({_, s} <- hall.stalls, s.restaurant == rid, do: s)
+          assert %{restaurant_id: ^rid, profile_id: ^op, next_slot_at: 3_600_000} = hall.npcs[op]
+        end
+
+        assert map_size(hall.restaurants) == 3
+        assert npc_ids(pid) == Enum.map(@operators, &"npc:#{&1}:create")
+        assert records(ctx, :npc_planner_failed) == []
+      end
+
+      test "a hall initialised without NPC profiles has no NPCs", ctx do
+        pid = ctx |> npc_authority() |> initialize_with(%{SliceCatalog.catalog() | npc_profiles: []})
+        assert :ok = tick_after(ctx, pid, @hour_service)
+        hall = HallAuthority.state(pid).hall
+        assert hall.restaurants == %{} and hall.npcs == %{}
+        assert npc_ids(pid) == []
+      end
+
+      test "each crossed hour boundary is planned once per NPC; one long advance plans only the latest", ctx do
+        pid = ctx |> npc_authority() |> initialize()
+        for _ <- 1..3, do: assert(:ok = tick_after(ctx, pid, @hour_service))
+
+        expected = for h <- 1..3, op <- @operators, do: {op, h * Clock.hour()}
+        assert planned_slots(pid) == expected
+        assert Enum.take(npc_ids(pid), -3) == Enum.map(@operators, &"npc:#{&1}:#{3 * Clock.hour()}")
+
+        hall = HallAuthority.state(pid).hall
+        assert Enum.all?(@operators, &(hall.npcs[&1].next_slot_at == 4 * Clock.hour()))
+        # The first plan opened every NPC stall.
+        assert hall.stalls |> Map.values() |> Enum.all?(&(&1.mode == :open))
+
+        # A tick inside the hour plans nothing more.
+        assert :ok = tick_after(ctx, pid, 1_000)
+        assert length(planned(pid)) == 9
+        stop_supervised_authority(pid, ctx)
+        if ctx.adapter == :postgres, do: FeudHall.PostgresCase.reset!()
+
+        long = ctx |> npc_authority() |> initialize()
+        assert :ok = tick_after(ctx, long, 3 * @hour_service)
+        assert planned_slots(long) == for(op <- @operators, do: {op, 3 * Clock.hour()})
+        assert records(ctx, :npc_planner_failed) == []
+      end
+
+      test "planning continues during cleaning", ctx do
+        pid = ctx |> npc_authority() |> initialize()
+        for _ <- 1..4, do: assert(:ok = tick_after(ctx, pid, @hour_service))
+
+        hall = HallAuthority.state(pid).hall
+        assert hall.access == :cleaning
+        cleaning = for {op, slot} <- planned_slots(pid), Clock.cleaning?(slot), do: {op, slot}
+        assert cleaning == for(h <- 3..4, op <- @operators, do: {op, h * Clock.hour()})
+        assert Enum.all?(@operators, &(hall.npcs[&1].next_slot_at == 5 * Clock.hour()))
+      end
+
+      test "(Review Focus 4) an NPC with no cash and no stock commits its plan and the authority keeps running",
+           ctx do
+        catalog = put_in(SliceCatalog.catalog(), [:rules, :starter_grant], 0)
+        pid = ctx |> npc_authority() |> initialize_with(catalog)
+        assert :ok = tick_after(ctx, pid, @hour_service)
+
+        hall = HallAuthority.state(pid).hall
+        assert Enum.all?(@operators, &(hall.npcs[&1].next_slot_at == 2 * Clock.hour()))
+        assert Enum.all?(Map.values(hall.restaurants), &(&1.ledger.cash == 0 and &1.batches == %{}))
+
+        # The plan's purchase requests carry no cash; the next clearing refuses each with a reason.
+        requested = Map.keys(hall.market.requests)
+        assert requested != []
+        assert Enum.all?(requested, &String.starts_with?(&1, "PR:npc:"))
+
+        interval = catalog.rules.market.clear_every_hall_ms
+        assert :ok = tick_after(ctx, pid, div(interval, Clock.ratio()))
+        clearing = pid |> events() |> Enum.filter(&(&1.type == :market_cleared)) |> List.last()
+        refused = for u <- clearing.unfilled, u.request_id in requested, do: {u.request_id, u.reason}
+        assert Enum.sort(refused) == Enum.sort(for id <- requested, do: {id, :insufficient_cash})
+
+        assert :ok = tick_after(ctx, pid, @hour_service)
+        assert Process.alive?(pid)
+        assert HallAuthority.state(pid).hall.npcs["budget"].next_slot_at == 3 * Clock.hour()
+        assert records(ctx, :npc_planner_failed) == []
+      end
+
+      test "an NPC without a profile is reported once per slot and does not stop the others", ctx do
+        pid = ctx |> npc_authority() |> initialize()
+
+        ghost =
+          env(
+            "npc:ghost:create",
+            {:npc, "ghost"},
+            {:create_restaurant, %{restaurant_id: "npc-ghost", stall_id: "s050", name: "Ghost", cuisine: "mexican"}}
+          )
+
+        assert {:accepted, _} = HallAuthority.execute(pid, ghost)
+        assert :ok = tick_after(ctx, pid, @hour_service)
+        assert :ok = tick_after(ctx, pid, 1_000)
+
+        assert [%{fields: %{command_id: "npc:ghost:3600000", reason: :unknown_npc_profile}} = failed] =
+                 records(ctx, :npc_planner_failed)
+
+        assert failed.severity == :warning
+        assert planned_slots(pid) == for(op <- @operators, do: {op, Clock.hour()})
+
+        assert :ok = tick_after(ctx, pid, @hour_service - 1_000)
+
+        assert Enum.map(records(ctx, :npc_planner_failed), & &1.fields.command_id) == [
+                 "npc:ghost:3600000",
+                 "npc:ghost:7200000"
+               ]
+
+        assert HallAuthority.state(pid).hall.npcs["ghost"].next_slot_at == Clock.hour()
+        assert Process.alive?(pid)
+      end
+
+      test "a bootstrap create whose reply was lost is not duplicated after a restart", ctx do
+        pid = npc_authority(ctx, store: FaultyStore.wrap(store_for(ctx.adapter)))
+        assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :lost_reply})
+        initialize(pid)
+
+        assert HallAuthority.state(pid).mode == :recovery_required
+
+        assert [%{fields: %{command_id: "npc:budget:create", reason: :unknown_outcome}}] =
+                 records(ctx, :npc_planner_failed)
+
+        fresh = restart(ctx, pid, "node-b")
+        hall = HallAuthority.state(fresh).hall
+        assert Enum.sort(Map.keys(hall.npcs)) == @operators
+        assert map_size(hall.restaurants) == 3
+        assert npc_ids(fresh) == Enum.map(@operators, &"npc:#{&1}:create")
+
+        # The committed create's own ID and payload return its original receipt.
+        stall = hall.stalls |> Map.values() |> Enum.find(&(&1.restaurant == hall.owners[{:npc, "budget"}]))
+
+        retry =
+          env(
+            "npc:budget:create",
+            {:npc, "budget"},
+            {:create_restaurant,
+             %{restaurant_id: hall.owners[{:npc, "budget"}], stall_id: stall.id, name: "NPC budget", cuisine: "mexican"}}
+          )
+
+        assert {:replayed, %{outcome: :accepted, command_id: "npc:budget:create"}} = HallAuthority.execute(fresh, retry)
+        assert npc_ids(fresh) == Enum.map(@operators, &"npc:#{&1}:create")
+
+        if ctx.adapter == :postgres do
+          %{rows: rows} = Repo.query!("select distinct actor from events where causation_id like 'npc:%' order by 1")
+          assert rows == Enum.map(@operators, &["npc:#{&1}"])
+        end
+      end
+
+      test "a plan whose reply was lost is not planned again after a restart", ctx do
+        pid = ctx |> npc_authority(store: FaultyStore.wrap(store_for(ctx.adapter))) |> initialize()
+        assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :lost_reply})
+        assert :ok = tick_after(ctx, pid, @hour_service)
+        assert HallAuthority.state(pid).mode == :recovery_required
+
+        fresh = restart(ctx, pid, "node-b")
+        slot = Clock.hour()
+        assert planned_slots(fresh) == for(op <- @operators, do: {op, slot})
+
+        # The planner, rerun on the state its command saw, rebuilds the same command: its ID replays.
+        id = "npc:budget:#{slot}"
+        before = fresh |> batches() |> Enum.take_while(&(&1.command_id != id)) |> Enum.flat_map(& &1.events)
+        state = FeudHall.Domain.Hall.replay(before)
+        npc = state.npcs["budget"]
+        profile = Enum.find(state.catalog.npc_profiles, &(&1.id == "budget"))
+        own = state.restaurants[npc.restaurant_id]
+        view = FeudHall.Domain.PublicView.build(state)
+        {actions, rng} = FeudHall.Domain.Npc.Planner.plan(view, own, profile, state.catalog, npc.rng)
+        plan = {:npc_plan, %{operator: "budget", slot: slot, actions: actions, rng: rng}}
+
+        assert {:replayed, %{outcome: :accepted, command_id: ^id}} =
+                 HallAuthority.execute(fresh, env(id, {:npc, "budget"}, plan))
+
+        assert planned_slots(fresh) == for(op <- @operators, do: {op, slot})
       end
     end
   end

@@ -49,6 +49,13 @@ defmodule FeudHall.Infrastructure.EventCodec do
     trays_served menu_prices_median
     diner_arrived arrival_id segment patience_hall_ms drink? dessert_appetite? hour_quotas_millis
     no_compatible_main nothing_affordable wait_too_long chose_to_leave admission_failed
+    npc_planned operator slot next_slot_at outcomes result accepted rejected action other
+    open_stall close_stall unlock_recipe set_menu_price remove_menu_item set_substitution_policy
+    submit_purchase_request cancel_purchase_request
+    unknown_stall unknown_restaurant forbidden unknown_recipe wrong_cuisine already_unlocked recipe_locked
+    invalid_price not_on_menu unknown_line invalid_policy no_approved_substitute unknown_product
+    invalid_quantity invalid_price_limit no_pending_request unauthorized_or_malformed malformed_command
+    action_not_allowed malformed_action
   )a
 
   @by_name Map.new(@atoms, &{Atom.to_string(&1), &1})

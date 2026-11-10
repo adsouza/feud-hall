@@ -23,6 +23,11 @@ defmodule FeudHall.Domain.Hall.Decider do
 
   @max_seed 18_446_744_073_709_551_615
 
+  # The owner commands an NPC plan may contain; anything else is refused inside the plan.
+  @plan_actions ~w(open_stall close_stall unlock_recipe set_menu_price remove_menu_item set_substitution_policy
+                   submit_purchase_request cancel_purchase_request)a
+  @max_plan_actions 256
+
   def decide(nil, {:initialize_hall, %{hall_id: hall_id, catalog: catalog} = p}, %{actor: {:system, :admin}})
       when is_binary(hall_id) do
     case Content.validate(catalog) do
@@ -40,7 +45,7 @@ defmodule FeudHall.Domain.Hall.Decider do
     if target < state.now, do: {:error, :clock_cannot_move_backwards}, else: {:ok, Advance.run(state, target)}
   end
 
-  def decide(state, {:create_restaurant, p}, %{actor: {kind, owner}} = ctx) when kind in [:principal, :npc] do
+  def decide(state, {:create_restaurant, p}, %{actor: {kind, owner}}) when kind in [:principal, :npc] do
     catalog = state.catalog
 
     starter =
@@ -53,7 +58,7 @@ defmodule FeudHall.Domain.Hall.Decider do
       not Map.has_key?(state.layout, p.stall_id) -> {:error, :unknown_slot}
       Map.has_key?(state.stalls, p.stall_id) -> {:error, :stall_taken}
       starter == nil -> {:error, :unknown_cuisine}
-      true -> {:ok, create_restaurant_events(p, kind, owner, starter, catalog, ctx)}
+      true -> {:ok, create_restaurant_events(state, p, kind, owner, starter)}
     end
   end
 
@@ -165,6 +170,25 @@ defmodule FeudHall.Domain.Hall.Decider do
     end
   end
 
+  # One NPC planning slot: the planner's owner commands, decided in order by
+  # the same rules as a human owner's, as one atomic batch. Each action sees
+  # the state the earlier accepted actions produced and is authorised as the
+  # NPC for its own restaurant; a refused action contributes only its reason.
+  def decide(state, {:npc_plan, %{operator: op, slot: slot, actions: actions, rng: rng}}, %{actor: {:npc, op}} = ctx)
+      when is_binary(op) and is_integer(slot) and is_list(actions) do
+    latest = div(state.now, Clock.hour()) * Clock.hour()
+
+    with {:ok, npc} <- fetch(state.npcs, op, :unknown_npc),
+         :ok <- ensure(ctx.command_id == npc_plan_id(op, slot), :invalid_command_id),
+         :ok <- ensure(slot >= npc.next_slot_at, :slot_already_planned),
+         :ok <- ensure(slot <= latest, :slot_not_reached),
+         :ok <- ensure(slot == latest, :stale_slot),
+         :ok <- ensure(length(actions) <= @max_plan_actions, :too_many_actions),
+         :ok <- ensure(is_integer(rng) and rng >= 0 and rng <= @max_seed, :invalid_payload) do
+      {:ok, npc_plan_events(state, op, slot, actions, rng, ctx)}
+    end
+  end
+
   def decide(state, {:admit_visit, p}, ctx), do: admit_visit(state, p, ctx)
 
   def decide(state, {:cancel_tray, %{tray_id: t}}, %{actor: {:principal, who}}) do
@@ -197,6 +221,57 @@ defmodule FeudHall.Domain.Hall.Decider do
 
   def decide(_state, {kind, _payload}, _ctx) when is_atom(kind), do: {:error, :unauthorized_or_malformed}
   def decide(_state, _command, _ctx), do: {:error, :malformed_command}
+
+  # -- NPC plans ----------------------------------------------------------------
+
+  @doc "The command ID of an NPC's plan for a slot; its actions use `<id>:<index>`."
+  def npc_plan_id(operator, slot), do: "npc:#{operator}:#{slot}"
+
+  defp npc_plan_events(state, op, slot, actions, rng, ctx) do
+    {outcomes, events, _state} =
+      actions
+      |> Enum.with_index()
+      |> Enum.reduce({[], [], state}, fn {action, i}, {outcomes, events, current} ->
+        sub = %{ctx | command_id: "#{ctx.command_id}:#{i}"}
+
+        case plan_action(current, action, sub) do
+          {:ok, new} ->
+            {[%{action: elem(action, 0), result: :accepted} | outcomes], [new | events],
+             Enum.reduce(new, current, &Evolver.evolve(&2, &1))}
+
+          {:error, reason} ->
+            outcome = %{action: action_kind(action), result: :rejected, reason: reason_code(reason)}
+            {[outcome | outcomes], events, current}
+        end
+      end)
+
+    planned = %{
+      type: :npc_planned,
+      operator: op,
+      slot: slot,
+      next_slot_at: slot + Clock.hour(),
+      rng: rng,
+      outcomes: Enum.reverse(outcomes)
+    }
+
+    [planned | events |> Enum.reverse() |> Enum.concat()]
+  end
+
+  defp plan_action(state, {kind, payload} = action, ctx) when kind in @plan_actions and is_map(payload),
+    do: decide(state, action, ctx)
+
+  defp plan_action(_state, {kind, _payload}, _ctx) when is_atom(kind) and kind in @plan_actions,
+    do: {:error, :malformed_action}
+
+  defp plan_action(_state, {kind, _payload}, _ctx) when is_atom(kind), do: {:error, :action_not_allowed}
+  defp plan_action(_state, _action, _ctx), do: {:error, :malformed_action}
+
+  # Recorded in the event: only the owner command names, so a stray atom never reaches the log.
+  defp action_kind({kind, _}) when kind in @plan_actions, do: kind
+  defp action_kind(_action), do: :other
+
+  defp reason_code(reason) when is_atom(reason), do: reason
+  defp reason_code(_reason), do: :malformed_action
 
   # -- visits -----------------------------------------------------------------
 
@@ -271,21 +346,35 @@ defmodule FeudHall.Domain.Hall.Decider do
      ]}
   end
 
-  defp create_restaurant_events(p, owner_kind, owner, starter, catalog, _ctx) do
+  defp create_restaurant_events(state, p, owner_kind, owner, starter) do
+    catalog = state.catalog
+
+    created = %{
+      type: :restaurant_created,
+      restaurant_id: p.restaurant_id,
+      owner_kind: owner_kind,
+      owner: owner,
+      name: p.name,
+      cuisine: starter.cuisine,
+      starter_recipe: starter.id,
+      stall_id: p.stall_id
+    }
+
     [
-      %{
-        type: :restaurant_created,
-        restaurant_id: p.restaurant_id,
-        owner_kind: owner_kind,
-        owner: owner,
-        name: p.name,
-        cuisine: starter.cuisine,
-        starter_recipe: starter.id,
-        stall_id: p.stall_id
-      },
+      if(owner_kind == :npc, do: Map.put(created, :npc, npc_operator(state, owner)), else: created),
       %{type: :starter_grant_issued, restaurant_id: p.restaurant_id, amount: catalog.rules.starter_grant},
       %{type: :menu_price_set, restaurant_id: p.restaurant_id, recipe_id: starter.id, price: starter.suggested_price}
     ]
+  end
+
+  # An NPC operator's planning record: its profile is its operator ID (Ruling R4), its first
+  # planning slot the next hour boundary strictly after now, and its own random stream.
+  defp npc_operator(state, operator) do
+    %{
+      profile_id: operator,
+      next_slot_at: (div(state.now, Clock.hour()) + 1) * Clock.hour(),
+      rng: Random.new(Random.derive(state.seed, "npc:" <> operator))
+    }
   end
 
   defp owned_restaurant(state, r, %{actor: {kind, who}}) when kind in [:principal, :npc] do

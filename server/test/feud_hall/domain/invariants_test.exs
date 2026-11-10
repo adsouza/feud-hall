@@ -57,6 +57,23 @@ defmodule FeudHall.Domain.InvariantsTest do
     assert {:missing_tray_component, tray_id, order_id} in problems
   end
 
+  test "an NPC must own the restaurant its record names and hold a 64-bit random state" do
+    {state, _} =
+      run!(
+        stocked_world(arrivals: false, stock: %{}),
+        {:create_restaurant, %{restaurant_id: "npc-budget", stall_id: "s041", name: "NPC budget", cuisine: "mexican"}},
+        {:npc, "budget"},
+        "npc:budget:create"
+      )
+
+    assert Invariants.check(state) == :ok
+
+    assert Invariants.check(put_in(state, [:npcs, "budget", :rng], -1)) == {:error, [{:bad_npc_rng, "budget"}]}
+
+    assert Invariants.check(put_in(state, [:npcs, "budget", :restaurant_id], "r1")) ==
+             {:error, [{:npc_without_restaurant, "budget"}]}
+  end
+
   test "hall access must match the cleaning calendar" do
     state = elem(stocked_world(), 0)
     refute Clock.cleaning?(state.now)

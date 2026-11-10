@@ -8,7 +8,9 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
   Fact ownership inside the hall boundary:
 
-  * hall: clock, cleaning gate, visitor fund
+  * hall: clock, cleaning gate, visitor fund, seed
+  * NPC operator: planning slot and random stream (`npcs`); its restaurant
+    is an ordinary restaurant
   * wholesale market: stock, pending purchase requests, batch number, and the
     next clearing instant (see `FeudHall.Domain.Market`)
   * restaurant: cash/ledger, warehouse batches, unlocks, menu, policies;
@@ -40,6 +42,7 @@ defmodule FeudHall.Domain.Hall.Evolver do
       hall_id: e.hall_id,
       content_hash: e.content_hash,
       catalog: e.catalog,
+      seed: seed,
       now: 0,
       access: :open,
       visitor_fund: e.visitor_fund,
@@ -133,6 +136,12 @@ defmodule FeudHall.Domain.Hall.Evolver do
       mode: :closed,
       counter: nil
     })
+    |> put_npc(e)
+  end
+
+  # A planning slot taken: the plan's actions follow as their own events.
+  def evolve(state, %{type: :npc_planned} = e) do
+    update_in(state, [:npcs, e.operator], &%{&1 | next_slot_at: e.next_slot_at, rng: e.rng})
   end
 
   def evolve(state, %{type: :starter_grant_issued, restaurant_id: r, amount: a}),
@@ -398,6 +407,14 @@ defmodule FeudHall.Domain.Hall.Evolver do
   end
 
   # -- helpers -------------------------------------------------------------
+
+  # An NPC operator's planning record is recorded with its restaurant.
+  defp put_npc(state, %{owner_kind: :npc, npc: npc} = e) do
+    record = %{restaurant_id: e.restaurant_id, profile_id: npc.profile_id, next_slot_at: npc.next_slot_at, rng: npc.rng}
+    put_in(state, [:npcs, e.owner], record)
+  end
+
+  defp put_npc(state, _e), do: state
 
   # A new order joins its stall's prep queue. Its stage durations are bound
   # from the accepted quote; events written before they were recorded fall

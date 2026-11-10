@@ -116,6 +116,51 @@ defmodule FeudHall.Domain.NpcPlannerTest do
       assert first == Planner.plan(view, own(state), @budget, state.catalog, rng)
       assert {[_ | _], ^rng} = first
     end
+
+    test "a rival's cash, stock, orders and random state reach neither the planner's inputs nor its plan" do
+      state = bare_state() |> with_cash(10_000_000) |> closed()
+      {rival_world, _} = stocked_world(arrivals: false, unlock: false, stock: %{})
+      rival = rival_world.restaurants["r1"]
+
+      rival = %{
+        rival
+        | id: "r2",
+          owner: "rival",
+          ledger: %{rival.ledger | cash: @sentinel, capital: @sentinel},
+          batches: %{
+            "sentinel-batch" => %{
+              id: "sentinel-batch",
+              product: "onion",
+              product_version: 1,
+              qty: @sentinel,
+              reserved: 0,
+              cost: @sentinel,
+              expires_at: @sentinel
+            }
+          }
+      }
+
+      state =
+        state
+        |> put_in([:restaurants, "r2"], rival)
+        |> put_in([:stalls, "s002"], %{id: "s002", restaurant: "r2", tier: :quiet, mode: :open, counter: nil})
+        |> put_in([:orders, "sentinel-order"], %{cost: @sentinel, price: @sentinel, restaurant: "r2"})
+        |> put_in([:demand, :rng], @sentinel)
+        |> put_in([:npcs, "rival"], %{restaurant_id: "r2", profile_id: "budget", next_slot_at: 0, rng: @sentinel})
+
+      view = PublicView.build(state)
+      inputs = {view, own(state), @budget, state.catalog, Random.new(7)}
+      {actions, rng} = Planner.plan(view, own(state), @budget, state.catalog, Random.new(7))
+
+      for term <- [inputs, actions, rng] do
+        text = inspect(term, limit: :infinity, printable_limit: :infinity)
+        refute text =~ Integer.to_string(@sentinel)
+        refute text =~ "sentinel"
+      end
+
+      assert actions != []
+      assert Enum.all?(actions, fn {_kind, payload} -> payload[:restaurant_id] in [nil, "r1"] end)
+    end
   end
 
   describe "heuristics" do
