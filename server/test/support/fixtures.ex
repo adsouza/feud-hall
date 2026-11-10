@@ -4,7 +4,7 @@ defmodule FeudHall.Fixtures do
   import ExUnit.Assertions
 
   alias FeudHall.Domain.{Clock, Hall, Offers}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
 
   @stall "s001"
 
@@ -15,7 +15,7 @@ defmodule FeudHall.Fixtures do
   tests about something other than demand: no diner buys food, takes stock or
   queues unless the test admits one. The midnight forecast still runs.
   """
-  def quiet_catalog(catalog \\ SliceCatalog.catalog()),
+  def quiet_catalog(catalog \\ MexicanFixture.catalog()),
     do: put_in(catalog, [:rules, :demand, :arrivals_per_equivalent], 0)
 
   def owner(id \\ "alice"), do: {:principal, id}
@@ -45,8 +45,8 @@ defmodule FeudHall.Fixtures do
   end
 
   @doc """
-  A hall with alice's open restaurant fully unlocked and stocked. The stock is
-  bought through purchase requests filled at the first market clearing (hall
+  A hall with alice's open restaurant in the Mexican fixture fully unlocked and
+  stocked. The stock is bought through purchase requests at the first market clearing (hall
   time `clear_every_hall_ms`), so a stocked world starts at that instant; with
   `stock: %{}` nothing is bought and the hall stays at time 0. Simulated
   diners arrive as the catalog's demand rules say; `arrivals: false` uses
@@ -71,7 +71,7 @@ defmodule FeudHall.Fixtures do
   commands and IDs.
   """
   def stocked_world_steps(opts \\ []) do
-    catalog = Keyword.get(opts, :catalog, SliceCatalog.catalog())
+    catalog = Keyword.get(opts, :catalog, MexicanFixture.catalog())
     catalog = if Keyword.get(opts, :arrivals, true), do: catalog, else: quiet_catalog(catalog)
     fixed = fn command, actor, id -> fn _state -> {command, actor, id} end end
 

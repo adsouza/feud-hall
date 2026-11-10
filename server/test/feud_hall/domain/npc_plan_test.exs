@@ -5,14 +5,14 @@ defmodule FeudHall.Domain.NpcPlanTest do
   import FeudHall.Fixtures
 
   alias FeudHall.Domain.{Hall, PublicView, Random}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Npc.Planner
   alias FeudHall.Infrastructure.EventCodec
 
   @hour 3_600_000
   @npc {:npc, "budget"}
-  @budget Enum.find(SliceCatalog.catalog().npc_profiles, &(&1.id == "budget"))
-  @interval SliceCatalog.rules().market.clear_every_hall_ms
+  @budget Enum.find(MexicanFixture.catalog().npc_profiles, &(&1.id == "budget"))
+  @interval MexicanFixture.rules().market.clear_every_hall_ms
 
   # alice's r1 at s001 and the budget NPC's restaurant at s041; a quiet hall at time 0.
   defp world(opts \\ []) do
@@ -40,7 +40,7 @@ defmodule FeudHall.Domain.NpcPlanTest do
   describe "NPC restaurants" do
     test "an NPC's restaurant_created opens its planning slot at the next hour and its own random stream" do
       {state, log} = world()
-      seed = SliceCatalog.rules().seed
+      seed = MexicanFixture.rules().seed
 
       assert state.npcs == %{
                "budget" => %{
@@ -173,7 +173,7 @@ defmodule FeudHall.Domain.NpcPlanTest do
 
       actions = [
         plan(@hour, []),
-        {:initialize_hall, %{hall_id: "h2", catalog: SliceCatalog.catalog()}},
+        {:initialize_hall, %{hall_id: "h2", catalog: MexicanFixture.catalog()}},
         {:create_restaurant, %{restaurant_id: "r7", stall_id: "s007", name: "Seven", cuisine: "mexican"}},
         {:advance_clock, %{to_service_ms: 999_999}},
         {:grant_allowance, %{principal: "budget", amount: 10}},
@@ -216,7 +216,7 @@ defmodule FeudHall.Domain.NpcPlanTest do
     end
 
     test "(Review Focus 4) an NPC with no cash and no stock commits its plan; what it cannot pay for is refused with reasons" do
-      catalog = put_in(SliceCatalog.catalog(), [:rules, :starter_grant], 0)
+      catalog = put_in(MexicanFixture.catalog(), [:rules, :starter_grant], 0)
       {_, before} = world = world(catalog: catalog) |> advance_hall(@hour)
       {state, _} = world
       own = state.restaurants["npc-budget"]

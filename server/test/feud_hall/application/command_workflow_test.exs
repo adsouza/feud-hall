@@ -4,7 +4,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
   alias FeudHall.Application.Recovery
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.{Control, Money}
   alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore, PostgresEventStore, Repo, Snapshot}
 
@@ -42,7 +42,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     {:accepted, _, rt} =
       Workflow.execute(
         rt,
-        env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+        env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}})
       )
 
     {:accepted, _, rt} =
@@ -248,7 +248,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
     store = PostgresEventStore.new(FeudHall.UnreachableRepo, "hall:test", epoch: 1)
     head = %{hall: nil, control: nil, position: 0, versions: %{hall: 0, control: 0}}
     {:ok, rt} = Workflow.from_state(PostgresEventStore, store, head)
-    init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+    init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}})
 
     assert {:error, :unavailable, ^rt} = Workflow.execute(rt, init)
     assert {:error, :unavailable} = Workflow.open(PostgresEventStore, store)

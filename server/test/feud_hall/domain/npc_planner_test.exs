@@ -4,10 +4,10 @@ defmodule FeudHall.Domain.NpcPlannerTest do
   import FeudHall.Fixtures
 
   alias FeudHall.Domain.{Hall, Market, PublicView, Random}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Npc.Planner
 
-  @catalog SliceCatalog.catalog()
+  @catalog MexicanFixture.catalog()
   @budget Enum.find(@catalog.npc_profiles, &(&1.id == "budget"))
   @premium Enum.find(@catalog.npc_profiles, &(&1.id == "premium"))
   @sentinel 777_123_457

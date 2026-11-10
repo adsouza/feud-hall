@@ -283,7 +283,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
       CommandWorkflow.execute(rt, %{
         command_id: "create",
         actor: {:principal, "alice"},
-        command: {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: name, cuisine: "mexican"}}
+        command: {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: name, cuisine: "sichuan"}}
       })
 
     assert {:ok, reopened} = CommandWorkflow.open(PostgresEventStore, rt.store)

@@ -155,6 +155,9 @@ defmodule FeudHall.CapacityBench do
     @stall_count = map_size(hall.restaurants)
     @stall_count = map_size(hall.stalls)
     @stall_count = map_size(hall.npcs)
+    cuisine_counts = Enum.frequencies_by(Map.values(hall.restaurants), & &1.cuisine)
+    starter_cuisines = MapSet.new(for %{starter: true, cuisine: id} <- Map.values(hall.catalog.recipes), do: id)
+    true = MapSet.new(Map.keys(cuisine_counts)) == starter_cuisines
     IO.puts("Bootstrapped #{@stall_count} NPC restaurants at batch #{start_position}.")
     bootstrap_storage = storage()
     baseline_append_count = length(Samples.values(:append_us))
@@ -202,6 +205,7 @@ defmodule FeudHall.CapacityBench do
       days: daily,
       work_us: work_us,
       bootstrap_batches: start_position,
+      bootstrap_cuisines: cuisine_counts,
       bootstrap_append_count: baseline_append_count,
       bootstrap_storage: bootstrap_storage,
       wake_us: Samples.distribution(:wake_us),

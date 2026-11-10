@@ -21,7 +21,8 @@ defmodule FeudHall.Domain.LayoutTest do
   defp create(state, who, slot) do
     Hall.execute(
       state,
-      {:create_restaurant, %{restaurant_id: "r-" <> who, stall_id: slot, name: "Name " <> who, cuisine: "mexican"}},
+      {:create_restaurant,
+       %{restaurant_id: "r-" <> who, stall_id: slot, name: "Name " <> who, cuisine: "mughlai_punjabi"}},
       ctx({:principal, who}, "create-" <> who)
     )
   end
@@ -59,7 +60,7 @@ defmodule FeudHall.Domain.LayoutTest do
            }
 
     # Stock starts at the per-equivalent target times the three-equivalent floor.
-    assert event.market.stock["corn_tortilla"] == 1_200
+    assert event.market.stock["chickpeas_dried"] == 2_400
     assert event.market.stock["cilantro"] == 300
     assert map_size(event.market.stock) == map_size(SliceCatalog.catalog().products)
 

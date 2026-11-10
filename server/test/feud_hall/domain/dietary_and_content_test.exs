@@ -5,6 +5,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
 
   alias FeudHall.Domain.{Content, Dietary, Hall}
   alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Oracle
 
   describe "hard dietary compatibility" do
@@ -35,7 +36,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     test "missing metadata is never compatible with a requirement" do
       # Vegan is disabled here: with cilantro's metadata missing, validation
       # (correctly) finds no viable vegan main.
-      catalog = SliceCatalog.catalog(enable: ~w(unrestricted vegetarian carb_conscious))
+      catalog = MexicanFixture.catalog(enable: ~w(unrestricted vegetarian carb_conscious))
       catalog = put_in(catalog, [:products, "cilantro", :origins], nil)
       catalog = put_in(catalog, [:recipes, "bean_tacos", :claims], [])
       w = stocked_world(catalog: catalog)
@@ -70,7 +71,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
 
     test "the dessert shares the visit's ceiling with the already served tray" do
       # 90 g ceiling: dessert alone (67,400 mg) fits, main + dessert does not.
-      catalog = put_in(SliceCatalog.catalog(), [:profiles, "carb_conscious", :carb_ceiling_mg], 90_000)
+      catalog = put_in(MexicanFixture.catalog(), [:profiles, "carb_conscious", :carb_ceiling_mg], 90_000)
       w = stocked_world(catalog: catalog) |> simulated_visit("c1", "chicken_tacos", nil, "carb_conscious", 10_000, true)
       w = serve_tray(w, tray_id("visit-c1"))
       assert %{components: [%{kind: :main}]} = visit_outcome(w, visit_id("visit-c1"))
@@ -83,7 +84,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
 
     test "portion carbohydrate rounds up exactly once after the whole bill" do
-      catalog = SliceCatalog.catalog()
+      catalog = MexicanFixture.catalog()
       lines = [%{product: "cinnamon", qty: 1}, %{product: "cinnamon", qty: 1}]
       # 2 g x 800,000 mg/kunit = 1,600 mg exactly (no per-line rounding).
       assert {:ok, 1_600} = Dietary.portion_carbs(catalog, lines)
@@ -99,13 +100,13 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
 
     test "a profile without any viable main cannot be enabled" do
-      catalog = SliceCatalog.catalog(enable: ~w(unrestricted vegetarian vegan carb_conscious keto_style))
+      catalog = MexicanFixture.catalog(enable: ~w(unrestricted vegetarian vegan carb_conscious keto_style))
       assert {:error, problems} = Content.validate(catalog)
       assert {:profile, "keto_style", :no_viable_main} in problems
     end
 
     test "invalid conversions, recursive or claim-breaking substitutes, and incomplete cuisines are rejected" do
-      base = SliceCatalog.catalog()
+      base = MexicanFixture.catalog()
 
       bad_conv = put_in(base, [:recipes, "bean_tacos", :lines], bean_lines(base, &%{&1 | den: 0}))
       assert {:error, problems} = Content.validate(bad_conv)
@@ -127,13 +128,13 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
 
     test "removing metadata from the only vegan main makes enabling vegan invalid" do
-      catalog = put_in(SliceCatalog.catalog(), [:products, "cilantro", :origins], nil)
+      catalog = put_in(MexicanFixture.catalog(), [:products, "cilantro", :origins], nil)
       catalog = put_in(catalog, [:recipes, "bean_tacos", :claims], [])
       assert {:error, [{:profile, "vegan", :no_viable_main}]} = Content.validate(catalog)
     end
 
     test "a hall refuses invalid content at genesis" do
-      bad = put_in(SliceCatalog.catalog(), [:products, "sugar", :base_price_per_kunit], 0)
+      bad = put_in(MexicanFixture.catalog(), [:products, "sugar", :base_price_per_kunit], 0)
 
       assert {:error, {:invalid_content, [{:product, "sugar", :bad_price}]}} =
                Hall.decide(nil, {:initialize_hall, %{hall_id: "h", catalog: bad}}, ctx({:system, :admin}, "i"))
@@ -141,7 +142,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
   end
 
   describe "simulation content" do
-    defp broken(path, value), do: put_in(SliceCatalog.catalog(), path, value)
+    defp broken(path, value), do: put_in(MexicanFixture.catalog(), path, value)
 
     defp problems!(catalog) do
       assert {:error, problems} = Content.validate(catalog)
@@ -164,11 +165,11 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
 
     test "every product needs a market target and a cap of at least three targets" do
       catalog =
-        update_in(SliceCatalog.catalog(), [:rules, :market, :target_stock_per_equivalent], &Map.delete(&1, "sugar"))
+        update_in(MexicanFixture.catalog(), [:rules, :market, :target_stock_per_equivalent], &Map.delete(&1, "sugar"))
 
       assert {:market, "sugar", :missing_target} in problems!(catalog)
 
-      target = SliceCatalog.catalog().rules.market.target_stock_per_equivalent["onion"]
+      target = MexicanFixture.catalog().rules.market.target_stock_per_equivalent["onion"]
 
       assert {:market, "onion", :bad_cap} in problems!(
                broken([:rules, :market, :replenish_cap, "onion"], target * 3 - 1)
@@ -182,7 +183,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
 
     test "hourly weights need 24 non-negative entries, zero during cleaning" do
-      good = SliceCatalog.catalog().rules.demand.hourly_weights
+      good = MexicanFixture.catalog().rules.demand.hourly_weights
       bad = [good |> tl(), List.replace_at(good, 0, -1), List.replace_at(good, 3, 1), List.replace_at(good, 4, 1)]
 
       for weights <- bad do
@@ -201,7 +202,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
 
     test "layout is capped at 150 slots with unique ids" do
-      layout = SliceCatalog.catalog().layout
+      layout = MexicanFixture.catalog().layout
       extra = layout ++ [%{slot_id: "s151", tier: :quiet}]
       assert {:layout, :too_many_slots} in problems!(broken([:layout], extra))
 
@@ -210,7 +211,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
 
     test "NPC profiles are validated" do
-      [first | rest] = SliceCatalog.catalog().npc_profiles
+      [first | rest] = MexicanFixture.catalog().npc_profiles
 
       for bad <- [
             %{first | price_permille: 0},
@@ -223,13 +224,13 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
 
     defp bad_segment(key, value) do
-      [first | rest] = SliceCatalog.catalog().rules.demand.segments
+      [first | rest] = MexicanFixture.catalog().rules.demand.segments
       [Map.put(first, key, value) | rest]
     end
   end
 
   describe "simulation content hardening" do
-    defp bad(path, value), do: put_in(SliceCatalog.catalog(), path, value)
+    defp bad(path, value), do: put_in(MexicanFixture.catalog(), path, value)
 
     defp has?(catalog, problem) do
       assert {:error, problems} = Content.validate(catalog)
@@ -240,17 +241,17 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
       {parent, [key]} = Enum.split(path, -1)
 
       if parent == [],
-        do: Map.delete(SliceCatalog.catalog(), key),
-        else: update_in(SliceCatalog.catalog(), parent, &Map.delete(&1, key))
+        do: Map.delete(MexicanFixture.catalog(), key),
+        else: update_in(MexicanFixture.catalog(), parent, &Map.delete(&1, key))
     end
 
     defp seg(key, value) do
-      [first | rest] = SliceCatalog.catalog().rules.demand.segments
+      [first | rest] = MexicanFixture.catalog().rules.demand.segments
       [:rules, :demand, :segments] |> then(&bad(&1, [Map.put(first, key, value) | rest]))
     end
 
     defp seg_without(key) do
-      [first | rest] = SliceCatalog.catalog().rules.demand.segments
+      [first | rest] = MexicanFixture.catalog().rules.demand.segments
       bad([:rules, :demand, :segments], [Map.delete(first, key) | rest])
     end
 
@@ -282,7 +283,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
     end
 
     test "slot tiers" do
-      layout = List.replace_at(SliceCatalog.catalog().layout, 4, %{slot_id: "s005", tier: :nowhere})
+      layout = List.replace_at(MexicanFixture.catalog().layout, 4, %{slot_id: "s005", tier: :nowhere})
       has?(bad([:layout], layout), {:layout, "s005", :bad_tier})
     end
 
@@ -380,7 +381,7 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
   end
 
   test "content rejects invalid starter prices, unaddressable NPCs and unsampleable weights" do
-    catalog = SliceCatalog.catalog()
+    catalog = MexicanFixture.catalog()
     assert {:error, errors} = Content.validate(put_in(catalog.recipes["bean_tacos"].suggested_price, -900))
     assert {:recipe, "bean_tacos", :bad_suggested_price} in errors
 

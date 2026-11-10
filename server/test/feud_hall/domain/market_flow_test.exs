@@ -5,12 +5,12 @@ defmodule FeudHall.Domain.MarketFlowTest do
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
   alias FeudHall.Domain.{Clock, Hall, Market}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Hall.Invariants
   alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore}
   alias FeudHall.Oracle
 
-  @interval SliceCatalog.rules().market.clear_every_hall_ms
+  @interval MexicanFixture.rules().market.clear_every_hall_ms
 
   # alice's restaurant, created but holding no stock.
   defp bare_world, do: stocked_world(stock: %{}, unlock: false)
@@ -208,7 +208,7 @@ defmodule FeudHall.Domain.MarketFlowTest do
     end
 
     test "a fill's expiry starts at the fill time, not at submission" do
-      shelf = SliceCatalog.catalog().products["cilantro"].shelf_life_ms
+      shelf = MexicanFixture.catalog().products["cilantro"].shelf_life_ms
       w = advance_hall(bare_world(), Clock.minute())
       w = submit(w, "cilantro", 10, "herbs")
       {state, events} = to_next_clearing(w)
@@ -285,7 +285,7 @@ defmodule FeudHall.Domain.MarketFlowTest do
       Workflow.execute(rt, %{
         command_id: "init",
         actor: {:system, :admin},
-        command: {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}}
+        command: {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}}
       })
 
     command = {:purchase_stock, %{restaurant_id: "r1", product: "rice_long", qty: 1, max_price_per_kunit: 1_000}}

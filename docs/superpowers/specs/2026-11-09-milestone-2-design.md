@@ -274,8 +274,9 @@ Per [a finite pool of diners](../../GAME_DESIGN.md#a-finite-pool-of-diners),
   budget and expected value, including the offered variant's quality; the
   stall's exposure tier, applied once; estimated wait against patience; and
   availability. A bounded weighted choice picks a stall (best eligible dish
-  plus a bounded variety modifier) or leaving. Cuisine preference is trivial
-  with one cuisine. **Reputation and awards are deferred (owner decision,
+  plus a bounded variety modifier) or leaving. The three-cuisine follow-up
+  authors preference weights for all nine mains in the same segments.
+  **Reputation and awards are deferred (owner decision,
   2026-11-09):** every restaurant has neutral reputation in Milestone 2.
 - **Patience (builder's call).** A simulated tray's deadline is the earliest of
   arrival plus seeded patience, the quote's maximum service window, and the
@@ -350,11 +351,16 @@ Per [location quality and lease pricing](../../GAME_DESIGN.md#location-quality-a
   until then a better tier carries no cost; Milestone 2 balance results must be
   read with that in mind.
 
-#### One cuisine
+#### Cuisine scope
 
-**(owner decision, 2026-11-09:** every restaurant, human or NPC, stays Mexican;
-they compete on price, quality, exposure, and availability. The remaining
-cuisines arrive in Milestone 4.)
+The 2026-11-09 owner decision kept all restaurants Mexican for Milestone 2.
+That was the catalog used for the Project C measurement.
+
+On 2026-11-10 the owner brought three cuisines forward as a follow-up to
+Milestone 2. Mughlai/Punjabi replaces Mexican in the internal catalog, and
+Sichuan and Levantine join it. NPC bootstrap distributes the three profiles
+across the available starters. Milestone 4 adds the rest of the
+[launch roster](../../GAME_DESIGN.md#9-cuisines-recipes-and-equipment).
 
 ### Decisions recorded during Project B
 
@@ -520,7 +526,7 @@ shifts; leases, rent, and holding costs; accounts, invitations, licensing, and
 authentication; owner absence and unattended operation; daily purchasing
 budgets, configurable ingredient priority, and restock policies; reputation and
 awards; announced demand trends and supplier events; expansion beyond one
-stall per restaurant; NPC retirement and restoration; cuisines beyond Mexican;
+stall per restaurant; NPC retirement and restoration; the full launch cuisine roster;
 reports beyond the one async projection; outbox delivery workers; production
 wiring of authorities; backups, archival, and Render deployment; the full
 450-session peak workload; the 30-real-day full-replay measurement.

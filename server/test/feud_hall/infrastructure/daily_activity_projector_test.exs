@@ -3,7 +3,7 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
   alias FeudHall.Domain.Clock
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Infrastructure.Postgres.DailyActivityProjector, as: Projector
   alias FeudHall.Infrastructure.PostgresEventStore, as: Store
 
@@ -15,7 +15,7 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
   end
 
   defp world(visits) do
-    catalog = SliceCatalog.catalog()
+    catalog = MexicanFixture.catalog()
     alice = {:principal, "alice"}
     {:ok, rt} = Workflow.open(Store, FeudHall.PostgresCase.fresh_store())
 

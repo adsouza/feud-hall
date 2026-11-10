@@ -4,7 +4,7 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
   import FeudHall.Fixtures
 
   alias FeudHall.Domain.{Clock, Hall}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Oracle
 
   @three Clock.cleaning_start_of(0)
@@ -277,7 +277,7 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       # Slice content has at most three 3-point lines (exactly 9), so raise the
       # per-line penalty to make the cap observable.
       catalog =
-        update_in(SliceCatalog.catalog(), [:recipes, "bean_tacos", :lines], fn lines ->
+        update_in(MexicanFixture.catalog(), [:recipes, "bean_tacos", :lines], fn lines ->
           Enum.map(lines, fn
             %{substitute: nil} = l -> l
             l -> put_in(l, [:substitute, :penalty], 4)
@@ -393,7 +393,7 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
   # Six queued bean taco mains accepted at once, after `before_queue` has run on
   # a stocked world whose cilantro keeps for `shelf_ms`.
   defp cilantro_queue(shelf_ms, before_queue \\ & &1) do
-    catalog = put_in(SliceCatalog.catalog(), [:products, "cilantro", :shelf_life_ms], shelf_ms)
+    catalog = put_in(MexicanFixture.catalog(), [:products, "cilantro", :shelf_life_ms], shelf_ms)
     rules = %{catalog.rules | service_window_ms: 2 * Clock.hour()}
     w = before_queue.(stocked_world(catalog: %{catalog | rules: rules}))
     Enum.reduce(1..6, w, &simulated_visit(&2, "d#{&1}", "bean_tacos"))

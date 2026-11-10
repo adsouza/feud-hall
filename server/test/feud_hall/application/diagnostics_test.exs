@@ -2,7 +2,7 @@ defmodule FeudHall.Application.DiagnosticsTest do
   use ExUnit.Case, async: false
 
   alias FeudHall.Application.{CommandWorkflow, Diagnostics, Recovery}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Infrastructure.Diagnostics.{Exporter, MemorySink}
   alias FeudHall.Infrastructure.InMemoryEventStore
 
@@ -19,7 +19,7 @@ defmodule FeudHall.Application.DiagnosticsTest do
     {:accepted, _, rt} =
       CommandWorkflow.execute(
         rt,
-        env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+        env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}})
       )
 
     rt

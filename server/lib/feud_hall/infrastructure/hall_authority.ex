@@ -476,27 +476,35 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   end
 
   defp create_npcs(s) do
-    s.runtime.state.catalog
+    catalog = s.runtime.state.catalog
+
+    # Keep each assignment tied to the profile's position in the full roster,
+    # including profiles that already started before a restart.
+    cuisines = for %{starter: true, cuisine: cuisine} <- Map.values(catalog.recipes), do: cuisine
+    cuisines = Enum.sort(cuisines)
+
+    catalog
     |> Map.get(:npc_profiles, [])
     |> Enum.sort_by(& &1.id)
-    |> Enum.reduce_while({:ok, s}, fn profile, {:ok, s} ->
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, s}, fn {profile, index}, {:ok, s} ->
       cond do
         s.runtime.mode != :ready -> {:halt, {:ok, s}}
         Map.has_key?(s.runtime.state.owners, {:npc, profile.id}) -> {:cont, {:ok, s}}
         Map.has_key?(s.npc_given_up, {profile.id, :create}) -> {:cont, {:ok, s}}
-        true -> create_npc(s, profile)
+        true -> create_npc(s, profile, starter_cuisine(cuisines, index))
       end
     end)
   end
 
-  defp create_npc(s, profile) do
+  defp create_npc(s, profile, starter) do
     op = profile.id
     id = "npc:#{op}:create"
     hall = s.runtime.state
 
     with {:ok, slot} when slot != nil <-
            guarded(fn -> Planner.choose_slot(PublicView.build(hall), hall.layout, profile) end),
-         {:ok, cuisine} <- starter_cuisine(hall.catalog) do
+         {:ok, cuisine} <- starter do
       payload = %{restaurant_id: "npc-#{op}", stall_id: slot, name: "NPC #{op}", cuisine: cuisine}
       npc_command(s, {op, :create}, %{command_id: id, actor: {:npc, op}, command: {:create_restaurant, payload}})
     else
@@ -505,13 +513,8 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     end
   end
 
-  # Every restaurant is Mexican for now: NPCs take the cuisine of the first starter recipe.
-  defp starter_cuisine(catalog) do
-    case catalog.recipes |> Map.values() |> Enum.filter(& &1.starter) |> Enum.min_by(& &1.id, fn -> nil end) do
-      nil -> {:error, :no_starter_recipe}
-      recipe -> {:ok, recipe.cuisine}
-    end
-  end
+  defp starter_cuisine([], _index), do: {:error, :no_starter_recipe}
+  defp starter_cuisine(cuisines, index), do: {:ok, Enum.at(cuisines, rem(index, length(cuisines)))}
 
   defp plan_npcs(s) do
     hall = s.runtime.state

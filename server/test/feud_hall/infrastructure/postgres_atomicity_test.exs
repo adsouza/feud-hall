@@ -5,7 +5,7 @@ defmodule FeudHall.Infrastructure.PostgresAtomicityTest do
   use FeudHall.PostgresCase
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Infrastructure.PostgresEventStore
 
   import FeudHall.PostgresCase, only: [fresh_store: 0]
@@ -168,7 +168,7 @@ defmodule FeudHall.Infrastructure.PostgresAtomicityTest do
     defp runtime do
       {:ok, rt} = Workflow.open(PostgresEventStore, fresh_store())
 
-      init = {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}}
+      init = {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}}
       {:accepted, _, rt} = Workflow.execute(rt, %{env("init", init) | actor: {:system, :admin}})
 
       create = {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Casa", cuisine: "mexican"}}

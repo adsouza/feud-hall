@@ -226,7 +226,7 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
   test "service wins an exact deadline tie; a deadline missed mid-handover cancels the tray as waste", %{world: w} do
     # A service window exactly as long as the work, so the deadline is the handover's end.
     rules = %{elem(w, 0).catalog.rules | service_window_ms: 8 * Clock.minute()}
-    w = stocked_world(catalog: put_in(FeudHall.Domain.Content.SliceCatalog.catalog(), [:rules], rules))
+    w = stocked_world(catalog: put_in(FeudHall.MexicanFixture.catalog(), [:rules], rules))
     w = simulated_visit(w, "d1", "bean_tacos")
     {state, log} = w
     tray = state.trays[tray_id("visit-d1")]
@@ -253,7 +253,7 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     # The main is ready at 4 min and handed over 4..8; a four-minute holding
     # life expires it exactly as the handover would complete.
     catalog =
-      put_in(FeudHall.Domain.Content.SliceCatalog.catalog(), [:recipes, "bean_tacos", :holding_ms], 4 * Clock.minute())
+      put_in(FeudHall.MexicanFixture.catalog(), [:recipes, "bean_tacos", :holding_ms], 4 * Clock.minute())
 
     w = stocked_world(catalog: catalog) |> simulated_visit("d1", "bean_tacos")
     tray = tray_id("visit-d1")

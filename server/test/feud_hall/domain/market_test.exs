@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.MarketTest do
   use ExUnit.Case, async: true
 
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Market
 
   # onion: base 250, 1000 storage per kunit, shelf life 6 days.
@@ -10,7 +10,7 @@ defmodule FeudHall.Domain.MarketTest do
   # target-at-floor of 1200, so the price equals base at stock 1200.
   @limit 1_000_000
 
-  defp catalog, do: SliceCatalog.catalog()
+  defp catalog, do: MexicanFixture.catalog()
 
   defp restaurant(id, cash, stored \\ 0) do
     batches =

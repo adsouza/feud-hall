@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.NpcActorTest do
   use ExUnit.Case, async: true
 
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Hall
 
   @create {:create_restaurant, %{restaurant_id: "r1", stall_id: "s001", name: "Budget", cuisine: "mexican"}}
@@ -12,7 +12,7 @@ defmodule FeudHall.Domain.NpcActorTest do
     {:ok, state, _} =
       Hall.execute(
         nil,
-        {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}},
+        {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}},
         ctx({:system, :admin}, "init")
       )
 

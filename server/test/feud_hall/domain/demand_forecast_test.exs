@@ -4,7 +4,7 @@ defmodule FeudHall.Domain.DemandForecastTest do
   import FeudHall.Fixtures, except: [stocked_world: 0, stocked_world: 1]
 
   alias FeudHall.Domain.{Clock, Demand, Kitchen, Market, Offers}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Hall.{Evolver, Invariants}
   alias FeudHall.Infrastructure.EventCodec
   alias FeudHall.Oracle
@@ -12,10 +12,10 @@ defmodule FeudHall.Domain.DemandForecastTest do
   @min Clock.minute()
   @hour Clock.hour()
   @day Clock.day()
-  @floor SliceCatalog.rules().demand.equivalent_floor_millis
-  @operating_hours SliceCatalog.rules().demand.operating_hours_ms
+  @floor MexicanFixture.rules().demand.equivalent_floor_millis
+  @operating_hours MexicanFixture.rules().demand.operating_hours_ms
   # A stocked world starts at the first market clearing, where its stock was filled.
-  @t0 SliceCatalog.rules().market.clear_every_hall_ms
+  @t0 MexicanFixture.rules().market.clear_every_hall_ms
 
   defp shortest_main_duration(state) do
     state.catalog.recipes
@@ -34,7 +34,7 @@ defmodule FeudHall.Domain.DemandForecastTest do
   # Ten times the stock per equivalent at a tenth of the floor: the same opening
   # stock, so a stocked world works, while one operating business can exceed the floor.
   defp low_floor_catalog do
-    catalog = SliceCatalog.catalog()
+    catalog = MexicanFixture.catalog()
     tenfold = fn map -> Map.new(map, fn {k, v} -> {k, v * 10} end) end
 
     catalog
@@ -225,14 +225,14 @@ defmodule FeudHall.Domain.DemandForecastTest do
     end
 
     test "a full kitchen queue stops observation" do
-      catalog = update_in(SliceCatalog.catalog(), [:rules, :kitchen, :queue_limit], fn _ -> 1 end)
+      catalog = update_in(MexicanFixture.catalog(), [:rules, :kitchen, :queue_limit], fn _ -> 1 end)
       {state, _} = stocked_world(catalog: catalog) |> simulated_visit("d1", "chicken_tacos")
 
       assert Demand.operating(state) == []
     end
 
     test "every restaurant is capped at one equivalent and the sum is not double counted" do
-      rules = SliceCatalog.rules().demand
+      rules = MexicanFixture.rules().demand
 
       assert Demand.equivalents_millis(rules, %{"a" => @operating_hours, "b" => 3 * @operating_hours}) == 2000
       assert Demand.equivalents_millis(rules, %{"a" => div(@operating_hours, 4)}) == 250

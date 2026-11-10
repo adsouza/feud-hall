@@ -5,7 +5,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
   alias FeudHall.Domain.{Clock, Hall, Inventory, Kitchen}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore}
   alias FeudHall.Oracle
 
@@ -14,7 +14,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
   @three Clock.cleaning_start_of(0)
   @five Clock.cleaning_end_of(0)
   # A stocked world starts at the first market clearing, where its stock was filled.
-  @t0 SliceCatalog.rules().market.clear_every_hall_ms
+  @t0 MexicanFixture.rules().market.clear_every_hall_ms
 
   # Each event paired with the hall time at which it was recorded.
   defp timeline(events) do
@@ -32,7 +32,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
   defp dessert_served_at(events, order_id),
     do: for({t, %{type: :dessert_served, order_id: ^order_id}} <- timeline(events), do: t)
 
-  defp with_rules(fun), do: update_in(SliceCatalog.catalog(), [:rules], fun)
+  defp with_rules(fun), do: update_in(MexicanFixture.catalog(), [:rules], fun)
 
   test "a tray is served exactly at its estimated completion with no commands after acceptance" do
     w = stocked_world() |> simulated_visit("d1", "bean_tacos")
@@ -72,7 +72,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
 
   test "the removed kitchen commands are unknown and the kitchen capability is gone" do
     {:ok, rt} = Workflow.open(InMemoryEventStore, InMemoryEventStore.new())
-    init = {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}}
+    init = {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}}
     {:accepted, _, rt} = Workflow.execute(rt, %{command_id: "init", actor: {:system, :admin}, command: init})
 
     for {kind, payload} <- [
@@ -121,7 +121,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
   test "a component ready at the same instant it expires is not served" do
     # The drink is ready at 5 min and the counter finishes at 9; a four-minute
     # holding life makes it expire exactly as the handover would complete.
-    catalog = put_in(SliceCatalog.catalog(), [:recipes, "horchata", :holding_ms], 4 * @min)
+    catalog = put_in(MexicanFixture.catalog(), [:recipes, "horchata", :holding_ms], 4 * @min)
     w = stocked_world(catalog: catalog) |> simulated_visit("d1", "bean_tacos", "horchata")
     {state, _} = w
     tray = state.trays[tray_id("visit-d1")]
@@ -137,7 +137,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     Oracle.assert_settled!(state, events)
 
     # One more tick of holding life and the same tray is served.
-    fresher = put_in(SliceCatalog.catalog(), [:recipes, "horchata", :holding_ms], 4 * @min + 1)
+    fresher = put_in(MexicanFixture.catalog(), [:recipes, "horchata", :holding_ms], 4 * @min + 1)
 
     {state, events} =
       stocked_world(catalog: fresher) |> simulated_visit("d1", "bean_tacos", "horchata") |> advance_hall(@t0 + 9 * @min)
@@ -222,7 +222,7 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
   end
 
   test "a stage never runs on more stations than the stall has" do
-    %{prep_stations: prep_n, finish_stations: finish_n} = SliceCatalog.rules().kitchen
+    %{prep_stations: prep_n, finish_stations: finish_n} = MexicanFixture.rules().kitchen
     assert {prep_n, finish_n} == {2, 1}
 
     w = Enum.reduce(~w(c1 c2 c3), stocked_world(), &simulated_visit(&2, &1, "bean_tacos"))

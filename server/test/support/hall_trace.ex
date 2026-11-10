@@ -34,7 +34,7 @@ defmodule FeudHall.HallTrace do
   import FeudHall.Fixtures, only: [stocked_world_steps: 1, ctx: 2]
 
   alias FeudHall.Domain.{Clock, Dietary, Hall, Offers, PublicView}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Npc.Planner
   alias FeudHall.Oracle
 
@@ -46,7 +46,7 @@ defmodule FeudHall.HallTrace do
 
   @doc "The trace catalog: short shelf lives so spoilage and claim replacement occur within a trace."
   def catalog do
-    SliceCatalog.catalog()
+    MexicanFixture.catalog()
     |> put_in([:products, "cilantro", :shelf_life_ms], 3 * Clock.hour())
     |> put_in([:products, "milk_whole", :shelf_life_ms], 5 * Clock.hour())
     |> put_in([:products, "salsa_roja", :shelf_life_ms], 9 * Clock.hour())

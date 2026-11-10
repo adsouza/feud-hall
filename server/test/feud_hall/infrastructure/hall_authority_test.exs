@@ -4,6 +4,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
 
   alias FeudHall.Domain.Clock
   alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Infrastructure.{HallAuthority, InMemoryEventStore, ManualClock, PostgresEventStore, Repo}
   alias FeudHall.Infrastructure.Diagnostics.MemorySink
 
@@ -160,7 +161,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
   defp env(id, actor, command), do: %{command_id: id, actor: actor, command: command}
 
   defp initialize(pid) do
-    init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+    init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}})
     assert {:accepted, _receipt} = HallAuthority.execute(pid, init)
     pid
   end
@@ -745,7 +746,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
       end
 
       test "a hall initialised without NPC profiles has no NPCs", ctx do
-        pid = ctx |> npc_authority() |> initialize_with(%{SliceCatalog.catalog() | npc_profiles: []})
+        pid = ctx |> npc_authority() |> initialize_with(%{MexicanFixture.catalog() | npc_profiles: []})
         assert :ok = tick_after(ctx, pid, @hour_service)
         hall = HallAuthority.state(pid).hall
         assert hall.restaurants == %{} and hall.npcs == %{}
@@ -790,7 +791,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
 
       test "(Review Focus 4) an NPC with no cash and no stock commits its plan and the authority keeps running",
            ctx do
-        catalog = put_in(SliceCatalog.catalog(), [:rules, :starter_grant], 0)
+        catalog = put_in(MexicanFixture.catalog(), [:rules, :starter_grant], 0)
         pid = ctx |> npc_authority() |> initialize_with(catalog)
         assert :ok = tick_after(ctx, pid, @hour_service)
 
@@ -846,10 +847,11 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         assert Process.alive?(pid)
       end
 
-      test "a bootstrap create whose reply was lost is not duplicated after a restart", ctx do
+      test "NPC cuisines stay assigned to the full profile roster after a lost create reply and restart", ctx do
         pid = npc_authority(ctx, store: FaultyStore.wrap(store_for(ctx.adapter)))
         assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :lost_reply})
-        initialize(pid)
+        catalog = SliceCatalog.catalog()
+        initialize_with(pid, %{catalog | npc_profiles: Enum.reverse(catalog.npc_profiles)})
 
         assert HallAuthority.state(pid).mode == :recovery_required
 
@@ -862,6 +864,14 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
         assert map_size(hall.restaurants) == 3
         assert npc_ids(fresh) == Enum.map(@operators, &"npc:#{&1}:create")
 
+        for {op, cuisine, starter} <- [
+              {"budget", "levantine", "falafel_wrap"},
+              {"mainstream", "mughlai_punjabi", "chole_with_rice"},
+              {"premium", "sichuan", "vegetarian_mapo_tofu_with_rice"}
+            ] do
+          assert %{cuisine: ^cuisine, unlocked: [^starter]} = hall.restaurants[hall.owners[{:npc, op}]]
+        end
+
         # The committed create's own ID and payload return its original receipt.
         stall = hall.stalls |> Map.values() |> Enum.find(&(&1.restaurant == hall.owners[{:npc, "budget"}]))
 
@@ -870,7 +880,12 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
             "npc:budget:create",
             {:npc, "budget"},
             {:create_restaurant,
-             %{restaurant_id: hall.owners[{:npc, "budget"}], stall_id: stall.id, name: "NPC budget", cuisine: "mexican"}}
+             %{
+               restaurant_id: hall.owners[{:npc, "budget"}],
+               stall_id: stall.id,
+               name: "NPC budget",
+               cuisine: "levantine"
+             }}
           )
 
         assert {:replayed, %{outcome: :accepted, command_id: "npc:budget:create"}} = HallAuthority.execute(fresh, retry)
@@ -885,7 +900,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
       test "an NPC with no vacant slot is reported once and is not created", ctx do
         # Two slots for three profiles: premium (last by ID) finds the hall full.
         layout = [%{slot_id: "s001", tier: :quiet}, %{slot_id: "s002", tier: :standard}]
-        pid = ctx |> npc_authority() |> initialize_with(%{SliceCatalog.catalog() | layout: layout})
+        pid = ctx |> npc_authority() |> initialize_with(%{MexicanFixture.catalog() | layout: layout})
 
         for _ <- 1..3, do: assert(:ok = tick_after(ctx, pid, 1_000))
         assert {:accepted, _} = HallAuthority.execute(pid, grant("grant-1"))
@@ -934,7 +949,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
 
         # The hall's initialisation commits; the first NPC create is then fenced.
         assert :ok = HallAuthority.inject_fault(pid, {:nth_append, 2, :fenced})
-        init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+        init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}})
         assert {:accepted, %{command_id: "init"}} = HallAuthority.execute(pid, init)
 
         assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :fenced}}
@@ -1178,7 +1193,7 @@ defmodule FeudHall.Infrastructure.HallAuthorityTest do
       body = Base.encode64(<<131, 119, byte_size(name), name::binary>>)
       Repo.query!("update receipts set body = $1 where command_id = 'init'", [body])
 
-      init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+      init = env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}})
       assert {:error, {:undecodable_receipt, "init"}} = HallAuthority.execute(pid, init)
       assert Process.alive?(pid)
       assert :ok = tick_after(ctx, pid, 1_000)

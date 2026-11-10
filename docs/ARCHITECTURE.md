@@ -844,7 +844,7 @@ Clients must expect deploy and maintenance disconnects. Render documents that co
 
 ### Content and client versions
 
-Store recipes, ingredients, equipment, NPC profiles, milestones, and balance data as validated versioned definitions. Validate IDs, references, positive durations, ingredient quantities, prerequisites, limits, and absence of unlock cycles before enabling a version. Substitute mappings must reference distinct valid products, preserve recipe claims, use positive bounded conversions and small quality penalties, and satisfy launch coverage; reject fallback chains/cycles. Validate full resolved bills against shared ingredient requirements. Declare recipe `course_kind` as main, drink, or dessert, and each cuisine's three savory recipes, one dessert, and one drink (100 recipes in total). Validate chilling/setting and assembly capabilities, timed work and resource-claim policies, as well as thermal cooking; dessert finishing must not bypass finite station/storage capacity or ready-food expiry.
+Store recipes, ingredients, equipment, NPC profiles, milestones, and balance data as validated versioned definitions. Validate IDs, references, positive durations, ingredient quantities, prerequisites, limits, and absence of unlock cycles before enabling a version. Substitute mappings must reference distinct valid products, preserve recipe claims, use positive bounded conversions and small quality penalties, and satisfy launch coverage; reject fallback chains/cycles. Validate full resolved bills against shared ingredient requirements. Declare recipe `course_kind` as main, drink, or dessert. The [launch catalog](GAME_DESIGN.md#9-cuisines-recipes-and-equipment) specifies three savory recipes, one dessert, and one drink per cuisine. Validate chilling/setting and assembly capabilities, timed work and resource-claim policies, as well as thermal cooking; dessert finishing must not bypass finite station/storage capacity or ready-food expiry.
 
 Dietary content includes complete ingredient-origin and carbohydrate facts for
 all portion components, derived compatibility for approved resolved bills,
@@ -986,6 +986,14 @@ event-store, recovery, fencing, and projection contracts above for that slice.
 Project C measured the shared simulation with 150 occupied stalls over three
 accelerated game days. The owner accepted the measurement on 2026-11-10,
 completing Milestone 2. [Project C capacity report](superpowers/reports/2026-11-10-milestone-2c-capacity.md).
+
+The post-Milestone 2 catalog provides Mughlai/Punjabi (`mughlai_punjabi`),
+Sichuan (`sichuan`), and Levantine (`levantine`) for new halls. The shared
+rules resolve each cuisine through its recipes and starter. NPC bootstrap
+cycles through sorted starter cuisine IDs in sorted profile ID order. It uses
+the full profile roster on retry or restart so committed creates and pending
+assignments agree. Existing event logs replay their recorded catalogs and
+cuisines. General content activation for an existing hall is planned.
 
 | Layer | Modules |
 | --- | --- |
@@ -1158,8 +1166,8 @@ Implementation decisions within the contracts above:
 Not yet implemented, and therefore not qualified:
 
 - Staffing, helpers and wages, rent and leases, further reports, and the
-  remaining cuisines belong to later milestones; Project B's builder's calls
-  are recorded, pending owner confirmation, in the
+  remaining launch cuisines belong to later milestones. Project B's
+  builder's calls are recorded, pending owner confirmation, in the
   [Milestone 2 design](superpowers/specs/2026-11-09-milestone-2-design.md#decisions-recorded-during-project-b).
 - The outbox delivery worker (intents are committed atomically but nothing
   delivers them) and production wiring of authorities: the application

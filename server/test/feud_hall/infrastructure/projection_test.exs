@@ -2,7 +2,7 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
   use FeudHall.PostgresCase
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Hall
   alias FeudHall.Infrastructure.PostgresEventStore, as: Store
 
@@ -17,7 +17,7 @@ defmodule FeudHall.Infrastructure.ProjectionTest do
 
   # Two restaurants, a stocked kitchen, and several simulated visits, all through the workflow.
   defp busy_world do
-    catalog = SliceCatalog.catalog()
+    catalog = MexicanFixture.catalog()
     alice = {:principal, "alice"}
     bob = {:principal, "bob"}
     {:ok, rt} = Workflow.open(Store, FeudHall.PostgresCase.fresh_store())

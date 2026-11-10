@@ -10,7 +10,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
   import FeudHall.Fixtures
 
   alias FeudHall.Domain.{Choice, Clock, Demand, Dietary, Hall, Offers}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Hall.{Admission, Advance, Invariants}
   alias FeudHall.Infrastructure.EventCodec
   alias FeudHall.Oracle
@@ -19,13 +19,13 @@ defmodule FeudHall.Domain.ArrivalsTest do
   @hour Clock.hour()
   @day Clock.day()
   # A stocked world starts at the first market clearing, where its stock was filled.
-  @t0 SliceCatalog.rules().market.clear_every_hall_ms
+  @t0 MexicanFixture.rules().market.clear_every_hall_ms
 
-  defp empty_hall(catalog \\ SliceCatalog.catalog()),
+  defp empty_hall(catalog \\ MexicanFixture.catalog()),
     do: run!({nil, []}, {:initialize_hall, %{hall_id: "hall-1", catalog: catalog}}, {:system, :admin}, "init")
 
   test "old Project B catalogs draw patience in service time before converting" do
-    catalog = SliceCatalog.catalog()
+    catalog = MexicanFixture.catalog()
 
     legacy =
       update_in(catalog.rules.demand.segments, fn segments ->
@@ -95,7 +95,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
       rules = %{arrivals_per_equivalent: 10, hourly_weights: weights(%{0 => 1, 1 => 1, 2 => 1})}
       assert Demand.hour_quotas(rules, 1) == weights(%{0 => 4, 1 => 3, 2 => 3})
 
-      shipped = SliceCatalog.rules().demand
+      shipped = MexicanFixture.rules().demand
       quotas = Demand.hour_quotas(shipped, 3_000)
       total = Enum.sum(shipped.hourly_weights)
 
@@ -127,7 +127,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
     test "a day at scale 3000 brings exactly 90 * 3 = 270 arrivals, none in hours 3 and 4" do
       {state, events} = empty_hall() |> advance_hall(@day)
       timed = arrivals(events)
-      quotas = Demand.hour_quotas(SliceCatalog.rules().demand, 3_000)
+      quotas = Demand.hour_quotas(MexicanFixture.rules().demand, 3_000)
 
       assert length(timed) == 270
       assert Enum.all?(timed, fn {at, _} -> at < @day end)
@@ -203,7 +203,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
       # One whole arrival in hour 2 and two in hour 5: hour 2's arrival is
       # completed exactly as the hour ends, so an end-of-hour crossing would
       # fall at exactly 03:00. It belongs to hour 2's last millisecond.
-      catalog = curve(SliceCatalog.catalog(), weights(%{2 => 1, 5 => 2}), 1)
+      catalog = curve(MexicanFixture.catalog(), weights(%{2 => 1, 5 => 2}), 1)
       {state, events} = empty_hall(catalog) |> advance_hall(Clock.cleaning_start_of(0))
 
       assert state.demand.hour_quotas_millis == weights(%{2 => 1_000, 5 => 2_000})
@@ -223,7 +223,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
       # Hour 0 accrues one milli-arrival per hall millisecond and hour 23 leaves
       # 999 behind, so day 1's first millisecond completes an arrival.
       catalog =
-        SliceCatalog.catalog()
+        MexicanFixture.catalog()
         |> curve(weights(%{0 => 3_600_000, 23 => 999}), 3_600_999)
         |> put_in([:rules, :demand, :equivalent_floor_millis], 1)
 
@@ -263,7 +263,7 @@ defmodule FeudHall.Domain.ArrivalsTest do
     # minutes, inside the shipped 5-40 minute ranges) is exactly the quoted
     # wait for chicken tacos with a ten-minute preparation.
     defp patient_catalog do
-      catalog = SliceCatalog.catalog()
+      catalog = MexicanFixture.catalog()
 
       segments =
         Enum.map(catalog.rules.demand.segments, fn s ->

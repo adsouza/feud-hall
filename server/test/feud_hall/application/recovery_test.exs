@@ -4,7 +4,7 @@ defmodule FeudHall.Application.RecoveryTest do
 
   alias FeudHall.Application.{CommandWorkflow, Recovery}
   alias FeudHall.Domain.{Clock, Control, Hall}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Hall.Invariants
 
   alias FeudHall.Infrastructure.{
@@ -85,7 +85,7 @@ defmodule FeudHall.Application.RecoveryTest do
 
   defp first_commands do
     [
-      {env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}}), nil},
+      {env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}}), nil},
       {env(
          "create",
          @alice,
@@ -523,7 +523,7 @@ defmodule FeudHall.Application.RecoveryTest do
       a = start_hall(InMemoryEventStore.new(), "node-a")
 
       init =
-        env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: SliceCatalog.catalog()}})
+        env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: MexicanFixture.catalog()}})
 
       assert {:accepted, _} = HallAuthority.execute(a.pid, init)
 

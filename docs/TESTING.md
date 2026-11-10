@@ -136,8 +136,14 @@ disposable databases.
 | Project C capacity measurement | `python3 scripts/capacity_bench.py --output /tmp/feud-hall-capacity.json` | Standalone, serial benchmark on local PostgreSQL 18. Creates and drops `feud_hall_bench` and refuses an existing database of that name. Defaults to three complete game days, with `--days` accepting one through seven. Stops above 2 GiB combined RSS. |
 
 Run the capacity benchmark separately from other checks. The completed run
-records the measured workload, replay comparisons, and resource use.
+records the original one-cuisine workload, replay comparisons, and resource use.
+The benchmark now uses the three-cuisine catalog for new halls.
 [Project C capacity report](superpowers/reports/2026-11-10-milestone-2c-capacity.md).
+
+Run `mix test test/feud_hall/domain/slice_catalog_test.exs --max-cases 1` to
+check the current catalog, course service, and replay for all three cuisines.
+Earlier scenarios with fixed prices, portions, or serialized events use the
+original Mexican catalog from the committed initialization fixture.
 
 The pure property's action vocabulary (`test/support/hall_trace.ex`) includes
 market actions (`{:request, idx, qty}`, `{:cancel_request, idx}`) and macros
@@ -180,7 +186,7 @@ and the test that killed it.
 | --- | --- |
 | Pure rules, arithmetic, content | Success/rejection/boundary examples; independent conservation and stateful properties; validate affected definitions. |
 | Dietary demand | Hard exclusion before choice scoring, full-bill vegetarian/vegan and carbohydrate facts, substitutions/missing metadata, enabled-profile coverage, unchanged finite arrival totals, and shared main/drink/dessert ceilings across acceptance/service/cancellation/replay. |
-| Main/drink trays | All twenty drink recipes, initial-only add-on, combined stock/funding/carbohydrate feasibility, one queue/helper handover, atomic paired acceptance/service/cancellation, component waste, freshness/cleaning cutoff, and all four main/drink/dessert combinations. |
+| Main/drink trays | Every launch drink recipe, initial-only add-on, combined stock/funding/carbohydrate feasibility, one queue/helper handover, atomic paired acceptance/service/cancellation, component waste, freshness/cleaning cutoff, and all four main/drink/dessert combinations. |
 | Commands, permissions, resource lifetime | Wrapped use-case tests, retries/conflicts, current authorization, settled-state resource oracle, deferred settlement. |
 | Dining acceptance/cancellation | Confirmed-term mismatches, revised command IDs, one active visit with atomic main admission, pre-preparation cancellation races, exact funding/waste, and no cancellation of served courses. |
 | Capacity/admission | Compatible FIFO offers, one active entry/draft, expiry/rejoin, dormant reopening, no direct/NPC bypass, and atomic confirmation under contention. |
@@ -250,7 +256,7 @@ is not a pass. Include semantic faults as well as generated arithmetic/Boolean
 mutations. The [game-design mutation policy](GAME_DESIGN.md#mutation-testing)
 specifies required evidence and budgets.
 
-Drink/tray traces cover all twenty recipes and all four optional-item
+Drink/tray traces cover every launch drink recipe and all four optional-item
 combinations. Contend for a shared ingredient used by both main and drink;
 reject combined over-budget, over-capacity, or over-carbohydrate requests without
 partial reservations. Vary component completion order, ready-food expiry,
