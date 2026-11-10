@@ -378,4 +378,28 @@ defmodule FeudHall.Domain.DietaryAndContentTest do
       ctx({:system, :demand}, id)
     )
   end
+
+  test "content rejects invalid starter prices, unaddressable NPCs and unsampleable weights" do
+    catalog = SliceCatalog.catalog()
+    assert {:error, errors} = Content.validate(put_in(catalog.recipes["bean_tacos"].suggested_price, -900))
+    assert {:recipe, "bean_tacos", :bad_suggested_price} in errors
+
+    [npc | _] = catalog.npc_profiles
+    broken = %{catalog | npc_profiles: [Map.delete(npc, :id), npc, npc, %{npc | id: "contains:separator"}]}
+    assert {:error, errors} = Content.validate(broken)
+    assert {:npc, nil, :bad_profile} in errors
+    assert {:npc, npc.id, :duplicate} in errors
+    assert {:npc, "contains:separator", :bad_profile} in errors
+
+    max = FeudHall.Domain.Random.max_bound()
+    broken = put_in(catalog.rules.demand.profile_mix["unrestricted"], max)
+    assert {:error, errors} = Content.validate(broken)
+    assert {:demand, :bad_profile_mix} in errors
+
+    broken =
+      update_in(catalog.rules.demand.segments, fn [segment | rest] -> [%{segment | leave_weight: max} | rest] end)
+
+    assert {:error, errors} = Content.validate(broken)
+    assert {:demand, "value", :choice_weights_too_large} in errors
+  end
 end

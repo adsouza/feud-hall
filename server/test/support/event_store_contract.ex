@@ -142,6 +142,7 @@ defmodule FeudHall.EventStoreContract do
                    position: 1,
                    command_id: "a",
                    hall_ms: 24,
+                   start_hall_ms: nil,
                    events: [%{type: :clock_advanced, to: 24}],
                    control_events: []
                  }
@@ -149,6 +150,7 @@ defmodule FeudHall.EventStoreContract do
           assert second.position == 2
           assert second.command_id == "b"
           assert second.hall_ms == 72
+          assert second.start_hall_ms == 24
           assert second.events == [%{type: :clock_advanced, to: 48}, %{type: :clock_advanced, to: 72}]
 
           assert {:ok, [%{position: 2}]} = @contract_adapter.read_from(store, 1)

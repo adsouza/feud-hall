@@ -2,6 +2,7 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
   use FeudHall.PostgresCase
 
   alias FeudHall.Application.CommandWorkflow, as: Workflow
+  alias FeudHall.Domain.Clock
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Infrastructure.Postgres.DailyActivityProjector, as: Projector
   alias FeudHall.Infrastructure.PostgresEventStore, as: Store
@@ -92,6 +93,56 @@ defmodule FeudHall.Infrastructure.DailyActivityProjectorTest do
         reduce: %{} do
       acc -> Map.update(acc, {FeudHall.Domain.Clock.day_of(ms), r, type}, 1, &(&1 + 1))
     end
+  end
+
+  test "a paged catch-up and rebuild read the prior clock for a midnight-spanning batch" do
+    {:ok, rt} = Workflow.open(Store, FeudHall.PostgresCase.fresh_store())
+    catalog = FeudHall.Fixtures.quiet_catalog()
+    before_midnight = 2 * Clock.day() - 24
+
+    rt =
+      rt
+      |> run!("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: catalog}})
+      |> run!("before", {:system, :scheduler}, {:advance_clock, %{to_service_ms: Clock.service_ms(before_midnight)}})
+
+    midnight = before_midnight + 24
+    admitted = %{type: :visit_admitted, restaurant_id: "r1"}
+    accepted = %{type: :tray_accepted, restaurant_id: "r1"}
+    events = [admitted, accepted, %{type: :clock_advanced, to: midnight}, admitted, accepted]
+    actor = {:system, :scheduler}
+
+    receipt = %{
+      command_id: "cross-midnight",
+      fingerprint: "fixture",
+      kind: :advance_clock,
+      actor: actor,
+      outcome: :accepted,
+      event_count: length(events)
+    }
+
+    assert {:ok, _store, head} =
+             Store.append(rt.store, %{
+               command_id: receipt.command_id,
+               expected_position: rt.position,
+               expected_versions: rt.versions,
+               hall_stream: "hall:h1",
+               events: events,
+               control_events: [],
+               receipt: receipt,
+               outbox: [],
+               projection_rows: [],
+               context: %{
+                 actor: actor,
+                 correlation_id: receipt.command_id,
+                 content_hash: rt.state.content_hash,
+                 hall_ms: midnight
+               }
+             })
+
+    assert {:ok, ^head} = Projector.catch_up(Repo, batch_size: 1)
+    assert activity() == [[1, "r1", 1, 1], [2, "r1", 1, 1]]
+    assert {:ok, ^head} = Projector.rebuild(Repo)
+    assert activity() == [[1, "r1", 1, 1], [2, "r1", 1, 1]]
   end
 
   test "an empty log catches up to position 0 and creates the checkpoint" do

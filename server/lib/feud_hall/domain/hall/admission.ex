@@ -32,7 +32,7 @@ defmodule FeudHall.Domain.Hall.Admission do
   do) admits a new entity under it; the boundary never lets a command do so.
   """
 
-  alias FeudHall.Domain.{Dietary, Inventory, Offers, Substitution}
+  alias FeudHall.Domain.{Dietary, Inventory, Money, Offers, Substitution}
 
   @doc """
   Admits a visit and accepts its tray atomically.
@@ -53,6 +53,7 @@ defmodule FeudHall.Domain.Hall.Admission do
          {:ok, quote} <- Offers.quote_tray(state, p.stall_id, p.main, p[:drink], blank),
          {:ok, bound} <- bind_deadline(source, quote, p[:confirmed]),
          deadline = cap_deadline(bound, p[:deadline_cap]),
+         :ok <- valid_prices(quote),
          {:ok, funding} <- fund(state, source, principal, budget, quote) do
       visit_id = "V:" <> entity_id
       tray_id = "T:" <> entity_id
@@ -106,6 +107,7 @@ defmodule FeudHall.Domain.Hall.Admission do
          :ok <- ensure(simulated_decision?(visit) or state.now < visit.dessert_offer_deadline, :dessert_offer_expired),
          {:ok, quote} <- Offers.quote_dessert(state, visit),
          {:ok, deadline} <- bind_deadline(visit.source, quote, confirmed),
+         :ok <- valid_prices(quote),
          {:ok, funding} <- fund_dessert(state, visit, quote),
          batches = state.restaurants[visit.restaurant].batches,
          {:ok, [order]} <- reserve_components(state, batches, quote.components, funding, entity_id) do
@@ -134,6 +136,10 @@ defmodule FeudHall.Domain.Hall.Admission do
 
   defp bind_deadline(:guest, quote, confirmed), do: Offers.check_confirmation(quote, confirmed)
   defp bind_deadline(:simulated, quote, _confirmed), do: {:ok, quote.deadline}
+
+  defp valid_prices(quote) do
+    ensure(Enum.all?(quote.components, &Money.menu_price?(&1.price)), :invalid_price)
+  end
 
   # Guest courses reserve exact wallet slices (allowance before earned credit);
   # simulated courses must fit the visit's pinned budget.

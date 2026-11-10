@@ -47,7 +47,7 @@ defmodule FeudHall.Domain.Demand do
   An open stall counts as staffed until staff exist.
   """
 
-  alias FeudHall.Domain.{Clock, Inventory, Market, Offers, Random}
+  alias FeudHall.Domain.{Clock, Inventory, Kitchen, Market, Offers, Random}
 
   @kept_summaries 7
 
@@ -145,8 +145,7 @@ defmodule FeudHall.Domain.Demand do
     {segment, rng} = Random.weighted(rng, Enum.map(rules.segments, &{&1, &1.weight}))
     [budget_lo, budget_hi] = segment.budget
     {budget, rng} = Random.range(rng, budget_lo, budget_hi)
-    [patience_lo, patience_hi] = segment.patience_hall_ms
-    {patience, rng} = Random.range(rng, patience_lo, patience_hi)
+    {patience, rng} = draw_patience(segment, rng)
 
     profiles =
       for {id, w} <- Enum.sort(rules.profile_mix), catalog.profiles[id].enabled, do: {id, w}
@@ -163,6 +162,15 @@ defmodule FeudHall.Domain.Demand do
        drink?: drink < segment.drink_attach_permille,
        dessert_appetite?: dessert < segment.dessert_appetite_permille
      }, rng}
+  end
+
+  defp draw_patience(%{patience_hall_ms: [lo, hi]}, rng), do: Random.range(rng, lo, hi)
+
+  # Early shared-simulation catalogs stored available-service ms. Draw in
+  # the original unit before converting, preserving the original outcomes.
+  defp draw_patience(%{patience_service_ms: [lo, hi]}, rng) do
+    {patience, rng} = Random.range(rng, lo, hi)
+    {Clock.service_duration(patience), rng}
   end
 
   @doc """
@@ -184,45 +192,65 @@ defmodule FeudHall.Domain.Demand do
     end
   end
 
-  @doc """
-  Restaurants operating now: an open stall in an open hall with queue room, and
-  at least one main that can be quoted for the unrestricted requirement against
-  current availability. Listed once each, in the order of their stalls' IDs
-  (not sorted by restaurant ID).
-  """
+  @doc "Restaurants with a main that can be ordered now."
   def operating(state) do
-    state.stalls
-    |> Enum.sort()
-    |> Enum.flat_map(fn {sid, stall} -> if operating_stall?(state, sid), do: [stall.restaurant], else: [] end)
-    |> Enum.uniq()
+    [{_, operating}] = operating_intervals(state, state.now + 1)
+    operating
   end
 
-  defp operating_stall?(state, sid) do
+  @doc """
+  Changes to the operating list within the next event-free interval.
+  Stock, work and stall modes remain fixed. A quote can still become
+  available or expire as its deadline or start time moves.
+  """
+  def operating_intervals(state, to) do
+    busy = MapSet.new(Kitchen.busy_stalls(state))
+    stalls = Enum.sort(state.stalls)
+    order = stalls |> Enum.map(fn {_id, stall} -> stall.restaurant end) |> Enum.uniq()
+
+    changes =
+      Enum.reduce(stalls, %{state.now => []}, fn {sid, stall}, changes ->
+        Enum.reduce(stall_ranges(state, sid, to, MapSet.member?(busy, sid)), changes, fn {first, last}, changes ->
+          changes
+          |> Map.update(first, [{stall.restaurant, 1}], &[{stall.restaurant, 1} | &1])
+          |> Map.update(last, [{stall.restaurant, -1}], &[{stall.restaurant, -1} | &1])
+        end)
+      end)
+
+    {intervals, _counts} =
+      changes
+      |> Enum.reject(fn {at, _} -> at == to end)
+      |> Enum.sort()
+      |> Enum.map_reduce(%{}, fn {at, changes}, counts ->
+        counts = Enum.reduce(changes, counts, fn {id, delta}, acc -> Map.update(acc, id, delta, &(&1 + delta)) end)
+        {{at, Enum.filter(order, &(Map.get(counts, &1, 0) > 0))}, counts}
+      end)
+
+    Enum.dedup_by(intervals, &elem(&1, 1))
+  end
+
+  defp stall_ranges(state, sid, to, busy?) do
     case Offers.open_stall_for_main(state, sid) do
       {:ok, _stall, restaurant} ->
         available = Inventory.availability(restaurant.batches, state.now)
 
-        state.catalog.recipes
-        |> Enum.any?(fn {id, recipe} ->
-          recipe.kind == :main and
-            match?(
-              {:ok, _},
-              Offers.quote_course(state, restaurant, id, :main, @unrestricted, 0, available)
-            )
+        Enum.reduce_while(restaurant.menu, [], fn {id, _price}, ranges ->
+          case Offers.quote_course(state, restaurant, id, :main, @unrestricted, 0, available) do
+            {:ok, course} ->
+              case Offers.main_start_ranges(state, sid, course, to, busy?) do
+                [{first, ^to}] = full when first == state.now -> {:halt, full}
+                partial -> {:cont, partial ++ ranges}
+              end
+
+            {:error, _} ->
+              {:cont, ranges}
+          end
         end)
 
       {:error, _} ->
-        false
+        []
     end
   end
-
-  @doc """
-  The `operating` key a `clock_advanced` must carry for an interval during
-  which `operating` restaurants operated: `%{operating: operating}` when it
-  differs from the last recorded list, otherwise nothing (`%{}`).
-  """
-  def operating_change(demand, operating),
-    do: if(operating == demand.operating, do: %{}, else: %{operating: operating})
 
   @doc """
   Applies a `clock_advanced` interval of `elapsed` hall ms: the event's

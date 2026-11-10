@@ -6,7 +6,7 @@ defmodule FeudHall.Application.CommandWorkflowTest do
   alias FeudHall.Application.Recovery
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.{Control, Money}
-  alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore, PostgresEventStore, Snapshot}
+  alias FeudHall.Infrastructure.{EventCodec, InMemoryEventStore, PostgresEventStore, Repo, Snapshot}
 
   defmodule SecondAppend do
     @moduledoc "Wraps the in-memory store so that only the second append from now fails with `fault`."
@@ -540,6 +540,26 @@ defmodule FeudHall.Application.CommandWorkflowTest do
       assert receipt.outcome == :accepted
       assert Map.keys(recovered.state.market.requests) == ["PR:buy-1"]
       assert {:replayed, _, _} = Workflow.execute(recovered, env("buy-1", {:principal, "alice"}, purchase(100)))
+    end
+
+    test "a missing committed batch blocks uncertainty resolution and projection rebuild" do
+      rt = pg_runtime()
+      alice = {:principal, "alice"}
+      price = {:set_menu_price, %{restaurant_id: "r1", recipe_id: "bean_tacos", price: 777}}
+      assert {:accepted, _, priced} = Workflow.execute(rt, env("price", alice, price))
+      armed = %{priced | store: PostgresEventStore.fail_next(priced.store, :lost_reply)}
+      assert {:uncertain, "buy-1", pending} = Workflow.execute(armed, env("buy-1", alice, purchase(100)))
+
+      missing = priced.position
+      before = PostgresEventStore.projection(pending.store, :balances)
+      Repo.query!("delete from events where position = $1", [missing])
+      Repo.query!("delete from batches where position = $1", [missing])
+
+      assert {:error, {:missing_batch, ^missing}, ^pending} = Workflow.resolve(pending, "buy-1")
+      assert {:error, :recovery_required, ^pending} = Workflow.execute(pending, env("buy-2", alice, purchase(5)))
+      assert {:error, {:missing_batch, ^missing}} = PostgresEventStore.rebuild_projections(pending.store)
+      assert PostgresEventStore.projection(pending.store, :balances) == before
+      assert PostgresEventStore.head(pending.store) == missing + 1
     end
 
     test "the store replays to the head and projections the in-memory workflow reaches" do

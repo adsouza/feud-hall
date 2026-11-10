@@ -11,6 +11,11 @@ defmodule FeudHall.Domain.Money do
   # exact-integer range (2^53 - 1), so every client path must use strings.
   @max 1_000_000_000_000_000_000
 
+  @max_menu_price 1_000_000
+
+  @doc "True for an allowed menu price, including a catalog's suggested price."
+  def menu_price?(amount), do: is_integer(amount) and amount in 1..@max_menu_price
+
   @type t :: integer()
 
   @spec max() :: pos_integer()

@@ -14,6 +14,9 @@ defmodule FeudHall.Domain.Random do
   @gamma 0x9E3779B97F4A7C15
   @two_64 1 <<< 64
 
+  @doc "Largest supported range size or total weight for one draw."
+  def max_bound, do: @two_64
+
   @type state :: non_neg_integer()
   @type seed :: non_neg_integer()
 

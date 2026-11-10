@@ -1058,8 +1058,11 @@ Implementation decisions within the contracts above:
   differs from the last one recorded). The evolver credits each interval to the
   recorded list, or to the last recorded list (`demand.operating`) when the
   event carries none, so replay never recomputes who operated, and a log that
-  restates the list on every interval replays to the same state. Each
-  `market_cleared` records the next clearing instant (`next_clear_at`); a
+  restates the list on every interval replays to the same state. The advance
+  also splits an otherwise unchanged interval when the last orderable main
+  becomes unavailable or a main becomes orderable. Forecast timing uses the
+  same kitchen schedule, moving service window, and strict cleaning cutoff as
+  checkout. Each `market_cleared` records the next clearing instant (`next_clear_at`); a
   clearing recorded before that key falls back to the catalog interval.
 
   Work a command accepts begins at the next advance, at the acceptance instant.
@@ -1098,9 +1101,10 @@ Implementation decisions within the contracts above:
 - **Projector checkpoint.** The asynchronous daily-activity projector advances
   its checkpoint only from the exact predecessor position (contiguous batch
   positions) in the same transaction as its deltas, so concurrent or repeated
-  runs cannot double-count. `PostgresEventStore.rebuild_projections/1` and
-  `Postgres.DailyActivityProjector.rebuild/1` recompute derived tables from the
-  log.
+  runs cannot double-count. Daily activity follows clock markers in event
+  order, starting a clock batch at the preceding committed time. An activity
+  batch can contribute to more than one game day. The rebuild functions
+  recompute derived tables from the event log.
 - **Snapshots, evolution 5.** A snapshot encodes the hall and control states at
   a position and is accepted only for the current evolution version; version 1
   (hall only), version 2 (before the shared simulation's layout, seed, NPCs,
@@ -1109,7 +1113,21 @@ Implementation decisions within the contracts above:
   list) and version 4 (finished visits, trays and orders still in live state,
   no `order_seq`) are rejected as incompatible. Recovery uses only verified
   snapshots, skips one beyond the store head, and falls back to older ones or
-  genesis. Snapshots never justify skipping history that fails to replay.
+  genesis. New verified snapshots pin stream versions for exact comparison
+  after folding the tail. Older compatible snapshots still provide a checked
+  state and batch position. Snapshots never justify skipping history that
+  fails to replay.
+- **Checked replay and Project A transition.** Startup recovery,
+  uncertain-commit resolution, and balance/stock rebuild share the
+  complete-batch checks at a fixed committed head. A gap, inconsistent
+  stream versions, or a failed state invariant prevents adoption or rebuild.
+  A hall initialized before the shared simulation appends one
+  `hall_simulation_upgraded` fact under the recovery fence before availability
+  restarts. It pins the new content hash, keeps existing recipes, businesses,
+  balances, open stalls, and work commitments, and adds shared simulation
+  rules and stock at the recovered clock. Arrivals under the new rules begin
+  at the next midnight. Already recorded Project B service-time patience
+  ranges still draw in their original units.
 - **Unavailable storage.** On PostgreSQL, connection errors (and lock timeouts,
   cancellations, and shutdowns) surface as `{:error, :unavailable}` from
   `head/1`, `stream_versions/2`, `read_from/2`, `receipt/2`, `append/2`,

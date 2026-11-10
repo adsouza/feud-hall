@@ -8,6 +8,7 @@ defmodule FeudHall.App do
 
     children = [
       FeudHall.Infrastructure.Repo,
+      {Registry, keys: :unique, name: FeudHall.Infrastructure.Diagnostics.Exporter.Registry},
       {DynamicSupervisor, name: FeudHall.AuthoritySupervisor, strategy: :one_for_one}
     ]
 

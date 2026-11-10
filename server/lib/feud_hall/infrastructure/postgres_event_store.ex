@@ -58,9 +58,8 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   @behaviour FeudHall.Application.EventStore
 
-  alias FeudHall.Application.EventStore
+  alias FeudHall.Application.{EventStore, Replay}
   alias FeudHall.Application.Projections.Balances
-  alias FeudHall.Domain.Hall
   alias FeudHall.Domain.Hall.Evolver
   alias FeudHall.Infrastructure.{EventCodec, Snapshot}
 
@@ -300,7 +299,8 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   end
 
   # The catalog is stored once per content identity; the event references it.
-  defp stored_payload(repo, %{type: :hall_initialized, catalog: catalog} = event) do
+  defp stored_payload(repo, %{type: type, catalog: catalog} = event)
+       when type in [:hall_initialized, :hall_simulation_upgraded] do
     body = :erlang.term_to_binary(catalog, [:deterministic])
     ref = content_hash(body)
 
@@ -440,8 +440,11 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   def read_after(repo, after_position, limit) do
     %{rows: batches} =
       repo.query!(
-        "select position, command_id, hall_ms, event_count from batches where position > $1 " <>
-          "order by position limit $2",
+        """
+        select b.position, b.command_id, b.hall_ms, b.event_count, previous.hall_ms
+        from batches b left join batches previous on previous.position = b.position - 1
+        where b.position > $1 order by b.position limit $2
+        """,
         [after_position, limit]
       )
 
@@ -457,7 +460,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
     events_by_position = Enum.group_by(event_rows, &hd/1, &tl/1)
 
     batches
-    |> Enum.reduce_while({[], %{}}, fn [position, command_id, hall_ms, event_count], {acc, content} ->
+    |> Enum.reduce_while({[], %{}}, fn [position, command_id, hall_ms, event_count, start_hall_ms], {acc, content} ->
       rows = Map.get(events_by_position, position, [])
 
       result =
@@ -471,6 +474,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
             position: position,
             command_id: command_id,
             hall_ms: hall_ms,
+            start_hall_ms: start_hall_ms,
             events: events,
             control_events: control_events
           }
@@ -599,7 +603,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   Rebuilds `restaurant_balances` and `restaurant_stock` from the event log.
 
   One transaction holds the append-head lock (so no batch lands mid-rebuild),
-  truncates both tables, folds every batch with `Hall.replay/1`, and writes every
+  checks and folds every committed batch before replacing both tables, and writes every
   account and product of the folded state. Rows carry the head position they
   were rebuilt at, not the batch that last changed them. Returns
   `{:error, :unavailable}` when storage cannot be reached and `{:error, reason}`
@@ -616,9 +620,8 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
             set_lock_timeout(repo, store.lock_timeout_ms)
             head = lock_head(repo)
 
-            case read_from(store, 0) do
-              {:ok, batches} ->
-                state = batches |> Enum.flat_map(& &1.events) |> Hall.replay()
+            case Replay.load(__MODULE__, store, head: head) do
+              {:ok, %{hall: state}} ->
                 repo.query!("truncate restaurant_balances, restaurant_stock")
                 apply_projection_rows(repo, Balances.changes(nil, state, head), head)
 

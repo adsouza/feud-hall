@@ -40,10 +40,27 @@ defmodule FeudHall.Domain.Kitchen do
   state, using the same FIFO keys as `next_start/2`.
   """
   def estimate(state, stall_id, new_components, now) do
+    {earliest, _valid_for} = estimate_at(state, stall_id, new_components, now)
+    %{earliest_completion: earliest}
+  end
+
+  @doc """
+  For a single hypothetical course at `now`, returns
+  `{completion, rate, valid_for}`: completion at that instant, how many ms
+  it moves for every ms the order is delayed (0 or 1), and the number of ms
+  this forecast is valid while the existing kitchen state stays fixed.
+  """
+  def completion_forecast(state, stall_id, course, now) do
+    {time, valid_for} = estimate_at(state, stall_id, [course], {now, 1})
+    {at(time), rate(time), valid_for}
+  end
+
+  defp estimate_at(state, stall_id, new_components, now) do
     %{prep_stations: prep_n, finish_stations: finish_n} = state.catalog.rules.kitchen
     handover = state.catalog.rules.handover_ms
     orders = live_orders(state, stall_id)
     next = next_seq(state)
+    forecast? = is_tuple(now)
 
     new =
       new_components
@@ -60,12 +77,13 @@ defmodule FeudHall.Domain.Kitchen do
         }
       end)
 
-    # 1. Prep stations.
     prep_free = pad(for(o <- orders, o.status == :prep, do: o.stage_done_at), prep_n, now)
-    prep_queue = fifo(Enum.filter(orders, &(&1.status == :queued_prep)) ++ new, & &1.queued_at)
-    prep_end = schedule(prep_queue, prep_free, & &1.queued_at, & &1.prep_ms)
 
-    # 2. Finish stations, released when prep ends.
+    {prep_queue, prep_order} =
+      forecast_fifo(Enum.filter(orders, &(&1.status == :queued_prep)) ++ new, & &1.queued_at, forecast?)
+
+    {prep_end, prep_assignment} = schedule(prep_queue, prep_free, & &1.queued_at, & &1.prep_ms, forecast?)
+
     finish_free = pad(for(o <- orders, o.status == :finish, do: o.stage_done_at), finish_n, now)
 
     release = fn o ->
@@ -76,8 +94,14 @@ defmodule FeudHall.Domain.Kitchen do
       end
     end
 
-    finish_queue = fifo(Enum.filter(orders, &(&1.status in [:queued_prep, :prep, :queued_finish])) ++ new, release)
-    finish_end = schedule(finish_queue, finish_free, release, & &1.finish_ms)
+    {finish_queue, finish_order} =
+      forecast_fifo(
+        Enum.filter(orders, &(&1.status in [:queued_prep, :prep, :queued_finish])) ++ new,
+        release,
+        forecast?
+      )
+
+    {finish_end, finish_assignment} = schedule(finish_queue, finish_free, release, & &1.finish_ms, forecast?)
 
     done_at = fn o ->
       case o.status do
@@ -87,24 +111,40 @@ defmodule FeudHall.Domain.Kitchen do
       end
     end
 
-    # 3. Counter: an item is ready when its last component is.
     counter = Map.get(state.stalls[stall_id], :counter)
     in_hand = counter && counter.item
 
-    items =
+    {items, readiness} =
       (orders ++ new)
       |> Enum.group_by(&item_key/1)
       |> Map.delete(in_hand)
-      |> Enum.map(fn {key, os} -> %{key: key, ready: os |> Enum.map(done_at) |> Enum.max(), seq: min_seq(os)} end)
-      |> fifo(& &1.ready)
-
-    {ends, _free} =
-      Enum.reduce(items, {%{}, if(counter, do: counter.done_at, else: now)}, fn item, {ends, free} ->
-        finish_at = max(free, item.ready) + handover
-        {Map.put(ends, item.key, finish_at), finish_at}
+      |> Enum.map_reduce(:infinity, fn {key, os}, bound ->
+        {ready, stable} = latest(Enum.map(os, done_at))
+        {%{key: key, ready: ready, seq: min_seq(os)}, min(stable, bound)}
       end)
 
-    %{earliest_completion: ends[:new]}
+    {items, counter_order} = forecast_fifo(items, & &1.ready, forecast?)
+    initial = if(counter, do: counter.done_at, else: now)
+
+    {ends, _free, counter_assignment} =
+      Enum.reduce(items, {%{}, initial, :infinity}, fn item, {ends, free, bound} ->
+        {start, stable} = later(free, item.ready)
+        finish_at = add(start, handover)
+        {Map.put(ends, item.key, finish_at), finish_at, min(bound, stable)}
+      end)
+
+    bound =
+      Enum.min([
+        prep_order,
+        prep_assignment,
+        finish_order,
+        finish_assignment,
+        readiness,
+        counter_order,
+        counter_assignment
+      ])
+
+    {ends[:new], bound}
   end
 
   @doc """
@@ -193,24 +233,81 @@ defmodule FeudHall.Domain.Kitchen do
   defp item_key(%{kind: :dessert, id: id}), do: {:dessert, id}
   defp item_key(%{tray: tray}), do: {:tray, tray}
 
-  # Station free times, padded with `now` up to the station count.
-  defp pad(free, n, now), do: free ++ List.duplicate(now, max(n - length(free), 0))
-
-  # Runs FIFO-ordered jobs on the earliest-free station, each not before its
-  # release; returns each job's end time.
-  defp schedule(jobs, free, release, duration) do
-    {ends, _free} =
-      Enum.reduce(jobs, {%{}, free}, fn job, {ends, free} ->
-        {earliest, rest} = pop_min(free)
-        finish_at = max(earliest, release.(job)) + duration.(job)
-        {Map.put(ends, job.id, finish_at), [finish_at | rest]}
-      end)
-
-    ends
+  # Legacy combined preparations can temporarily exceed the finish station
+  # count. The extra stations retire as they free up.
+  defp pad(free, n, now) do
+    if length(free) > n,
+      do: free |> Enum.sort() |> Enum.take(-n),
+      else: free ++ List.duplicate(now, n - length(free))
   end
 
-  defp pop_min(list) do
-    min = Enum.min(list)
-    {min, List.delete(list, min)}
+  # Track when an affine time can change the result of a comparison.
+  # `nil` is never a time, and the :infinity atom sorts after integer bounds.
+  defp at({value, _rate}), do: value
+  defp at(value), do: value
+
+  defp rate({_value, rate}), do: rate
+  defp rate(_value), do: 0
+
+  defp add({value, rate}, duration), do: {value + duration, rate}
+  defp add(value, duration), do: value + duration
+
+  defp ordered_through(a, b, tie_ok?) do
+    if rate(a) > rate(b), do: at(b) - at(a) - if(tie_ok?, do: 0, else: 1), else: :infinity
+  end
+
+  defp forecast_fifo(items, release, false), do: {fifo(items, release), :infinity}
+
+  defp forecast_fifo(items, release, true) do
+    sorted = Enum.sort_by(items, &{at(release.(&1)), &1.seq})
+
+    stable =
+      sorted
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.reduce(:infinity, fn [a, b], bound ->
+        min(bound, ordered_through(release.(a), release.(b), a.seq < b.seq))
+      end)
+
+    {sorted, stable}
+  end
+
+  defp later(a, b) when is_integer(a) and is_integer(b), do: {max(a, b), :infinity}
+
+  defp later(a, b) do
+    {earlier, later} = if {at(a), rate(a)} <= {at(b), rate(b)}, do: {a, b}, else: {b, a}
+    {later, ordered_through(earlier, later, true)}
+  end
+
+  defp latest([first | rest]) do
+    Enum.reduce(rest, {first, :infinity}, fn time, {latest, bound} ->
+      {last, stable} = later(time, latest)
+      {last, min(bound, stable)}
+    end)
+  end
+
+  # FIFO jobs take the earliest-free station, each no earlier than its release.
+  defp schedule(jobs, free, release, duration, false) do
+    {ends, _free} =
+      Enum.reduce(jobs, {%{}, free}, fn job, {ends, free} ->
+        earliest = Enum.min(free)
+        finish_at = max(earliest, release.(job)) + duration.(job)
+        {Map.put(ends, job.id, finish_at), [finish_at | List.delete(free, earliest)]}
+      end)
+
+    {ends, :infinity}
+  end
+
+  defp schedule(jobs, free, release, duration, true) do
+    {ends, _free, bound} =
+      Enum.reduce(jobs, {%{}, free, :infinity}, fn job, {ends, free, bound} ->
+        earliest = Enum.min_by(free, &{at(&1), rate(&1)})
+        rest = List.delete(free, earliest)
+        assignment = Enum.reduce(rest, bound, &min(&2, ordered_through(earliest, &1, true)))
+        {start, stable} = later(earliest, release.(job))
+        finish_at = add(start, duration.(job))
+        {Map.put(ends, job.id, finish_at), [finish_at | rest], min(assignment, stable)}
+      end)
+
+    {ends, bound}
   end
 end

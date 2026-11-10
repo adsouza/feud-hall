@@ -3,6 +3,7 @@ defmodule FeudHall.Domain.AdmissionTest do
 
   import FeudHall.Fixtures
 
+  alias FeudHall.Domain.{Dietary, Offers}
   alias FeudHall.Domain.Hall.Admission
 
   setup do
@@ -31,5 +32,24 @@ defmodule FeudHall.Domain.AdmissionTest do
 
     assert tray_deadline(Admission.admit(state, request(uncapped - 1), "e1")) == uncapped - 1
     assert tray_deadline(Admission.admit(state, request(uncapped + 1_000), "e1")) == uncapped
+  end
+
+  test "confirming a vegetarian quote cannot pin a different profile", %{state: state} do
+    {state, _} = grant({state, []}, "guest", 1_200, "allowance")
+    {:ok, requirement} = Dietary.requirement(state.catalog, "vegetarian")
+    visit = %{requirement: requirement, carbs_reserved: 0, carbs_served: 0}
+    assert {:ok, quote} = Offers.quote_tray(state, "s001", "bean_tacos", nil, visit)
+
+    guest = %{request(nil) | source: :guest, principal: "guest", budget: nil, confirmed: Offers.terms(quote)}
+    assert {:error, :stale_terms} = Admission.admit(state, guest, "wrong")
+    guest = %{guest | profile_id: "vegetarian"}
+
+    assert {:ok, [%{type: :visit_admitted, requirement: ^requirement}, %{type: :tray_accepted}]} =
+             Admission.admit(state, guest, "right")
+  end
+
+  test "invalid legacy menu prices cannot be quoted or funded", %{state: state} do
+    state = put_in(state.restaurants["r1"].menu["bean_tacos"], -900)
+    assert {:error, :invalid_price} = Admission.admit(state, request(nil), "negative")
   end
 end

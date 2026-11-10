@@ -13,8 +13,8 @@ defmodule FeudHall.Domain.Hall.Decider do
   `FeudHall.Domain.Hall.Advance`.
   """
 
-  alias FeudHall.Domain.{Clock, Content, Random, Substitution}
-  alias FeudHall.Domain.Hall.{Admission, Advance, Evolver, Settlement}
+  alias FeudHall.Domain.{Clock, Content, Market, Money, Random, Substitution}
+  alias FeudHall.Domain.Hall.{Admission, Advance, Evolver, Settlement, SimulationUpgrade}
 
   @max_qty 1_000_000
   @max_price 1_000_000
@@ -38,6 +38,15 @@ defmodule FeudHall.Domain.Hall.Decider do
 
   def decide(nil, _command, _ctx), do: {:error, :hall_not_initialized}
   def decide(_state, {:initialize_hall, _}, _ctx), do: {:error, :already_initialized}
+
+  def decide(state, {:upgrade_simulation, %{defaults: defaults}}, %{actor: {:system, :authority}}) do
+    if SimulationUpgrade.needed?(state),
+      do: SimulationUpgrade.decide(state, defaults),
+      else: {:error, :already_upgraded}
+  end
+
+  def decide(%{catalog: %{rules: rules}}, _command, _ctx) when not is_map_key(rules, :kitchen),
+    do: {:error, :simulation_upgrade_required}
 
   def decide(state, {:advance_clock, %{to_service_ms: to}}, %{actor: {:system, :scheduler}})
       when is_integer(to) do
@@ -96,7 +105,7 @@ defmodule FeudHall.Domain.Hall.Decider do
   def decide(state, {:set_menu_price, %{restaurant_id: r, recipe_id: id, price: price}}, ctx) do
     with {:ok, restaurant} <- owned_restaurant(state, r, ctx),
          :ok <- ensure(id in restaurant.unlocked, :recipe_locked),
-         :ok <- ensure(is_integer(price) and price > 0 and price <= @max_price, :invalid_price) do
+         :ok <- ensure(Money.menu_price?(price), :invalid_price) do
       {:ok, [%{type: :menu_price_set, restaurant_id: r, recipe_id: id, price: price}]}
     end
   end
@@ -320,15 +329,6 @@ defmodule FeudHall.Domain.Hall.Decider do
     do: {:error, :invalid_payload}
 
   defp initialize_events(hall_id, catalog, seed) do
-    market = catalog.rules.market
-    floor_equivalents_millis = catalog.rules.demand.equivalent_floor_millis
-
-    # Opening stock is the per-equivalent target at the demand floor, within the replenishment cap.
-    stock =
-      Map.new(market.target_stock_per_equivalent, fn {product, per_equivalent} ->
-        {product, min(div(per_equivalent * floor_equivalents_millis, 1_000), market.replenish_cap[product])}
-      end)
-
     {:ok,
      [
        %{
@@ -339,7 +339,7 @@ defmodule FeudHall.Domain.Hall.Decider do
          visitor_fund: catalog.rules.visitor_fund,
          layout: Map.new(catalog.layout, &{&1.slot_id, &1.tier}),
          seed: seed,
-         market: %{stock: stock},
+         market: %{stock: Market.opening_stock(catalog)},
          demand: %{rng: Random.new(Random.derive(seed, "demand"))}
        }
      ]}

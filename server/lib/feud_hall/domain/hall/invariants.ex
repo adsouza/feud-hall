@@ -304,7 +304,7 @@ defmodule FeudHall.Domain.Hall.Invariants do
     capacity =
       for {sid, orders} <- Enum.sort(by_stall),
           {stage, limit} <- [prep: prep_n, finish: finish_n],
-          Enum.count(orders, &(&1.status == stage)) > limit,
+          over_capacity?(orders, stage, limit),
           do: {:stage_over_capacity, sid, stage}
 
     deadlines =
@@ -322,6 +322,15 @@ defmodule FeudHall.Domain.Hall.Invariants do
   end
 
   defp kitchen(_state), do: []
+
+  # Legacy combined preparations can already be finishing when the station
+  # limit is activated. Dispatch counts them and waits for a real opening.
+  defp over_capacity?(orders, stage, limit) do
+    occupants = Enum.filter(orders, &(&1.status == stage))
+
+    length(occupants) > limit and
+      (stage != :finish or Enum.any?(occupants, &(&1.estimated_completion != nil)))
+  end
 
   defp counters(state) do
     held = for {sid, %{counter: %{} = counter}} <- Enum.sort(state.stalls), do: {sid, counter}

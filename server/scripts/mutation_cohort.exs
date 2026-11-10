@@ -18,6 +18,8 @@
 
 defmodule MutationCohort do
   @timeout_s "300"
+  @seed "1702"
+  @formatter ["--formatter", "FeudHall.MutationFormatter"]
 
   @tray "test/feud_hall/domain/tray_lifecycle_test.exs"
   @stock "test/feud_hall/domain/cleaning_and_stock_test.exs"
@@ -65,7 +67,7 @@ defmodule MutationCohort do
        "{:ok, dessert_id} <- dessert_recipe(state, restaurant),\n         available = Inventory.availability(restaurant.batches, state.now),\n         committed = 0,",
        [@diet]},
       {"confirmed item terms not compared", "lib/feud_hall/domain/offers.ex",
-       "Map.get(confirmed, :components) != current.components -> {:error, :stale_terms}",
+       "Map.delete(confirmed, :deadline) != Map.delete(current, :deadline) -> {:error, :stale_terms}",
        "false -> {:error, :stale_terms}", [@tray]},
       {"voluntary cancellation after preparation", "lib/feud_hall/domain/hall/decider.ex",
        ":ok <- ensure(Enum.all?(tray.components, &(state.orders[&1].status == :queued_prep)), :preparation_started)",
@@ -109,8 +111,10 @@ defmodule MutationCohort do
       {"projector checkpoint advances without deltas",
        "lib/feud_hall/infrastructure/postgres/daily_activity_projector.ex",
        "            add_deltas(repo, DailyActivity.deltas(batch))\n", "", [@projector]},
-      {"recovery replay calls side effects", "lib/feud_hall/application/recovery.ex", "restored = restore(base, tail),",
-       "restored = (if(fx = opts[:side_effects], do: Enum.each(tail, fx)); restore(base, tail)),", [@recovery]},
+      {"recovery replay calls side effects", "lib/feud_hall/application/recovery.ex",
+       "{:ok, restored} <- Replay.load(store_mod, store, base: base, head: head),",
+       "{:ok, restored} <- Replay.load(store_mod, store, base: base, head: head),\n         _ = if(fx = opts[:side_effects], do: fx.(restored)),",
+       [@recovery]},
       {"candidate state adopted before append succeeds", "lib/feud_hall/application/command_workflow.ex",
        "{:error, reason, %{runtime | store: store}}",
        "{:error, reason, %{runtime | store: store, state: candidate, control: candidate_control}}", [@flow]},
@@ -223,7 +227,7 @@ defmodule MutationCohort do
 
         ms = System.monotonic_time(:millisecond) - started
         IO.puts("#{pad(label(outcome))} #{name} (#{ms} ms)#{detail(outcome)}")
-        %{name: name, file: file, tests: tests, outcome: outcome, ms: ms}
+        %{name: name, file: file, tests: tests, outcome: outcome, ms: ms, seed: @seed}
       end
 
     IO.puts("re-verifying baseline after restore...")
@@ -244,7 +248,7 @@ defmodule MutationCohort do
     case cmd(dir, ["compile"]) do
       {_, 0} ->
         Enum.reduce_while(tests, :survived, fn test, _ ->
-          case cmd(dir, ["test", test, "--max-cases", "1"]) do
+          case cmd(dir, ["test", test, "--max-cases", "1", "--seed", @seed] ++ @formatter) do
             {_, 0} ->
               {:cont, :survived}
 
@@ -252,10 +256,7 @@ defmodule MutationCohort do
               {:halt, :timeout}
 
             {out, _} ->
-              case Regex.run(~r/^\s+1\) (.+)$/m, out) do
-                nil -> {:halt, {:harness, String.slice(out, -400, 400)}}
-                [_, failing] -> {:halt, {:killed, test, failing}}
-              end
+              {:halt, classify_failure(test, out)}
           end
         end)
 
@@ -264,9 +265,19 @@ defmodule MutationCohort do
     end
   end
 
+  defp classify_failure(test, output) do
+    finished? = Regex.match?(~r/^FEUD_HALL_MUTATION_FINISHED$/m, output)
+    harness? = Regex.match?(~r/^FEUD_HALL_MUTATION_HARNESS /m, output)
+
+    case Regex.run(~r/^FEUD_HALL_MUTATION_ASSERTION (.+)$/m, output) do
+      [_, failing] when finished? and not harness? -> {:killed, test, failing}
+      _ -> {:harness, String.slice(output, -1000, 1000)}
+    end
+  end
+
   defp baseline!(dir, tests) do
     for test <- tests do
-      case cmd(dir, ["test", test, "--max-cases", "1"]) do
+      case cmd(dir, ["test", test, "--max-cases", "1", "--seed", @seed]) do
         {_, 0} -> :ok
         {out, _} -> abort("baseline failed for #{test}:\n#{out}")
       end

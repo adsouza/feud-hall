@@ -24,8 +24,10 @@ defmodule FeudHall.Infrastructure.Snapshot do
   every finished visit and has no counter). Older snapshots are rejected as incompatible, so
   recovery replays from genesis instead.
   """
-  def take(%{hall: _, control: _} = state, position) do
-    body = :erlang.term_to_binary(%{position: position, evolution: @evolution_version, state: state}, [:deterministic])
+  def take(%{hall: _, control: _} = state, position, versions \\ nil) do
+    snapshot = %{position: position, evolution: @evolution_version, state: state}
+    snapshot = if versions, do: Map.put(snapshot, :versions, versions), else: snapshot
+    body = :erlang.term_to_binary(snapshot, [:deterministic])
     <<checksum(body)::binary, body::binary>>
   end
 

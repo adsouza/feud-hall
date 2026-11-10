@@ -36,6 +36,7 @@ defmodule FeudHall.Application.EventStore do
           position: pos_integer(),
           command_id: String.t(),
           hall_ms: non_neg_integer() | nil,
+          start_hall_ms: non_neg_integer() | nil,
           events: [map()],
           control_events: [map()]
         }

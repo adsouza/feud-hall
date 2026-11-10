@@ -42,7 +42,7 @@ def rss_kib():
 
 def fingerprint():
     paths = subprocess.check_output(
-        ["git", "ls-files", "-z", "--", "server/lib", "server/priv",
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "server/lib", "server/priv",
          "server/config/dev.exs", "server/config/config.exs", "server/mix.exs",
          "server/mix.lock", "server/.tool-versions"],
         cwd=SERVER.parent,

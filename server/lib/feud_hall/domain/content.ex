@@ -16,7 +16,7 @@ defmodule FeudHall.Domain.Content do
     declared stricter than another has a strictly lower carbohydrate ceiling.
   """
 
-  alias FeudHall.Domain.Dietary
+  alias FeudHall.Domain.{Dietary, Money, Random}
 
   @units [:g, :ml, :each]
   @origins [:plant, :mineral, :meat, :fish, :dairy, :egg, :honey, :gelatin, :animal_rennet, :animal_fat_stock]
@@ -57,13 +57,16 @@ defmodule FeudHall.Domain.Content do
   defp simulation_problems(catalog) do
     rules = get(catalog, :rules)
 
-    seed_problems(get(rules, :seed)) ++
-      kitchen_problems(get(rules, :kitchen)) ++
-      exposure_problems(get(rules, :exposure_permille)) ++
-      market_problems(catalog, get(rules, :market)) ++
-      demand_problems(catalog, get(rules, :demand)) ++
-      layout_problems(get(catalog, :layout)) ++
-      npc_problems(get(catalog, :npc_profiles))
+    problems =
+      seed_problems(get(rules, :seed)) ++
+        kitchen_problems(get(rules, :kitchen)) ++
+        exposure_problems(get(rules, :exposure_permille)) ++
+        market_problems(catalog, get(rules, :market)) ++
+        demand_problems(catalog, get(rules, :demand)) ++
+        layout_problems(get(catalog, :layout)) ++
+        npc_problems(get(catalog, :npc_profiles))
+
+    if problems == [], do: choice_weight_problems(rules), else: problems
   end
 
   defp get(map, key) when is_map(map), do: Map.get(map, key)
@@ -134,6 +137,7 @@ defmodule FeudHall.Domain.Content do
       hourly_problems(d.hourly_weights) ++
         variety_problems(d) ++
         profile_mix_problems(catalog, d.profile_mix) ++
+        segment_total_problems(segments) ++
         Enum.flat_map(segments, &segment_problems(catalog, &1))
     else
       [{:demand, :malformed}]
@@ -161,12 +165,18 @@ defmodule FeudHall.Domain.Content do
     if ok, do: [], else: [{:demand, :bad_profile_mix}]
   end
 
-  defp weights_ok?(values), do: Enum.all?(values, &nonneg_int?/1) and Enum.sum(values) > 0
+  defp weights_ok?(values),
+    do: Enum.all?(values, &nonneg_int?/1) and Enum.sum(values) in 1..Random.max_bound()
+
+  defp segment_total_problems(segments) do
+    if weights_ok?(Enum.map(segments, &get(&1, :weight))), do: [], else: [{:demand, :bad_segment_total}]
+  end
 
   defp segment_problems(catalog, s) do
     id = s.id
 
-    ranges_ok = range?(get(s, :budget)) and range?(get(s, :patience_hall_ms))
+    patience = Map.get(s, :patience_hall_ms, get(s, :patience_service_ms))
+    ranges_ok = range?(get(s, :budget)) and range?(patience)
 
     weights_ok =
       pos_int?(get(s, :weight)) and
@@ -186,7 +196,29 @@ defmodule FeudHall.Domain.Content do
         do: {:demand, id, problem}
   end
 
-  defp range?([lo, hi]), do: is_integer(lo) and is_integer(hi) and lo > 0 and lo <= hi
+  # Choice can put one weighted entry per slot, plus the option to leave.
+  # Bound that generated total as well as the authored segment/profile draws.
+  defp choice_weight_problems(rules) do
+    quality = get(rules, :quality_base)
+
+    if nonneg_int?(quality) do
+      max_exposure = rules.exposure_permille |> Map.values() |> Enum.max()
+      variety = rules.demand.variety_weight * min(rules.demand.variety_cap, 2)
+
+      for segment <- rules.demand.segments,
+          preference = segment.main_preference |> Map.values() |> Enum.max(),
+          score = (segment.price_weight + segment.wait_weight) * 1000 + segment.quality_weight * quality + preference,
+          total = @max_slots * div((score + variety) * max_exposure, 1000) + segment.leave_weight,
+          total > Random.max_bound(),
+          do: {:demand, segment.id, :choice_weights_too_large}
+    else
+      [{:rules, :bad_quality_base}]
+    end
+  end
+
+  defp range?([lo, hi]),
+    do: is_integer(lo) and is_integer(hi) and lo > 0 and lo <= hi and hi - lo + 1 <= Random.max_bound()
+
   defp range?(_), do: false
 
   defp layout_problems(layout) do
@@ -207,16 +239,32 @@ defmodule FeudHall.Domain.Content do
     end
   end
 
-  defp npc_problems(profiles) when is_list(profiles), do: Enum.flat_map(profiles, &npc_profile_problems/1)
+  defp npc_problems(profiles) when is_list(profiles) do
+    invalid = Enum.flat_map(profiles, &npc_profile_problems/1)
+
+    duplicates =
+      profiles
+      |> Enum.frequencies_by(&get(&1, :id))
+      |> Enum.sort()
+      |> Enum.flat_map(fn {id, n} -> if n > 1, do: [{:npc, id, :duplicate}], else: [] end)
+
+    invalid ++ duplicates
+  end
+
   defp npc_problems(_), do: [{:npc, nil, :bad_profile}]
 
   defp npc_profile_problems(p) do
     ok =
-      pos_int?(get(p, :price_permille)) and get(p, :policy) in @policies and pos_int?(get(p, :restock_days)) and
+      npc_id?(get(p, :id)) and pos_int?(get(p, :price_permille)) and get(p, :policy) in @policies and
+        pos_int?(get(p, :restock_days)) and
         get(p, :preferred_tier) in @tiers
 
     if ok, do: [], else: [{:npc, get(p, :id), :bad_profile}]
   end
+
+  # An operator ID is embedded in reserved command IDs and restaurant IDs.
+  defp npc_id?(id) when is_binary(id), do: Regex.match?(~r/\A[a-zA-Z0-9_-]{1,32}\z/, id)
+  defp npc_id?(_), do: false
 
   defp product_problems(p) do
     checks = [
@@ -244,6 +292,7 @@ defmodule FeudHall.Domain.Content do
         {length(Enum.uniq(line_ids)) == length(line_ids), :duplicate_line},
         {Enum.all?(r.claims, &(&1 in @claims)), :bad_claim},
         {Enum.all?([r.prep_ms, r.finish_ms, r.holding_ms], &(is_integer(&1) and &1 > 0)), :bad_duration},
+        {Money.menu_price?(get(r, :suggested_price)), :bad_suggested_price},
         {is_integer(r.unlock_cost) and r.unlock_cost >= 0, :bad_unlock_cost},
         {not r.starter or r.kind == :main, :non_main_starter}
       ]

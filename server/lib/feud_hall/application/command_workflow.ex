@@ -31,11 +31,11 @@ defmodule FeudHall.Application.CommandWorkflow do
   principal or system capability, never a client-supplied ID.
   """
 
-  alias FeudHall.Application.Diagnostics
+  alias FeudHall.Application.{Diagnostics, Replay}
   alias FeudHall.Application.Projections.Balances
   alias FeudHall.Domain.{Clock, Control, Hall}
 
-  @commands ~w(initialize_hall advance_clock create_restaurant open_stall close_stall unlock_recipe
+  @commands ~w(initialize_hall upgrade_simulation advance_clock create_restaurant open_stall close_stall unlock_recipe
                set_menu_price remove_menu_item set_substitution_policy submit_purchase_request
                cancel_purchase_request grant_allowance admit_visit cancel_tray accept_dessert decline_dessert
                cancel_dessert npc_plan)a
@@ -56,17 +56,14 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   @doc """
   Opens a runtime by replaying every committed batch from the store. A batch
-  that cannot be decoded stops the open with the store's error, and a store
-  that cannot be reached with `{:error, :unavailable}`. Options:
+  that cannot be decoded stops the open with the store's error. The fold must
+  cover the committed head, match stream versions, and pass state invariants.
+  An unreachable store returns `{:error, :unavailable}`. Options:
   `:epoch` (the authority epoch the store handle holds) and `:diagnostics`.
   """
   def open(store_mod, store, opts \\ []) do
-    with {:ok, batches} <- store_mod.read_from(store, 0),
-         state = batches |> Enum.flat_map(& &1.events) |> Hall.replay(nil),
-         control = batches |> Enum.flat_map(& &1.control_events) |> Control.replay(nil),
-         %{} = versions <- store_mod.stream_versions(store, hall_stream(state)),
-         position when is_integer(position) <- store_mod.head(store) do
-      from_state(store_mod, store, %{hall: state, control: control, position: position, versions: versions}, opts)
+    with {:ok, restored} <- Replay.load(store_mod, store) do
+      from_state(store_mod, store, restored, opts)
     end
   end
 
@@ -204,9 +201,17 @@ defmodule FeudHall.Application.CommandWorkflow do
     case open(runtime.store_mod, runtime.store, epoch: runtime.epoch, diagnostics: runtime.diagnostics) do
       {:ok, reopened} ->
         case runtime.store_mod.receipt(runtime.store, command_id) do
-          {:ok, receipt} -> {:committed, receipt, reopened}
-          :none -> {:not_committed, reopened}
-          {:error, reason} -> {:error, reason, runtime}
+          {:ok, %{position: position} = receipt} when is_integer(position) and position <= reopened.position ->
+            {:committed, receipt, reopened}
+
+          {:ok, _receipt} ->
+            {:error, :conflict, runtime}
+
+          :none ->
+            {:not_committed, reopened}
+
+          {:error, reason} ->
+            {:error, reason, runtime}
         end
 
       # The store could not be read: the runtime stays as it was, still awaiting resolution.
@@ -235,7 +240,7 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   defp validate(_), do: {:error, :malformed_envelope}
 
-  @reserved_prefixes ~w(adv: tick: recovery: start: npc: DS:)
+  @reserved_prefixes ~w(adv: tick: recovery: start: npc: DS: upgrade:)
 
   @doc """
   True when `command_id` begins with a prefix reserved for system and NPC
@@ -428,6 +433,5 @@ defmodule FeudHall.Application.CommandWorkflow do
   end
 
   @doc "The hall stream name for a hall state (nil before initialisation)."
-  def hall_stream(nil), do: nil
-  def hall_stream(state), do: "hall:" <> state.hall_id
+  defdelegate hall_stream(state), to: Replay
 end

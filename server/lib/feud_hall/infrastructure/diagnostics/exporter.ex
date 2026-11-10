@@ -3,7 +3,7 @@ defmodule FeudHall.Infrastructure.Diagnostics.Exporter do
   A bounded, non-blocking diagnostic exporter.
 
   `emit/2` is a cast: it never waits for the exporter, let alone for an
-  export. The backlog (records waiting plus those in the current export) is
+  export. The backlog (mailbox, internal queue and in-flight records) is
   capped by `:max_queue`; a record arriving at a full backlog is dropped and
   counted. Records leave in batches of at most `:batch` through the `:export`
   function (`list -> :ok`), run in a separate monitored process that is killed
@@ -18,11 +18,26 @@ defmodule FeudHall.Infrastructure.Diagnostics.Exporter do
 
   use GenServer
 
+  @registry Module.concat(__MODULE__, Registry)
+  @free 1
+  @dropped 2
+
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @impl FeudHall.Application.Diagnostics
   def emit(exporter, record) do
-    GenServer.cast(exporter, {:emit, record})
+    case Registry.lookup(@registry, exporter) do
+      [{^exporter, credits}] ->
+        if :atomics.sub_get(credits, @free, 1) >= 0 do
+          GenServer.cast(exporter, {:emit, record})
+        else
+          :atomics.add(credits, @free, 1)
+          :atomics.add(credits, @dropped, 1)
+        end
+
+      [] ->
+        :ok
+    end
   end
 
   @spec stats(GenServer.server()) :: %{
@@ -35,55 +50,67 @@ defmodule FeudHall.Infrastructure.Diagnostics.Exporter do
 
   @impl true
   def init(opts) do
-    {:ok,
-     %{
-       export: Keyword.fetch!(opts, :export),
-       max_queue: Keyword.fetch!(opts, :max_queue),
-       batch: Keyword.fetch!(opts, :batch),
-       timeout_ms: Keyword.fetch!(opts, :timeout_ms),
-       on_event: Keyword.get(opts, :on_event),
-       queue: :queue.new(),
-       queue_len: 0,
-       inflight: nil,
-       exported: 0,
-       dropped: 0,
-       failed: 0
-     }}
-  end
+    max_queue = Keyword.fetch!(opts, :max_queue)
+    batch = Keyword.fetch!(opts, :batch)
+    timeout = Keyword.fetch!(opts, :timeout_ms)
 
-  @impl true
-  def handle_cast({:emit, record}, state) do
-    if backlog(state) >= state.max_queue do
-      {:noreply, %{state | dropped: state.dropped + 1}}
+    with true <- Enum.all?([max_queue, batch, timeout], &(is_integer(&1) and &1 > 0)) do
+      Process.flag(:trap_exit, true)
+      credits = :atomics.new(2, signed: true)
+      :ok = :atomics.put(credits, @free, max_queue)
+      {:ok, _} = Registry.register(@registry, self(), credits)
+
+      {:ok,
+       %{
+         export: Keyword.fetch!(opts, :export),
+         credits: credits,
+         max_queue: max_queue,
+         batch: batch,
+         timeout_ms: timeout,
+         on_event: Keyword.get(opts, :on_event),
+         queue: :queue.new(),
+         queue_len: 0,
+         inflight: nil,
+         exported: 0,
+         failed: 0
+       }}
     else
-      {:noreply, maybe_export(%{state | queue: :queue.in(record, state.queue), queue_len: state.queue_len + 1})}
+      false -> {:stop, :invalid_exporter_limits}
     end
   end
 
   @impl true
+  def handle_cast({:emit, record}, state),
+    do: {:noreply, maybe_export(%{state | queue: :queue.in(record, state.queue), queue_len: state.queue_len + 1})}
+
+  @impl true
   def handle_call(:stats, _from, state) do
-    {:reply, %{queued: backlog(state), exported: state.exported, dropped: state.dropped, failed: state.failed}, state}
+    queued = state.max_queue - max(0, :atomics.get(state.credits, @free))
+    dropped = :atomics.get(state.credits, @dropped)
+    {:reply, %{queued: queued, exported: state.exported, dropped: dropped, failed: state.failed}, state}
   end
 
   @impl true
-  def handle_info({:export_result, pid, result}, %{inflight: %{pid: pid}} = state) do
+  def handle_info({:export_result, pid, result}, %{inflight: %{pid: pid, timed_out?: false}} = state) do
     outcome = if result == :ok, do: :exported, else: :failed
     {:noreply, finish(state, outcome)}
   end
 
   def handle_info({:export_timeout, pid}, %{inflight: %{pid: pid}} = state) do
     Process.exit(pid, :kill)
-    {:noreply, finish(state, :timeout)}
+    {:noreply, put_in(state.inflight.timed_out?, true)}
   end
 
   # The export process died without reporting a result.
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{inflight: %{ref: ref}} = state) do
-    {:noreply, finish(state, :failed)}
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{inflight: %{ref: ref, timed_out?: timed_out?}} = state) do
+    {:noreply, finish(state, if(timed_out?, do: :timeout, else: :failed))}
   end
 
   def handle_info(_stale, state), do: {:noreply, state}
 
-  defp backlog(state), do: state.queue_len + if(state.inflight, do: state.inflight.count, else: 0)
+  @impl true
+  def terminate(_reason, %{inflight: %{pid: pid}}), do: Process.exit(pid, :kill)
+  def terminate(_reason, _state), do: :ok
 
   defp maybe_export(%{inflight: nil, queue_len: len} = state) when len > 0 do
     count = min(len, state.batch)
@@ -92,22 +119,30 @@ defmodule FeudHall.Infrastructure.Diagnostics.Exporter do
     export = state.export
 
     {pid, ref} =
-      spawn_monitor(fn ->
-        result =
-          try do
-            export.(:queue.to_list(batch))
-          rescue
-            _ -> :error
-          catch
-            _, _ -> :error
-          end
+      :erlang.spawn_opt(
+        fn ->
+          result =
+            try do
+              export.(:queue.to_list(batch))
+            rescue
+              _ -> :error
+            catch
+              _, _ -> :error
+            end
 
-        send(parent, {:export_result, self(), result})
-      end)
+          send(parent, {:export_result, self(), result})
+        end,
+        [:link, :monitor]
+      )
 
     timer = Process.send_after(self(), {:export_timeout, pid}, state.timeout_ms)
 
-    %{state | queue: rest, queue_len: len - count, inflight: %{pid: pid, ref: ref, timer: timer, count: count}}
+    %{
+      state
+      | queue: rest,
+        queue_len: len - count,
+        inflight: %{pid: pid, ref: ref, timer: timer, count: count, timed_out?: false}
+    }
   end
 
   defp maybe_export(state), do: state
@@ -115,6 +150,7 @@ defmodule FeudHall.Infrastructure.Diagnostics.Exporter do
   defp finish(%{inflight: %{ref: ref, timer: timer, count: count}} = state, outcome) do
     Process.cancel_timer(timer)
     Process.demonitor(ref, [:flush])
+    :atomics.add(state.credits, @free, count)
     if state.on_event, do: send(state.on_event, {:exporter, outcome, count})
 
     state =

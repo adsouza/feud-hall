@@ -39,7 +39,9 @@ defmodule FeudHall.Application.Recovery do
        owner, so a retry after a crash receives the original receipt
        (`:replayed`) instead of a second reconciliation. An epoch that began
        before any hall existed has no hall to resume and is not reconciled.
-    6. Execute `{:start_availability, %{epoch_id: "<owner>:<epoch>"}}` with
+    6. For a hall initialized before the shared simulation, append its
+       versioned simulation upgrade with the authority's fence.
+    7. Execute `{:start_availability, %{epoch_id: "<owner>:<epoch>"}}` with
        command ID `"start:<owner>:<epoch>"`.
 
   Step 1 writes only the scope's authority row; steps 2 to 4 only read, so a
@@ -64,9 +66,10 @@ defmodule FeudHall.Application.Recovery do
   (there is none yet) and is never invoked while replaying.
   """
 
-  alias FeudHall.Application.{CommandWorkflow, Diagnostics}
-  alias FeudHall.Domain.{Control, Hall}
-  alias FeudHall.Domain.Hall.Invariants
+  alias FeudHall.Application.{CommandWorkflow, Diagnostics, Replay}
+  alias FeudHall.Domain.{Content, Control}
+  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.Domain.Hall.SimulationUpgrade
 
   @authority {:system, :authority}
   # Keeps "recovery:<owner>:<epoch>" within the workflow's 64-byte command IDs for any bigint epoch.
@@ -131,18 +134,18 @@ defmodule FeudHall.Application.Recovery do
     with head when is_integer(head) <- store_mod.head(store),
          {:ok, base, skipped} <-
            base(store_mod, store, head, Keyword.get(opts, :decode_snapshot), skip_reporter(opts, scope)),
-         {:ok, tail} <- store_mod.read_from(store, base.position),
-         :ok <- contiguous(tail, base.position, head),
-         restored = restore(base, tail),
-         :ok <- check(restored.hall),
-         {:ok, runtime} <- runtime(store_mod, store, restored, epoch, opts),
+         {:ok, restored} <- Replay.load(store_mod, store, base: base, head: head),
+         :ok <- validate_live_content(restored.hall),
+         {:ok, runtime} <-
+           CommandWorkflow.from_state(store_mod, store, restored, epoch: epoch, diagnostics: opts[:diagnostics]),
          {:ok, runtime, recovery_id, reconciliation} <- reconcile(runtime),
+         {:ok, runtime} <- upgrade(runtime, owner, epoch),
          {:ok, runtime} <- start(runtime, "#{owner}:#{epoch}") do
       {:ok, runtime,
        %{
          snapshot: base.snapshot,
          skipped: skipped,
-         tail_batches: length(tail),
+         tail_batches: restored.tail_batches,
          recovery_id: recovery_id,
          reconciliation: reconciliation
        }}
@@ -205,8 +208,8 @@ defmodule FeudHall.Application.Recovery do
 
   defp usable(%{position: position, body: body}, _head, decode) do
     case decode.(body) do
-      {:ok, %{position: ^position, state: %{hall: hall, control: control}}} ->
-        {:ok, %{snapshot: position, position: position, hall: hall, control: control}}
+      {:ok, %{position: ^position, state: %{hall: hall, control: control}} = snapshot} ->
+        {:ok, %{snapshot: position, position: position, hall: hall, control: control, versions: snapshot[:versions]}}
 
       {:ok, %{position: other}} when other != position ->
         {:skip, :position_mismatch}
@@ -219,48 +222,11 @@ defmodule FeudHall.Application.Recovery do
     end
   end
 
-  # --- restore and check -------------------------------------------------------
-
-  # Batch positions are contiguous (each stored batch advances the head by one), so the tail
-  # after `from` must be exactly `from + 1 .. head`.
-  defp contiguous(tail, from, head) do
-    expected = Enum.to_list((from + 1)..head//1)
-
-    case Enum.zip(expected, Enum.map(tail, & &1.position)) |> Enum.find(fn {want, got} -> want != got end) do
-      {missing, _found} ->
-        {:error, {:missing_batch, missing}}
-
-      nil when length(tail) < length(expected) ->
-        {:error, {:missing_batch, Enum.at(expected, length(tail))}}
-
-      nil when length(tail) > length(expected) ->
-        {:error, {:batch_beyond_head, Enum.at(tail, length(expected)).position}}
-
-      nil ->
-        :ok
-    end
+  defp validate_live_content(%{catalog: %{rules: %{kitchen: _}} = catalog}) do
+    with {:error, problems} <- Content.validate(catalog), do: {:error, {:invalid_content, problems}}
   end
 
-  defp restore(base, tail) do
-    %{
-      hall: tail |> Enum.flat_map(& &1.events) |> Hall.replay(base.hall),
-      control: tail |> Enum.flat_map(& &1.control_events) |> Control.replay(base.control),
-      position: if(tail == [], do: base.position, else: List.last(tail).position)
-    }
-  end
-
-  defp check(hall) do
-    with {:error, problems} <- Invariants.check(hall), do: {:error, {:invariants, problems}}
-  end
-
-  defp runtime(store_mod, store, restored, epoch, opts) do
-    with %{} = versions <- store_mod.stream_versions(store, CommandWorkflow.hall_stream(restored.hall)) do
-      CommandWorkflow.from_state(store_mod, store, Map.put(restored, :versions, versions),
-        epoch: epoch,
-        diagnostics: Keyword.get(opts, :diagnostics)
-      )
-    end
-  end
+  defp validate_live_content(_hall), do: :ok
 
   # --- new transitions ---------------------------------------------------------
 
@@ -291,6 +257,29 @@ defmodule FeudHall.Application.Recovery do
           other ->
             failure(other)
         end
+    end
+  end
+
+  defp upgrade(runtime, owner, epoch) do
+    if SimulationUpgrade.needed?(runtime.state) do
+      envelope = %{
+        command_id: "upgrade:#{owner}:#{epoch}",
+        actor: @authority,
+        command: {:upgrade_simulation, %{defaults: SliceCatalog.catalog()}}
+      }
+
+      case CommandWorkflow.execute(runtime, envelope) do
+        {status, %{outcome: :accepted}, runtime} when status in [:accepted, :replayed] ->
+          {:ok, runtime}
+
+        {status, %{outcome: {:rejected, reason}}, runtime} when status in [:rejected, :replayed] ->
+          {:error, {:upgrade_rejected, reason}, runtime}
+
+        other ->
+          failure(other)
+      end
+    else
+      {:ok, runtime}
     end
   end
 

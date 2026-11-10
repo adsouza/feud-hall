@@ -36,6 +36,22 @@ defmodule FeudHall.Application.DailyActivityTest do
            ] = DailyActivity.deltas(batch(0, events))
   end
 
+  test "a midnight tick attributes activity on both sides to the respective days" do
+    day = Clock.day()
+    visits = [%{type: :visit_admitted, restaurant_id: "r1"}, %{type: :tray_accepted, restaurant_id: "r1"}]
+
+    events =
+      visits ++
+        [%{type: :clock_advanced, to: 2 * day - 1}] ++
+        visits ++
+        [%{type: :clock_advanced, to: 2 * day}] ++ visits
+
+    assert [
+             %{day: 1, restaurant_id: "r1", visits_admitted: 2, trays_accepted: 2},
+             %{day: 2, restaurant_id: "r1", visits_admitted: 1, trays_accepted: 1}
+           ] = DailyActivity.deltas(Map.put(batch(2 * day, events), :start_hall_ms, 2 * day - 24))
+  end
+
   test "a batch without hall time, or without counted events, has no deltas" do
     assert DailyActivity.deltas(batch(nil, [%{type: :visit_admitted, restaurant_id: "r1"}])) == []
     assert DailyActivity.deltas(batch(5, [])) == []

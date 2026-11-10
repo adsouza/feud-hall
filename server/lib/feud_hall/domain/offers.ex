@@ -13,7 +13,7 @@ defmodule FeudHall.Domain.Offers do
   not pass it.
   """
 
-  alias FeudHall.Domain.{Clock, Dietary, Inventory, Kitchen, Substitution}
+  alias FeudHall.Domain.{Clock, Dietary, Inventory, Kitchen, Money, Substitution}
 
   @doc """
   Quotes an initial main/optional-drink tray for a stall.
@@ -33,6 +33,8 @@ defmodule FeudHall.Domain.Offers do
          {:ok, timing} <- timing(state, stall.id, components) do
       {:ok,
        Map.merge(timing, %{
+         content_hash: state.content_hash,
+         requirement: visit.requirement,
          stall_id: stall.id,
          restaurant_id: restaurant.id,
          components: components,
@@ -52,8 +54,11 @@ defmodule FeudHall.Domain.Offers do
          {:ok, timing} <- timing(state, stall.id, [dessert]) do
       {:ok,
        Map.merge(timing, %{
+         content_hash: state.content_hash,
+         requirement: visit.requirement,
          stall_id: stall.id,
          restaurant_id: restaurant.id,
+         visit_id: Map.get(visit, :id),
          components: [dessert],
          total: dessert.price
        })}
@@ -61,17 +66,19 @@ defmodule FeudHall.Domain.Offers do
   end
 
   @doc """
-  Public terms a guest confirms: identity, version, price, and the resolved
-  ingredient variant of every component, plus the maximum service deadline.
+  Public terms a guest confirms: stall and visit scope, pinned dietary
+  requirement, content and recipe identity, price, resolved ingredients, and
+  the maximum service deadline.
   """
   def terms(quote) do
-    %{
-      components:
-        Enum.map(quote.components, fn c ->
-          %{kind: c.kind, recipe_id: c.recipe_id, recipe_version: c.recipe_version, price: c.price, variant: c.variant}
-        end),
-      deadline: quote.deadline
-    }
+    quote
+    |> Map.take([:content_hash, :requirement, :stall_id, :restaurant_id, :visit_id, :deadline])
+    |> Map.put(
+      :components,
+      Enum.map(quote.components, fn component ->
+        Map.take(component, [:kind, :recipe_id, :recipe_version, :price, :variant, :lines, :carbs_mg])
+      end)
+    )
   end
 
   @doc """
@@ -84,7 +91,7 @@ defmodule FeudHall.Domain.Offers do
 
     cond do
       not is_map(confirmed) -> {:error, :confirmation_required}
-      Map.get(confirmed, :components) != current.components -> {:error, :stale_terms}
+      Map.delete(confirmed, :deadline) != Map.delete(current, :deadline) -> {:error, :stale_terms}
       not is_integer(Map.get(confirmed, :deadline)) -> {:error, :stale_terms}
       confirmed.deadline > current.deadline -> {:error, :stale_terms}
       confirmed.deadline < quote.earliest_completion -> {:error, :stale_terms}
@@ -163,9 +170,42 @@ defmodule FeudHall.Domain.Offers do
 
   defp menu_price(restaurant, recipe_id) do
     case Map.fetch(restaurant.menu, recipe_id) do
-      {:ok, price} -> {:ok, price}
+      {:ok, price} -> if Money.menu_price?(price), do: {:ok, price}, else: {:error, :invalid_price}
       :error -> {:error, :not_on_menu}
     end
+  end
+
+  @doc "Start intervals [from, to) during which a stocked main meets both service deadlines."
+  def main_start_ranges(state, stall_id, course, to, busy?) do
+    cutoff = Clock.service_cutoff(state.now)
+    window = state.catalog.rules.service_window_ms
+
+    if busy? do
+      ranges(state, stall_id, course, state.now, min(to, cutoff), cutoff, window, [])
+    else
+      duration = course.prep_ms + course.finish_ms + state.catalog.rules.handover_ms
+      last = min(to, cutoff - duration)
+      if duration <= window and state.now < last, do: [{state.now, last}], else: []
+    end
+  end
+
+  defp ranges(_state, _sid, _course, from, to, _cutoff, _window, acc) when from >= to, do: Enum.reverse(acc)
+
+  defp ranges(state, sid, course, from, to, cutoff, window, acc) do
+    {completion, rate, stable} = Kitchen.completion_forecast(state, sid, course, from)
+    length = if stable == :infinity, do: to - from, else: min(to - from, stable + 1)
+
+    # On this segment completion either stays fixed or rises one-for-one.
+    # The service window moves with the order while the cleaning cutoff is fixed.
+    {first, last} =
+      case rate do
+        0 when completion < cutoff -> {max(from, completion - window), from + length}
+        1 when completion - from <= window -> {from, min(from + length, from + cutoff - completion)}
+        _ -> {from, from}
+      end
+
+    acc = if first < last, do: [{first, last} | acc], else: acc
+    ranges(state, sid, course, from + length, to, cutoff, window, acc)
   end
 
   # The expected completion comes from the stall's kitchen queue, so quotes,

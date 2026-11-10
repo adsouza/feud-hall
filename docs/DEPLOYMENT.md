@@ -65,6 +65,10 @@ without the actual built artifact is insufficient for rollback or verification.
    pause gameplay clocks before migrating, carrying that unavailable interval
    into handover/recovery. Migration failure must keep the write gate closed;
    readiness on an old instance cannot reopen it against incompatible storage.
+   For the Milestone 2 daily-activity attribution correction, stop any old
+   daily-activity projector before migration. The migration clears its derived
+   rows and resets its checkpoint. Run `Postgres.DailyActivityProjector.catch_up/1`
+   with the new code and verify its checkpoint before exposing those reports.
 4. **Hand over authority.** Drain/stop the old authority under the defined
    availability protocol, acquire a newer database-fenced ownership epoch, and
    prevent the previous instance from appending or publishing as authority.

@@ -115,6 +115,7 @@ defmodule FeudHall.Infrastructure.InMemoryEventStore do
           position: position,
           command_id: request.command_id,
           hall_ms: request.context.hall_ms,
+          start_hall_ms: (store.batches != [] && hd(store.batches).hall_ms) || nil,
           events: events,
           control_events: control_events
         }

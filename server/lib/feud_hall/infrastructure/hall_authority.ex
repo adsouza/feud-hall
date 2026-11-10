@@ -669,7 +669,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   defp snapshot(%{runtime: rt} = s) do
     started = System.monotonic_time(:microsecond)
     mod = rt.store_mod
-    body = Snapshot.take(%{hall: rt.state, control: rt.control}, rt.position)
+    body = Snapshot.take(%{hall: rt.state, control: rt.control}, rt.position, rt.versions)
 
     case shielded(fn -> mod.save_snapshot(rt.store, rt.position, body) end, {:error, :unavailable}) do
       {:ok, store, id} ->
@@ -708,8 +708,10 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   # Reads the saved body back, checks it decodes to the live head, then marks it verified and prunes.
   defp verify(mod, store, id, rt) do
     with {:ok, body} <- stored_body(mod, store, id),
-         {:ok, %{position: position, state: state}} <- Snapshot.load(body),
-         true <- (position == rt.position and state == %{hall: rt.state, control: rt.control}) || {:error, :mismatch},
+         {:ok, %{position: position, state: state, versions: versions}} <- Snapshot.load(body),
+         true <-
+           (position == rt.position and versions == rt.versions and state == %{hall: rt.state, control: rt.control}) ||
+             {:error, :mismatch},
          {:ok, store} <- mod.mark_snapshot_verified(store, id) do
       mod.prune_snapshots(store, @keep_verified)
     end

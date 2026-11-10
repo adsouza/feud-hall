@@ -77,14 +77,13 @@ defmodule FeudHall.Infrastructure.Postgres.DailyActivityProjector do
   def rebuild(repo) do
     {:ok, :ok} =
       repo.transaction(fn ->
-        repo.query!("truncate daily_activity")
-
         repo.query!(
           "insert into projector_checkpoints (name, position) values ($1, 0) " <>
             "on conflict (name) do update set position = 0",
           [@name]
         )
 
+        repo.query!("truncate daily_activity")
         :ok
       end)
 

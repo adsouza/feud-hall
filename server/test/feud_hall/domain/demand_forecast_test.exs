@@ -3,7 +3,7 @@ defmodule FeudHall.Domain.DemandForecastTest do
 
   import FeudHall.Fixtures, except: [stocked_world: 0, stocked_world: 1]
 
-  alias FeudHall.Domain.{Clock, Demand, Market}
+  alias FeudHall.Domain.{Clock, Demand, Kitchen, Market, Offers}
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.Hall.{Evolver, Invariants}
   alias FeudHall.Infrastructure.EventCodec
@@ -16,6 +16,14 @@ defmodule FeudHall.Domain.DemandForecastTest do
   @operating_hours SliceCatalog.rules().demand.operating_hours_ms
   # A stocked world starts at the first market clearing, where its stock was filled.
   @t0 SliceCatalog.rules().market.clear_every_hall_ms
+
+  defp shortest_main_duration(state) do
+    state.catalog.recipes
+    |> Map.values()
+    |> Enum.filter(&(&1.kind == :main))
+    |> Enum.map(&(&1.prep_ms + &1.finish_ms + state.catalog.rules.handover_ms))
+    |> Enum.min()
+  end
 
   defp day_closed(events), do: Enum.filter(events, &(&1.type == :day_closed))
 
@@ -52,21 +60,65 @@ defmodule FeudHall.Domain.DemandForecastTest do
 
   describe "business-equivalent observation" do
     test "a restaurant open for 11 of the 22 accessible hours is half an equivalent" do
-      # Observed from the stocking at 00:04 to 03:00 and from 05:00 until it closes.
-      closing = Clock.cleaning_end_of(0) + 11 * @hour - (Clock.cleaning_start_of(0) - @t0)
-      {state, events} = stocked_world() |> close_at(closing)
+      world = stocked_world()
+      last_start = Clock.cleaning_start_of(0) - shortest_main_duration(elem(world, 0))
+      closing = Clock.cleaning_end_of(0) + 11 * @hour - (last_start - @t0)
+      {state, events} = close_at(world, closing)
 
       assert [%{day: 0, equivalents_millis: 500}] = day_closed(events)
       assert state.demand.observed_ms == %{}
     end
 
     test "cleaning hours never count, and an all-day business stays below one equivalent here" do
-      {_state, events} = stocked_world() |> advance_hall(@day)
+      {state, events} = stocked_world() |> advance_hall(@day)
 
-      accessible = @operating_hours - @t0
+      accessible = @operating_hours - @t0 - shortest_main_duration(state)
       assert [%{equivalents_millis: millis}] = day_closed(events)
       assert millis == div(accessible * 1000, @operating_hours)
       assert millis < 1000
+    end
+
+    test "orderability ends at the exact latest start and does not depend on tick partitioning" do
+      world = stocked_world(unlock: false)
+      {start, _} = world
+      recipe = start.catalog.recipes["bean_tacos"]
+      duration = recipe.prep_ms + recipe.finish_ms + start.catalog.rules.handover_ms
+      unavailable = Clock.cleaning_start_of(0) - duration
+      {before, _} = advance_hall(world, unavailable - 24)
+      {boundary, _} = at_boundary = advance_hall(world, unavailable)
+      assert Demand.operating(%{before | now: unavailable - 1}) == ["r1"]
+      assert Demand.operating(boundary) == []
+
+      {one, _} = advance_hall(world, unavailable + 24)
+      {partitioned, _} = advance_hall(at_boundary, unavailable + 24)
+      assert one == partitioned
+      assert one.demand.observed_ms["r1"] == unavailable - @t0
+    end
+
+    test "kitchen forecast ranges agree with checkout on a busy stall across a service-window boundary" do
+      world = stocked_world(unlock: false)
+
+      {state, _} =
+        world
+        |> simulated_visit("d1", "bean_tacos")
+        |> simulated_visit("d2", "bean_tacos")
+        |> advance_hall(@t0 + 24)
+
+      # Existing orders are fixed while probing different arrival times.
+      course = state.catalog.recipes["bean_tacos"]
+      {time, _rate, _valid} = Kitchen.completion_forecast(state, "s001", course, state.now)
+      state = put_in(state.catalog.rules.service_window_ms, time - state.now - 20)
+      visit = %{requirement: %{profile_id: nil, excludes: [], carb_ceiling_mg: nil}, carbs_reserved: 0, carbs_served: 0}
+      stop = state.now + 80
+      ranges = Offers.main_start_ranges(state, "s001", course, stop, true)
+
+      assert ranges != []
+      assert Enum.any?(ranges, fn {from, _} -> from > state.now end)
+
+      for now <- state.now..(stop - 1) do
+        offer? = match?({:ok, _}, Offers.quote_tray(%{state | now: now}, "s001", "bean_tacos", nil, visit))
+        assert Enum.any?(ranges, fn {from, to} -> now >= from and now < to end) == offer?
+      end
     end
 
     test "clock_advanced records the operating list only when it changes; the evolver credits the last one" do

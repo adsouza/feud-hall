@@ -30,6 +30,20 @@ defmodule FeudHall.Infrastructure.ExporterTest do
     assert count == length(batch)
   end
 
+  test "mailbox admission stays bounded while the exporter is suspended" do
+    pid = start(export: fn _ -> :ok end, max_queue: 3)
+    :ok = :sys.suspend(pid)
+
+    try do
+      for _ <- 1..1_000, do: assert(:ok = Exporter.emit(pid, %{name: :test}))
+      assert Process.info(pid, :message_queue_len) == {:message_queue_len, 3}
+    after
+      :sys.resume(pid)
+    end
+
+    assert %{dropped: 997, exported: 3, queued: 0} = wait_for(pid, &(&1.exported == 3))
+  end
+
   test "records are exported in batches of at most the batch size" do
     test = self()
 

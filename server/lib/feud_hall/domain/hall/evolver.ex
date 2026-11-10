@@ -35,6 +35,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
 
   alias FeudHall.Domain.{Demand, Inventory, Market, Random}
 
+  alias FeudHall.Domain.Hall.SimulationUpgrade
+
   @ledger %{cash: 0, raw: 0, wip: 0, cost_of_sales: 0, waste: 0, capex: 0, capital: 0, revenue: 0}
 
   def ledger_accounts, do: Map.keys(@ledger)
@@ -93,6 +95,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
     state = update_in(state, [:demand], &Demand.observe_interval(&1, e, to - state.now))
     %{state | now: to}
   end
+
+  def evolve(state, %{type: :hall_simulation_upgraded} = event), do: SimulationUpgrade.evolve(state, event)
 
   def evolve(state, %{type: :day_closed} = e) do
     state = Map.update!(state, :demand, &Demand.close(&1, e, state.catalog))

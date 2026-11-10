@@ -64,11 +64,11 @@ defmodule FeudHall.Domain.Hall.Advance do
   defp loop(state, target, acc) do
     case next_due(state, target) do
       nil ->
-        tail = if target > state.now, do: [clock_advanced(state, target)], else: []
+        tail = if target > state.now, do: clock_advanced(state, target), else: []
         [tail | acc] |> Enum.reverse() |> Enum.concat()
 
       {at, _class, _id, ref} ->
-        tick = if at > state.now, do: [clock_advanced(state, at)], else: []
+        tick = if at > state.now, do: clock_advanced(state, at), else: []
         state = Enum.reduce(tick, state, &Evolver.evolve(&2, &1))
         events = handle(state, ref)
         state = Enum.reduce(events, state, &Evolver.evolve(&2, &1))
@@ -76,14 +76,20 @@ defmodule FeudHall.Domain.Hall.Advance do
     end
   end
 
-  # Who operated over the interval is decided from the state it starts in and
-  # recorded; the evolver only reads it. Every state change inside a day is a
-  # boundary or a command, so the list is constant between them. The list is
-  # written only when it differs from the last one recorded (`demand.operating`),
-  # which depends on the state alone, so partitioning a span changes which
-  # `clock_advanced` events carry it but neither any other event nor the state.
-  defp clock_advanced(state, to),
-    do: Map.merge(%{type: :clock_advanced, to: to}, Demand.operating_change(state.demand, Demand.operating(state)))
+  # Record every change within the interval. The clock event ending an
+  # interval credits its operating list, even if the next interval differs.
+  defp clock_advanced(state, to) do
+    starts = Demand.operating_intervals(state, to)
+    ends = starts |> Enum.drop(1) |> Enum.map(&elem(&1, 0)) |> Kernel.++([to])
+
+    {events, _last} =
+      Enum.zip_reduce(starts, ends, {[], state.demand.operating}, fn {_from, operating}, endpoint, {acc, last} ->
+        changed = if operating == last, do: %{}, else: %{operating: operating}
+        {[Map.merge(%{type: :clock_advanced, to: endpoint}, changed) | acc], operating}
+      end)
+
+    Enum.reverse(events)
+  end
 
   defp next_due(state, target) do
     classes()

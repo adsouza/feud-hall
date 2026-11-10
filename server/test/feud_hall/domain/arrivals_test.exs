@@ -24,6 +24,25 @@ defmodule FeudHall.Domain.ArrivalsTest do
   defp empty_hall(catalog \\ SliceCatalog.catalog()),
     do: run!({nil, []}, {:initialize_hall, %{hall_id: "hall-1", catalog: catalog}}, {:system, :admin}, "init")
 
+  test "old Project B catalogs draw patience in service time before converting" do
+    catalog = SliceCatalog.catalog()
+
+    legacy =
+      update_in(catalog.rules.demand.segments, fn segments ->
+        Enum.map(segments, fn segment ->
+          {range, segment} = Map.pop!(segment, :patience_hall_ms)
+          Map.put(segment, :patience_service_ms, range)
+        end)
+      end)
+
+    assert :ok = FeudHall.Domain.Content.validate(legacy)
+    {modern, rng} = Demand.draw_diner(catalog, 111)
+    {old, ^rng} = Demand.draw_diner(legacy, 111)
+    assert old.patience_hall_ms == Clock.service_duration(modern.patience_hall_ms)
+    assert old.profile_id == modern.profile_id
+    assert old.budget == modern.budget
+  end
+
   # `{at, event}` for every `diner_arrived`, timed by the clock it was recorded at.
   defp arrivals(events) do
     {_now, timed} =

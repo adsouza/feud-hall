@@ -14,7 +14,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
   @schema 1
 
   @atoms ~w(
-    hall_initialized clock_advanced hall_cleaning_started hall_cleaning_ended restaurant_created
+    hall_initialized hall_simulation_upgraded clock_advanced hall_cleaning_started hall_cleaning_ended restaurant_created
     starter_grant_issued stall_opened stall_closed recipe_unlocked menu_price_set menu_item_removed
     substitution_policy_set stock_purchased stock_spoiled allowance_granted visit_admitted tray_accepted
     reservation_replaced preparation_started preparation_completed tray_served tray_cancelled
@@ -41,7 +41,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
     operating_hours_ms hourly_weights segments profile_mix variety_weight variety_cap
     patience_service_ms drink_attach_permille dessert_appetite_permille price_weight quality_weight
     wait_weight leave_weight main_preference slot_id tier quiet standard busy prime price_permille
-    restock_days preferred_tier stock requests by_key batch next_clear_at rng
+    restock_days preferred_tier stock requests by_key batch next_clear_at rng next_day_at acc_at
     stage_started stage_completed handover_started stage prep finish done_at item tray estimated_completion
     purchase_requested purchase_request_cancelled market_cleared request_id max_price_per_kunit replaces
     prices fills unfilled price_above_limit insufficient_cash insufficient_storage stock_exhausted

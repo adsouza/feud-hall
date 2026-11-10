@@ -34,6 +34,13 @@ defmodule FeudHall.Domain.Market do
     end
   end
 
+  @doc "Opening stock is the target at the demand floor, within the delivery cap."
+  def opening_stock(%{rules: %{market: market, demand: demand}}) do
+    Map.new(market.target_stock_per_equivalent, fn {product, per_equivalent} ->
+      {product, min(div(per_equivalent * demand.equivalent_floor_millis, 1_000), market.replenish_cap[product])}
+    end)
+  end
+
   @doc """
   Adds `request` under `request_id`, replacing any pending request from the same
   restaurant for the same product.

@@ -6,7 +6,16 @@ defmodule FeudHall.Application.RecoveryTest do
   alias FeudHall.Domain.{Clock, Control, Hall}
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.Hall.Invariants
-  alias FeudHall.Infrastructure.{HallAuthority, InMemoryEventStore, ManualClock, PostgresEventStore, Repo, Snapshot}
+
+  alias FeudHall.Infrastructure.{
+    EventCodec,
+    HallAuthority,
+    InMemoryEventStore,
+    ManualClock,
+    PostgresEventStore,
+    Repo,
+    Snapshot
+  }
 
   @scope "hall:test"
   @authority {:system, :authority}
@@ -627,6 +636,78 @@ defmodule FeudHall.Application.RecoveryTest do
       assert PostgresEventStore.receipt(rt.store, "recovery:boot:1") == :none
       assert PostgresEventStore.receipt(rt.store, "start:b:2") == :none
     end
+  end
+
+  test "a Project A hall upgrades once and resumes trading on PostgreSQL" do
+    {mod, store} = adapter(:postgres)
+    {:ok, store, _} = mod.acquire_authority(store, @scope, "old")
+    # Captured by running Project A's actual domain commands at 1386fca.
+    fixture = Path.expand("../../fixtures/history/project_a_open_hall.jsonl", __DIR__)
+
+    events =
+      Enum.map(File.stream!(fixture), fn line ->
+        {:ok, event} = EventCodec.decode(line)
+        event
+      end)
+
+    [genesis | _] = events
+    legacy_now = 2 * Clock.day() + 24_000
+
+    request = %{
+      command_id: "legacy",
+      expected_position: 0,
+      expected_versions: %{hall: 0, control: 0},
+      hall_stream: "hall:legacy",
+      events: events,
+      control_events: [],
+      receipt: %{
+        command_id: "legacy",
+        fingerprint: "legacy",
+        kind: :initialize_hall,
+        actor: {:system, :admin},
+        outcome: :accepted,
+        event_count: length(events)
+      },
+      projection_rows: [],
+      outbox: [],
+      context: %{
+        actor: {:system, :admin},
+        correlation_id: "legacy",
+        content_hash: genesis.content_hash,
+        hall_ms: legacy_now
+      }
+    }
+
+    assert {:ok, store, 1} = mod.append(store, request)
+    assert {:ok, rt, _} = recover(mod, store, "new")
+    assert rt.state.stalls["legacy-stall"].mode == :open
+    assert rt.state.restaurants["r1"].menu["bean_tacos"] == 777
+    assert rt.state.catalog.recipes == genesis.catalog.recipes
+    assert rt.state.catalog.version == genesis.catalog.version + 1
+    assert rt.state.now == legacy_now
+    assert rt.state.restaurants["r1"].ledger.wip > 0
+    assert Enum.count(rt.state.orders, fn {_, order} -> order.status == :finish end) == 2
+    assert :ok = Invariants.check(rt.state)
+    assert rt.state.demand.next_arrival_at == nil
+    assert rt.state.demand.next_day_at == 3 * Clock.day()
+
+    to = Clock.service_ms(legacy_now + 30 * Clock.minute())
+
+    rt =
+      run(rt, [
+        {env("buy-upgraded", @alice, purchase("rice_long", 100)), nil},
+        {env("tick-upgraded", {:system, :scheduler}, {:advance_clock, %{to_service_ms: to}}), nil}
+      ])
+
+    assert rt.state.restaurants["r1"].ledger.raw > 0
+    assert rt.state.restaurants["r1"].ledger.wip == 0
+    assert rt.state.restaurants["r1"].ledger.revenue == 2 * 777
+    assert rt.state.stats.served_mains == 2
+    assert {:ok, replayed} = CommandWorkflow.open(mod, rt.store)
+    assert replayed.state == rt.state
+    assert {:ok, restarted, _} = recover(mod, rt.store, "again")
+    assert {:ok, batches} = mod.read_from(restarted.store, 0)
+    assert Enum.count(Enum.flat_map(batches, & &1.events), &(&1.type == :hall_simulation_upgraded)) == 1
   end
 
   describe "a missing batch" do
