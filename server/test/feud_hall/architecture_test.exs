@@ -59,6 +59,48 @@ defmodule FeudHall.ArchitectureTest do
     end
   end
 
+  # The planner and the public view see only their inputs: never the decider, evolver, or admission.
+  @decision_internals [
+    ~w(FeudHall Domain Hall Decider),
+    ~w(FeudHall Domain Hall Evolver),
+    ~w(FeudHall Domain Hall Admission),
+    ~w(Hall Decider),
+    ~w(Hall Evolver),
+    ~w(Hall Admission),
+    ~w(Decider),
+    ~w(Evolver),
+    ~w(Admission)
+  ]
+
+  test "the NPC planner and public view do not reference the decider, evolver, or admission" do
+    files = [Path.join(@root, "domain/npc/planner.ex"), Path.join(@root, "domain/public_view.ex")]
+
+    for file <- files do
+      assert File.exists?(file), "#{file} moved; update this check"
+
+      assert violations(File.read!(file), @decision_internals, [], []) == [],
+             "#{Path.relative_to_cwd(file)} reaches into the decision internals"
+    end
+  end
+
+  test "the decision-internals rule detects planted references" do
+    planted = """
+    defmodule PlantedPlanner do
+      alias FeudHall.Domain.Hall
+      alias FeudHall.Domain.Hall.Admission
+      def a(state), do: Hall.Decider.decide(state, :x, %{})
+      def b(state), do: Hall.Evolver.evolve(state, %{})
+      def c(state), do: Admission.accept_dessert(state, %{})
+    end
+    """
+
+    found = violations(planted, @decision_internals, [], [])
+    assert {:alias, ["FeudHall", "Domain", "Hall", "Admission"]} in found
+    assert {:alias, ["Hall", "Decider"]} in found
+    assert {:alias, ["Hall", "Evolver"]} in found
+    assert {:alias, ["Admission"]} in found
+  end
+
   test "the scanner detects planted violations (sensitivity check)" do
     planted = """
     defmodule Planted do

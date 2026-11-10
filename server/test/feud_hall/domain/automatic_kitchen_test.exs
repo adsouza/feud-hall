@@ -200,6 +200,43 @@ defmodule FeudHall.Domain.AutomaticKitchenTest do
     Oracle.assert_settled!(state, events)
   end
 
+  test "a handover due exactly at 03:00 is cancelled by the cutoff, not served" do
+    w = stocked_world() |> advance_hall(@three - 14 * @min)
+    w = simulated_visit(w, "edge", "bean_tacos")
+    {state, log} = w
+    # Ready at four minutes (one prep, three finish); the handover then takes
+    # exactly as long as is left until the cutoff.
+    ready = state.now + 4 * @min
+    w = {put_in(state, [:catalog, :rules, :handover_ms], @three - ready), log}
+
+    {mid, _} = advance_hall(w, @three - Clock.ratio())
+    assert %{item: {:tray, _}, done_at: @three} = mid.stalls[@stall].counter
+
+    {state, events} = advance_hall(w, @three)
+    assert served_at(events, tray_id("visit-edge")) == []
+    assert state.trays[tray_id("visit-edge")].status == :cancelled
+    assert state.visits[visit_id("visit-edge")].outcome.reason == :cleaning
+    assert state.stalls[@stall].counter == nil
+    Oracle.assert_settled!(state, events)
+  end
+
+  test "a stage never runs on more stations than the stall has" do
+    %{prep_stations: prep_n, finish_stations: finish_n} = SliceCatalog.rules().kitchen
+    assert {prep_n, finish_n} == {2, 1}
+
+    w = Enum.reduce(~w(c1 c2 c3), stocked_world(), &simulated_visit(&2, &1, "bean_tacos"))
+    count = fn state, status -> Enum.count(state.orders, fn {_id, o} -> o.status == status end) end
+
+    # Three accepted mains at once: two occupy the prep stations, one waits.
+    {started, _} = advance_hall(w, @t0 + Clock.ratio())
+    assert {count.(started, :prep), count.(started, :queued_prep)} == {prep_n, 1}
+
+    # Prep (one minute) hands two to the finisher, which takes one; the third is in prep.
+    {finishing, _} = advance_hall(w, @t0 + @min + Clock.ratio())
+    assert {count.(finishing, :finish), count.(finishing, :queued_finish)} == {finish_n, 1}
+    assert count.(finishing, :prep) == 1
+  end
+
   test "dispatch waits for the 05:00 reopening and runs at that instant" do
     # Cleaning cancels all customer work, so a waiting item during cleaning is
     # hand-built: a ready tray (deadline and holding life past 05:00) with a

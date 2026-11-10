@@ -70,6 +70,7 @@ defmodule FeudHall.Properties.PostgresTraceTest do
   alias FeudHall.Domain.Hall.Invariants
   alias FeudHall.HallTrace
   alias FeudHall.Infrastructure.{PostgresEventStore, Snapshot}
+  alias FeudHall.Oracle
   alias FeudHall.PostgresCase
 
   @runs 15
@@ -174,6 +175,10 @@ defmodule FeudHall.Properties.PostgresTraceTest do
       # The hall the workflow committed is the pure trace's hall.
       assert strip(rt.state) == strip(trace.state)
       assert Invariants.check(rt.state) == :ok
+
+      # The independent oracle agrees on the property's own final state and the stored log.
+      assert {:ok, stored_batches} = PostgresEventStore.read_from(rt.store, 0)
+      assert Oracle.violations(rt.state, Enum.flat_map(stored_batches, & &1.events)) == []
 
       # Exactly one receipt per delivered trace command, none for a merged advance, one catch-up
       # receipt per merged advance; any others come from recovery.

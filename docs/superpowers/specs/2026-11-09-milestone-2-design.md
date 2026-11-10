@@ -22,6 +22,9 @@ Three kinds of decision appear below:
   changes a contract; anything that would is an owner decision.
 - **Decisions recorded during Project A** — settled while building, listed in
   their own section so later projects build on what exists.
+- **Decisions recorded during Project B** — likewise, but they were made by the
+  builder's controller while implementing and are **not owner-confirmed**; each
+  is a builder's call pending owner confirmation.
 
 ## Intent
 
@@ -349,6 +352,81 @@ Per [location quality and lease pricing](../../GAME_DESIGN.md#location-quality-a
 **(owner decision, 2026-11-09:** every restaurant, human or NPC, stays Mexican;
 they compete on price, quality, exposure, and availability. The remaining
 cuisines arrive in Milestone 4.)
+
+### Decisions recorded during Project B
+
+These were settled while building Project B (`milestone-2b-shared-simulation`).
+Each is a **builder's call pending owner confirmation**: made by the controller
+while implementing, within the cited contracts, and not confirmed by the owner.
+None changes an owner decision above; each states how to change it. Details
+live in the architecture's
+[implementation status](../../ARCHITECTURE.md#implementation-status).
+
+- **NPC identity.** An NPC's `profile_id` is its operator ID. An operator with
+  no matching `npc_profiles` entry still owns its restaurant, but the authority
+  reports `:npc_planner_failed` instead of planning. Reason: the plan creates
+  NPCs as `{:npc, profile.id}`; a separate profile field would be a small
+  rework.
+- **Per-day counters.** The day summary is fed by per-day counters in
+  `demand.today` (`arrivals`, `admitted`, `left` by reason, `trays_served`),
+  updated from visit events, with simulated arrivals adding to the same
+  counters. Reason: the summary has to exist before arrivals do.
+- **Catalog values are JSON-shaped.** Segment ranges (`budget`,
+  `patience_hall_ms`) are `[lo, hi]` lists, not tuples, and a malformed catalog
+  returns `{:error, problems}` with tagged problems rather than raising.
+  Reason: the catalog rides in the `hall_initialized` event and the codec
+  cannot encode tuples.
+- **Target stock at the equivalent floor.** The market's target stock for a
+  product is `target_stock_per_equivalent` times the floor of three equivalents
+  (`equivalent_floor_millis / 1000`, so 1,200 for most products). Reason: the
+  design says "per operating business equivalent (floor three)". Retune only.
+- **Queue limit gates mains only.** The stall queue limit refuses new main
+  trays; dessert quotes and acceptance are not refused by `:queue_full`. Reason:
+  the design makes the limit "part of main eligibility". Gating desserts too is
+  a small `Offers` change.
+- **Order status is the work stage.** An order's `status` carries its kitchen
+  stage (`:queued_prep` through `:ready`, then `:served` or `:cancelled`), with
+  no separate `stage` field. Reason: one field cannot disagree with itself.
+- **One clearing event per interval.** The market writes one `market_cleared`
+  event at every clearing interval (about 360 per game day) even when no request
+  is pending, because class 7 fires at every multiple and the batch number
+  drives the rotating tie-break. Cost: log growth; skipping empty clearings is a
+  contained change in `Advance` if Project C's budgets object.
+- **Drink fit.** In diner choice a drink "fits" only if the main-plus-drink
+  quote is within the diner's budget and patience; otherwise the candidate is
+  the main alone. Reason: a diner should not walk away from an affordable main
+  because of an optional drink. Reverting is a two-line change.
+- **Patience is hall time.** Segment patience is stored as `patience_hall_ms`
+  and used without a service-time conversion. Reason: the world-clock table puts
+  patience on hall time, and the shipped 5-40 minute values only make sense
+  against the 45-minute hall service window (converted they would be 2-16 hall
+  hours and never bind). If the owner wants service-time patience the values
+  must be retuned.
+- **Exact crossings land one millisecond early.** An arrival whose accumulator
+  threshold is crossed exactly on an integer instant is placed in the preceding
+  millisecond, so no arrival can land at 03:00 and a 00:00 crossing belongs to
+  the new day after `day_closed`. Reason: the daily total stays exact with no
+  reopening surge. Change only if the owner wants "scheduled at 03:00 means
+  dropped".
+- **Unaffordable NPC purchases are refused at clearing.** An NPC that cannot
+  afford its restock has its request accepted into the plan and refused at the
+  next clearing with `:insufficient_cash`; an unaffordable unlock is rejected
+  inside the plan; the slot still advances. Reason: the market decides funding
+  at clearing and holds no cash at submission. If the owner wants
+  submission-time refusal the market rule itself must change.
+- **Overdue NPC slots are not a recovery violation.** Recovery checks only the
+  form of an NPC's `next_slot_at`, not its lateness: a slot is legitimately
+  overdue after a crash between advance and plan or after the planner gave up,
+  and a lateness check would make a healthy hall unrecoverable.
+- **Diagnostics emission point.** Simulation diagnostics are emitted by
+  `CommandWorkflow.decide_and_append/3` after a successful append, not by
+  `HallAuthority`: only the workflow holds the committed event list and every
+  committing path goes through it. Records carry no epoch or scope. Move only if
+  the owner wants fencing context on them.
+- **Idle clearings are not reported.** A clearing with no fills and nothing
+  unfilled emits no `market_cleared` diagnostic (about 8,600 empty records a
+  day otherwise). "The clearing ran with nothing pending" is visible only in the
+  event log.
 
 ### Project C: the 150-stall measurement
 

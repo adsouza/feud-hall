@@ -160,6 +160,22 @@ defmodule FeudHall.Domain.DemandForecastTest do
       assert closed.replenishment == Market.replenish(before.catalog, before.market, @floor)
     end
 
+    test "the recorded replenishment names every product and tops each toward its own scaled target" do
+      {before, _} = world = stocked_world() |> advance_hall(@day - 24)
+      {_state, events} = advance_hall(world, @day)
+      closed = events |> day_closed() |> List.last()
+      market = before.catalog.rules.market
+
+      assert closed.replenishment |> Map.keys() |> Enum.sort() == before.catalog.products |> Map.keys() |> Enum.sort()
+
+      # Computed from the content directly, not through `Market.replenish/3`.
+      for {product, qty} <- closed.replenishment do
+        target = div(market.target_stock_per_equivalent[product] * @floor, 1000)
+        room = min(target, market.replenish_cap[product]) - Map.get(before.market.stock, product, 0)
+        assert qty == max(0, room), "replenishment of #{product}"
+      end
+    end
+
     test "replenishment at midnight D uses the scale fixed at midnight D-1" do
       catalog = low_floor_catalog()
       floor = catalog.rules.demand.equivalent_floor_millis

@@ -36,6 +36,15 @@ defmodule FeudHall.Properties.HallTraceTest do
   @runs 100
   @max_actions 70
 
+  test "the bare closing service reaches every structural floor" do
+    # The base case property shrinking collapses to: no generated actions at all.
+    floors = HallTrace.floors(HallTrace.run(HallTrace.closing()))
+    assert Enum.all?(floors, fn {_key, n} -> n >= 1 end), "closing alone is below a floor: #{inspect(floors)}"
+
+    assert Map.keys(floors) |> Enum.sort() ==
+             ~w(arrivals_admitted arrivals_left clearings_with_fill npc_plans trays_served)a
+  end
+
   property "random traces keep every invariant and replay exactly" do
     Process.put(:progress, %{
       served_trays: 0,

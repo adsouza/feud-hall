@@ -251,6 +251,20 @@ trace ID or client-reported error is untrusted diagnostic evidence, never proof
 of identity or outcome. Provide an opaque support reference for user-visible
 failures that operators can resolve without exposing internal logs to players.
 
+Implemented simulation records are summaries per committed batch, emitted by
+`CommandWorkflow.decide_and_append/3` only after the append succeeded:
+`market_cleared` (`batch`, `fills`, `unfilled`), `arrivals`, `course_lifecycle`,
+`cleaning_boundary`, and `npc_plan`. They are best-effort counters, not evidence
+of outcomes; the event log is. Two limits apply when reading them. They can
+under-report across an uncertain commit: if an append's reply is lost the
+workflow emits nothing for it, and when the same command later resolves as
+committed (`resolve/2` or a receipt replay) its batch is not emitted again, so
+a counter can be lower than the log. And a multi-clearing commit (a long
+catch-up advance) is summarised once: `market_cleared.batch` is the batch number
+of the last clearing in the commit while `fills` and `unfilled` are sums over
+all of them. A clearing with no fills and nothing unfilled emits no record, so
+"the market ran and nothing was pending" is visible only in the event log.
+
 ### Privacy, volume, and failure isolation
 
 Use allowlisted fields and redaction at emission, before client upload or server
@@ -963,15 +977,18 @@ the picker or its list alternative.
 ## Implementation status
 
 Milestone 1 (economic core) built an internal one-cuisine slice in `server/`;
-Milestone 2A adds durable PostgreSQL storage for it. Together they qualify the
+Milestone 2A added durable PostgreSQL storage for it, and Milestone 2B (Project
+B, the shared simulation) adds the batched wholesale market, simulated diners,
+the automatic kitchen, and basic NPC owners on top. Together they qualify the
 event-store, recovery, fencing, and projection contracts above for that slice.
-They do not qualify capacity, the full market, or any online surface.
+They do not qualify capacity (Project C has not run), the staffed kitchen, or any
+online surface.
 
 | Layer | Modules |
 | --- | --- |
-| Domain (pure) | `FeudHall.Domain.Money`, `Clock`, `Content` (+ `SliceCatalog`), `Dietary`, `Substitution`, `Inventory`, `Offers`; the hall boundary `Hall` with `Decider`, `Evolver`, `Advance`, `Settlement`, `Invariants`; and `Control` (the availability/recovery control stream) |
-| Application | `CommandWorkflow` (validation, fingerprinted receipts, separate clock-advance batch, decide, append, `resolve/2` for uncertain appends), the `EventStore` port, `Recovery` (snapshot-then-tail rebuild plus the idempotent reconciliation batch), `Diagnostics`, `MonotonicClock`, and the projections `Projections.Balances` and `Projections.DailyActivity` |
-| Infrastructure | `Repo`, `PostgresEventStore` (migrations in `server/priv/repo/migrations`), `Postgres.DailyActivityProjector`, `InMemoryEventStore` (failure injection; the second adapter for the shared port contract), `EventCodec` (allowlisted JSON), `Snapshot` (versioned, checksummed), `HallAuthority`, `Diagnostics.MemorySink` and `Diagnostics.Exporter`, `SystemClock`, `ManualClock` |
+| Domain (pure) | `FeudHall.Domain.Money`, `Clock`, `Content` (+ `SliceCatalog`), `Dietary`, `Substitution`, `Inventory`, `Offers`, `Random` (persisted splitmix64 state, explicit draws), `Kitchen` (queue-aware completion estimates and dispatch), `Market` (scarcity price, batch clearing, replenishment), `Demand` (forecast, arrival schedule, diner draws), `Choice` (diner stall choice), `PublicView` (what owners may see) and `Npc.Planner`; the hall boundary `Hall` with `Decider`, `Evolver`, `Advance`, `Settlement`, `Admission` (tray and dessert admission shared by guests and simulated diners), `Invariants`; and `Control` (the availability/recovery control stream) |
+| Application | `CommandWorkflow` (validation, fingerprinted receipts, separate clock-advance batch, decide, append, `resolve/2` for uncertain appends, and the simulation diagnostics emitted after a successful append), the `EventStore` port, `Recovery` (snapshot-then-tail rebuild plus the idempotent reconciliation batch), `Diagnostics`, `MonotonicClock`, and the projections `Projections.Balances` and `Projections.DailyActivity` |
+| Infrastructure | `Repo`, `PostgresEventStore` (migrations in `server/priv/repo/migrations`), `Postgres.DailyActivityProjector`, `InMemoryEventStore` (failure injection; the second adapter for the shared port contract), `EventCodec` (allowlisted JSON), `Snapshot` (versioned, checksummed), `HallAuthority` (which also bootstraps the catalog's NPC owners and runs their planning slots), `Diagnostics.MemorySink` and `Diagnostics.Exporter`, `SystemClock`, `ManualClock` |
 
 Implementation decisions within the contracts above:
 
@@ -982,12 +999,45 @@ Implementation decisions within the contracts above:
 - **Deterministic identities.** Entity IDs (visit, tray, order, batch, wallet
   slice) derive from the command ID, so a decision is a pure function of state,
   command, and context, and a retry cannot mint a second entity.
-- **Temporary seams.** Kitchen progress is decided from explicit
-  `{:system, :kitchen}` commands until Milestone 2 Project B automates it as
-  production jobs (staff coverage arrives with the workforce milestone), and
-  purchases fill directly at the catalog base price until Project B's batched
-  scarcity-priced market lands. Both already emit the same facts
-  the later mechanisms will produce.
+- **Temporary seams removed.** Kitchen progress is no longer decided from
+  `{:system, :kitchen}` commands and purchases no longer fill instantly at the
+  base price. The commands `start_preparation`, `complete_preparation`,
+  `serve_tray`, and `serve_dessert` (system kitchen actor) and the instant
+  `purchase_stock` command are gone from the decider; clients and tests use
+  `submit_purchase_request` (settled by the next market clearing) and the
+  automatic kitchen. Their evolver clauses remain, solely so a log recorded
+  before the change still replays. `{:system, :demand}` `admit_visit` remains
+  only as a path for test fixtures; simulated arrivals come from the clock
+  advance. Staff coverage is still unmodelled: an open stall counts as staffed.
+- **Boundary classes.** `Hall.Advance` walks every due boundary in
+  `{instant, class, entity ID}` order, so boundaries at one timestamp are taken
+  by class, lower first, and within a class by stable entity ID. The classes
+  (`Advance.classes/0`) are:
+
+  | Class | Boundary | Note |
+  | --- | --- | --- |
+  | 1 | Raw-stock and ready-food expiry | Wins an exact freshness tie with service. |
+  | 2 | 03:00 cleaning start | Closes access and cancels all unserved customer work before same-instant service. |
+  | 3 | Stage completions and handover completions (service) | Service at an exact deadline wins, so it precedes class 4. |
+  | 4 | Tray and dessert deadlines, dessert-offer timeouts | Due at the deadline instant itself. |
+  | 5 | 05:00 reopening | Access returns; dispatch resumes at this advance. |
+  | 6 | Day boundary (`day_closed`) | Forecast and scale, market replenishment, day summary, and the next day's hour quotas. |
+  | 7 | Market clearing | Every `clear_every_hall_ms` (cleaning included): one `market_cleared` event, even when nothing is pending. |
+  | 8 | Simulated arrival | The diner is drawn from the demand PRNG, chooses through `Choice`, and a chosen tray goes through `Admission`; `diner_arrived` records the draws and the PRNG continuation. |
+  | 9 | Kitchen dispatch | Starts queued stages and counter handovers on free stations, only while customer access is open; due at the current instant. |
+
+  Work a command accepts begins at the next advance, at the acceptance instant.
+  This is the implemented subset of the full ordering in
+  [Simulation scheduling](#simulation-scheduling); workforce, billing, and
+  invitation boundaries join it with their milestones.
+- **Simulation diagnostics.** `CommandWorkflow.decide_and_append/3` emits them
+  after a successful append (so every committing path, human, scheduler, and
+  NPC, is covered and application code references no infrastructure): one
+  count-only summary per kind per committed batch (`market_cleared`,
+  `arrivals`, `course_lifecycle`, `cleaning_boundary`, `npc_plan`). Clearings
+  with no fills and nothing unfilled emit nothing. See
+  [Observability](#coverage-and-correlation) for what these counters can and
+  cannot show.
 - **One hall per database.** Milestone 2 stores exactly one hall's global log
   per PostgreSQL database; `read_from/2` returns the whole log. Multi-hall
   hosting needs a hall key on every table and is a later decision.
@@ -1051,11 +1101,10 @@ Implementation decisions within the contracts above:
 
 Not yet implemented, and therefore not qualified:
 
-- Project B: the batched market, simulated diners and choice, automatic
-  kitchen jobs, and basic NPC owners, per the
-  [Milestone 2 design](superpowers/specs/2026-11-09-milestone-2-design.md).
-  Staffing, helpers and wages, rent and leases, and further reports belong to
-  later milestones.
+- Staffing, helpers and wages, rent and leases, further reports, and the
+  remaining cuisines belong to later milestones; Project B's builder's calls
+  are recorded, pending owner confirmation, in the
+  [Milestone 2 design](superpowers/specs/2026-11-09-milestone-2-design.md#decisions-recorded-during-project-b).
 - Project C: the 150-stall capacity and latency measurements; no performance
   claim exists yet.
 - The outbox delivery worker (intents are committed atomically but nothing

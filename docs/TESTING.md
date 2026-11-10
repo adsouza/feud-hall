@@ -128,20 +128,46 @@ disposable databases.
 | Formatting | `mix format`; CI: `mix format --check-formatted` | `.formatter.exs` covers `lib`, `test`, `scripts`, and Mix files. |
 | Compile | `mix compile --warnings-as-errors`; also `MIX_ENV=test mix compile --warnings-as-errors` | Pure Elixir, no NIFs. |
 | Focused tests | `mix test <file> --max-cases 1` | One file at a time. PostgreSQL files (`postgres_*`, `hall_authority`, `daily_activity_projector`, `projection`, `schema`, `snapshot_store`, `recovery`) run against `feud_hall_test` after the alias creates and migrates it. |
-| Model-based property (M1) | `mix test test/feud_hall/properties/hall_trace_property_test.exs --max-cases 1` | Pure; 100 runs, at most 70 actions; about 130 MB peak RSS locally. |
+| Model-based property (pure) | `mix test test/feud_hall/properties/hall_trace_property_test.exs --max-cases 1` | Pure; 100 runs, at most 70 generated actions plus the closing service; the oracle checks every accepted command. Includes a deterministic example that the bare closing service alone reaches every structural floor (the case shrinking collapses to). About 130 MB peak RSS locally (measured at Milestone 1). |
 | Model-based property (PostgreSQL) | `mix test test/feud_hall/properties/postgres_trace_property_test.exs --max-cases 1` | Replays pure traces through `CommandWorkflow` on PostgreSQL with snapshots, restarts, aborted commits, and lost replies, and an observed-clock arm that folds every other advance into its successor's catch-up batch (with lost replies and aborted commits on the catch-up append); structural floors on injections, catch-ups, and served trays; checks projection rebuild and genesis replay at the end. |
 | Full suite | `mix test --max-cases 1 [--seed N]` | Locally permitted only because the owner gave advance permission on 2026-11-09, serially, with combined `beam.smp` and `postgres` RSS sampled every second and the run killed above 2 GiB. Otherwise hosted CI. |
-| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>` | Copies the project into `<empty-dir>`, never edits the checkout, and runs mutants with `MIX_ENV=test` against `feud_hall_mutation`; one worker, focused files per mutant, baseline verified before and after. Hosted CI job. |
+| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>`; `elixir scripts/mutation_cohort.exs --check` | 43 patches (27 for the economic core and storage, 16 `B*` for the shared simulation). Copies the project into `<empty-dir>`, never edits the checkout, and runs mutants with `MIX_ENV=test` against `feud_hall_mutation`; one worker, focused files per mutant, baseline verified before and after, each patched file restored even on an exception. `--check` only verifies every source string still matches exactly once and runs nothing; run it after changing source a patch touches. Hosted CI job; about 2 minutes locally at roughly 0.5 GB peak combined RSS. |
 | Projection rebuild (maintenance) | `PostgresEventStore.rebuild_projections/1`, `Postgres.DailyActivityProjector.rebuild/1` | Recompute derived tables from the log. Not a Mix task and exercised by tests only; never point it at a live hall without an operations procedure. |
 
-The M1 property test checks the independent oracle (`test/support/oracle.ex`)
+The pure property's action vocabulary (`test/support/hall_trace.ex`) includes
+market actions (`{:request, idx, qty}`, `{:cancel_request, idx}`) and macros
+that finish lifecycles random steps rarely complete: `{:market_clear}` (to the
+next clearing), `{:meal_peak}` (through 12:00 to 13:00 with a restock and NPC
+plans), `{:npc_slot}` (to the next hour, then each due NPC's plan submitted as
+`{:npc, op}`), `{:dessert_course, guest}`, `{:cycle, ms, desserts}`, and
+`{:regret, ...}`. Every trace ends with `HallTrace.closing/0`, and each run
+must reach the structural floors of `HallTrace.floors/1` (a clearing with a
+fill, a stream arrival admitted and one that left, a served tray, an NPC plan);
+cross-run counters guard the rarer lifecycles. The PostgreSQL property runs the
+oracle (`Oracle.violations/2`) on its own final state and stored log as well as
+`Invariants.check/1`.
+
+The pure property checks the independent oracle (`test/support/oracle.ex`)
 after every accepted command, then genesis replay, snapshot-plus-tail replay,
 JSON codec round-trip replay, and clock-partition equivalence, and asserts
 cross-run progress floors so an all-rejected trace cannot pass. The mutation
 cohort's curated faults each name the test file expected to kill them; a
 compile failure is reported as invalid and a timeout as a timeout, never as a
 kill. Architecture checks (`test/feud_hall/architecture_test.exs`) guard the
-domain and application dependency direction and the storage boundaries.
+domain and application dependency direction and the storage boundaries, and
+that `Npc.Planner` and `PublicView` reference neither `Hall.Decider`,
+`Hall.Evolver`, nor `Hall.Admission` (the planner sees only its inputs), each
+with a planted-violation sensitivity case.
+
+The Project B mutants (`B1`-`B13`, with variants `b`) cover the market (rotation
+tie-break, price clamp, stock decrement, replenishment), arrivals during
+cleaning, diner choice (exposure applied once, dietary compatibility), the
+kitchen (the 03:00 cutoff against service, dispatch gating, queues across
+cleaning, station capacity, consumed-ingredient posting), the planner's inputs,
+and NPC slot advancement. Several are realised as the closest real source
+mutation rather than the original wording (for example a class-order swap for
+"handover allowed at the cutoff"); the report records each exact source string
+and the test that killed it.
 
 ## Choose checks by change
 
