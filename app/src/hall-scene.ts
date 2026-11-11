@@ -4,16 +4,20 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import type { Stall } from "./api";
 import { createCuisineArt } from "./cuisine-art";
 import { createHallShell } from "./hall-shell";
+import { createTabletScreen } from "./hall-tablet";
+import type { TabletView, TabletAction } from "./hall-tablet";
 
 type Point = [number, number, number];
 type CameraPose = { position: Point; target: Point; fov?: number };
 export type CameraState = CameraPose & {
   inside?: { stall: string; hall: CameraPose };
+  menu?: { stall: string; hall: CameraPose };
 };
 export type HallTarget = "menu" | "counter" | "staff" | "supply";
 type Actions = {
   select: (id: string) => void;
   interact: (id: string, target: HallTarget) => void;
+  tablet: (id: string, action: TabletAction) => void;
   hover: (id: string | null) => void;
   fail: () => void;
   inside: (id: string) => void;
@@ -29,6 +33,9 @@ type Appearance = {
   reopeningTime: (stall: Stall) => string;
   detail: boolean;
   motion: boolean;
+  tablet: TabletView | null;
+  tabletLabel: string;
+  tabletHint: string;
 };
 type Diner = {
   torso: T.Color;
@@ -53,6 +60,7 @@ type Counter = {
   edge: T.Mesh;
   shutters: T.Mesh;
   sign: T.Mesh<T.PlaneGeometry, T.MeshBasicMaterial>;
+  tablet: T.Mesh<T.PlaneGeometry, T.MeshBasicMaterial>;
   reopening: T.Group;
   placard: T.Mesh<T.PlaneGeometry, T.MeshBasicMaterial>;
   reopeningLabel: string;
@@ -285,6 +293,11 @@ export function createHallScene(
   orbit.touches.ONE = T.TOUCH.ROTATE;
   let insideStall = saved?.inside?.stall ?? "";
   let hallView: CameraPose | undefined = saved?.inside?.hall;
+  let readingMenu = saved?.menu?.stall ?? "";
+  let menuReturn: CameraPose | undefined = saved?.menu?.hall;
+  const tabletGeometry = new T.PlaneGeometry(0.62, 0.93);
+  const idleTablet = createTabletScreen(() => draw());
+  const activeTablet = createTabletScreen(() => draw());
   configureCamera();
   if (saved) {
     camera.position.copy(vec(saved.position));
@@ -675,6 +688,13 @@ export function createHallScene(
     placard.position.y = 0.16;
     placard.rotation.x = -0.16;
     reopening.add(placard);
+    brick(root, dark, 1.04, 0.91, 0.96, 0.42, 0.07, 0.3);
+    brick(root, slate, 1.04, 1.04, 1.02, 0.08, 0.27, 0.08);
+    brick(root, dark, 1.04, 1.43, 1.17, 0.68, 1.0, 0.065);
+    const tablet = new T.Mesh(tabletGeometry, idleTablet.material);
+    tablet.position.set(1.04, 1.43, 1.207);
+    tablet.userData.stall = stall.stall_id;
+    root.add(tablet);
     const hit = brick(root, hitMat, 0, 1.06, 0.07, 3.5, 2.2, 2.25);
     hit.userData.stall = stall.stall_id;
     buildings.add(root);
@@ -685,6 +705,7 @@ export function createHallScene(
       edge,
       shutters,
       sign,
+      tablet,
       reopening,
       placard,
       reopeningLabel: "",
@@ -1084,6 +1105,9 @@ export function createHallScene(
     reopeningTime: () => "",
     detail: true,
     motion: true,
+    tablet: null,
+    tabletLabel: "",
+    tabletHint: "",
   };
   let hover = "";
   let frame = 0;
@@ -1330,6 +1354,30 @@ export function createHallScene(
 
   function keyDown(event: KeyboardEvent) {
     if (
+      readingMenu &&
+      !event.isComposing &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      [
+        "Tab",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "Enter",
+        " ",
+        "Escape",
+        "Home",
+        "End",
+      ].includes(event.key)
+    ) {
+      event.preventDefault();
+      const action = activeTablet.key(event.key, event.shiftKey);
+      if (action) actions.tablet(readingMenu, action);
+      return;
+    }
+    if (
       event.key.toLowerCase() === "e" &&
       !event.repeat &&
       !event.isComposing &&
@@ -1382,14 +1430,16 @@ export function createHallScene(
   function configureCamera() {
     // A tiny orbit pivot turns the owner's head in place. Panning or dollying
     // would take the camera through the booth walls or the counter.
-    orbit.minDistance = insideStall ? 0.01 : 3.5;
+    orbit.minDistance = insideStall ? 0.01 : readingMenu ? 0.5 : 3.5;
     orbit.maxDistance = insideStall ? 0.01 : 115;
     orbit.enablePan = !insideStall;
     orbit.enableZoom = !insideStall;
-    orbit.maxPolarAngle = insideStall ? Math.PI - 0.25 : ORBIT_POLAR_LIMIT;
+    orbit.maxPolarAngle =
+      insideStall || readingMenu ? Math.PI - 0.25 : ORBIT_POLAR_LIMIT;
   }
 
   function setInside(id: string) {
+    if (id && readingMenu) readMenu("");
     if (id && (!appearance.ownedStalls.includes(id) || !stalls.has(id))) return;
     if (id === insideStall) return;
     stopWalking();
@@ -1424,6 +1474,7 @@ export function createHallScene(
   }
 
   function reset() {
+    readMenu("");
     setInside("");
     orbit.maxPolarAngle = ORBIT_POLAR_LIMIT;
     orbit.target.copy(centre);
@@ -1435,6 +1486,7 @@ export function createHallScene(
   }
 
   function focus(id: string) {
+    readMenu("");
     setInside("");
     const model = stalls.get(id);
     if (!model) return;
@@ -1449,6 +1501,36 @@ export function createHallScene(
     orbit.target.copy(model.root.position).add(new T.Vector3(0, 0.75, 0.35));
     camera.position.copy(orbit.target).add(offset);
     orbit.maxPolarAngle = ORBIT_POLAR_LIMIT;
+    orbit.update();
+    draw();
+  }
+
+  function readMenu(id: string, refit = false) {
+    if (id === readingMenu && !refit) return;
+    if (id) {
+      const model = stalls.get(id);
+      if (!model) return;
+      stopWalking();
+      setInside("");
+      menuReturn ??= pose();
+      readingMenu = id;
+      const target = model.tablet.getWorldPosition(new T.Vector3());
+      const tangent = Math.tan(T.MathUtils.degToRad(camera.fov / 2));
+      const distance =
+        Math.max(0.5 / tangent, 0.34 / (tangent * camera.aspect)) * 1.08;
+      orbit.target.copy(target);
+      camera.position.copy(target).add(new T.Vector3(0, 0, distance));
+    } else {
+      readingMenu = "";
+      if (menuReturn) {
+        camera.position.copy(vec(menuReturn.position));
+        orbit.target.copy(vec(menuReturn.target));
+        camera.fov = menuReturn.fov ?? 42;
+      }
+      menuReturn = undefined;
+    }
+    configureCamera();
+    camera.updateProjectionMatrix();
     orbit.update();
     draw();
   }
@@ -1480,7 +1562,24 @@ export function createHallScene(
       Math.hypot(event.clientX - press[0], event.clientY - press[1]) > 5
     )
       return;
+    // The tablet sits just outside the stall hit box, so its screen wins the ray.
     const selected = hit(event);
+    const screen = ray.intersectObjects(
+      [...stalls.values()].map((model) => model.tablet),
+      false,
+    )[0];
+    if (
+      screen?.uv &&
+      (!selected || selected === screen.object.userData.stall)
+    ) {
+      const id = screen.object.userData.stall as string;
+      if (readingMenu !== id) actions.tablet(id, { kind: "open" });
+      else {
+        const action = activeTablet.hit(screen.uv.x, 1 - screen.uv.y);
+        if (action) actions.tablet(id, action);
+      }
+      return;
+    }
     if (selected) actions.select(selected);
   }
   function pointerMove(event: PointerEvent) {
@@ -1524,6 +1623,7 @@ export function createHallScene(
     renderer.setSize(host.clientWidth, host.clientHeight, false);
     camera.aspect = host.clientWidth / host.clientHeight;
     camera.updateProjectionMatrix();
+    if (readingMenu) readMenu(readingMenu, true);
     draw();
   });
   resize.observe(host);
@@ -1545,6 +1645,18 @@ export function createHallScene(
       const detailChanged = appearance.detail !== next.detail;
       const now = performance.now();
       appearance = next;
+      idleTablet.update({
+        standby: true,
+        stall: "",
+        title: next.tabletLabel,
+        subtitle: next.tabletHint,
+        notice: "",
+        rows: [],
+        previous: "",
+        next: "",
+        close: "",
+      });
+      if (next.tablet) activeTablet.update(next.tablet);
       if (!next.motion) departures = [];
       paintShutters(next.closedLabel);
       const ids = new Set(next.stalls.map((stall) => stall.stall_id));
@@ -1576,6 +1688,10 @@ export function createHallScene(
           stalls.set(stall.stall_id, model);
         }
         paintSign(model, stall);
+        model.tablet.material =
+          next.tablet?.stall === stall.stall_id
+            ? activeTablet.material
+            : idleTablet.material;
         const served =
           model.lastService !== undefined &&
           Boolean(stall.last_service) &&
@@ -1628,6 +1744,7 @@ export function createHallScene(
     focus,
     reset,
     setInside,
+    readMenu,
     tilt(angle: number) {
       if (!insideStall) return;
       const spherical = new T.Spherical().setFromVector3(
@@ -1673,6 +1790,9 @@ export function createHallScene(
     camera(): CameraState {
       return {
         ...pose(),
+        ...(readingMenu && menuReturn
+          ? { menu: { stall: readingMenu, hall: menuReturn } }
+          : {}),
         ...(insideStall && hallView
           ? { inside: { stall: insideStall, hall: hallView } }
           : {}),
@@ -1702,6 +1822,9 @@ export function createHallScene(
       renderer.domElement.removeEventListener("webglcontextlost", lost);
       orbit.dispose();
       for (const model of stalls.values()) discardCounter(model);
+      idleTablet.dispose();
+      activeTablet.dispose();
+      tabletGeometry.dispose();
       cuisineArt.dispose();
       hallShell.dispose();
       shut.map?.dispose();

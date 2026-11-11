@@ -4,6 +4,22 @@ import products from "../../server/priv/content/launch_products.json";
 export type Locale = "en" | "ja";
 
 const en = {
+  tabletAttention: "Please check the message below",
+  tabletMenu: "MENU",
+  tabletTap: "Tap the tablet to read and order",
+  tabletVisitorName: "Visitor",
+  tabletTotal: "Total",
+  tabletSubstitute: "Substitute",
+  tabletChange: "Change selection",
+  tabletBack: "Back to menu",
+  tabletPrevious: "Previous",
+  tabletNext: "Next",
+  tabletClose: "Step back",
+  tabletLoading: "Checking the menu…",
+  tabletOtherVisit: "Your current meal is at another stall.",
+  tabletKeyboardHelp:
+    "On the tablet: Up/Down or Tab selects a row, Enter activates it, and Escape steps back. Tap the screen to choose.",
+  tabletAccessible: "Tablet text controls",
   hallMenuAction: "Menu",
   hallCounterAction: "Counter",
   hallStaffAction: "Staff",
@@ -385,6 +401,22 @@ const en = {
 export type Key = keyof typeof en;
 
 const ja: Record<Key, string> = {
+  tabletAttention: "下のメッセージをご確認ください",
+  tabletMenu: "メニュー",
+  tabletTap: "タブレットをタップして注文できます",
+  tabletVisitorName: "ビジター",
+  tabletTotal: "合計",
+  tabletSubstitute: "代替食材",
+  tabletChange: "注文内容を変更",
+  tabletBack: "メニューに戻る",
+  tabletPrevious: "前へ",
+  tabletNext: "次へ",
+  tabletClose: "離れる",
+  tabletLoading: "メニューを確認中…",
+  tabletOtherVisit: "現在の食事は別の店舗で注文しています。",
+  tabletKeyboardHelp:
+    "タブレットでは上下矢印またはTabで項目を選び、Enterで決定、Escapeで離れます。画面をタップして選ぶこともできます。",
+  tabletAccessible: "タブレットのテキスト操作",
   hallMenuAction: "メニュー",
   hallCounterAction: "カウンター",
   hallStaffAction: "スタッフ",

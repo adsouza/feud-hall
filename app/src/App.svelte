@@ -7,6 +7,7 @@
   import DinerCompare from "./DinerCompare.svelte";
   import HallScene from "./HallScene.svelte";
   import type { CameraState, HallTarget } from "./hall-scene";
+  import type { TabletView, TabletAction, TabletRow } from "./hall-tablet";
   import {
     ApiError,
     cash,
@@ -176,6 +177,131 @@
   let hallMode = $state<"3d" | "list">("3d");
   let hallSelection = $state("");
   let immersiveHall = $state(false);
+  let tabletStall = $state("");
+  let tabletRegistering = $state(false);
+  let tabletPage = $state<"menu" | "diets" | "drinks" | "review">("menu");
+
+  function openTablet(id: string) {
+    hallInteraction = null;
+    hallSelection = id;
+    tabletStall = id;
+    tabletPage = "menu";
+    immersiveHall = true;
+    phoneDetail = false;
+    if (stallId !== id) {
+      stallId = id;
+      main = "";
+      drink = "";
+      clearQuote();
+    }
+  }
+
+  async function confirmCurrentQuote(token?: string) {
+    if (!profile || !currentQuote || !quoteRequest || disabled) return;
+    if (token && token !== JSON.stringify(currentQuote.terms)) return;
+    const { kind, fields } = quoteRequest;
+    const payload = { ...fields, confirmed: currentQuote.terms };
+    if (kind === "dessert") await submit("accept_dessert", payload);
+    else
+      await submit("admit_visit", { ...payload, drink: fields.drink ?? null });
+  }
+
+  async function tabletAction(id: string, action: TabletAction) {
+    if (action.kind === "open") {
+      openTablet(id);
+      return;
+    }
+    if (id !== tabletStall || id !== hallSelection) return;
+    if (action.kind === "visit") {
+      if (profile?.visit) openTablet(profile.visit.stall);
+      return;
+    }
+    if (action.kind === "close") {
+      tabletStall = "";
+      return;
+    }
+    if (action.kind === "menu") {
+      tabletPage = "menu";
+      clearQuote();
+      return;
+    }
+    if (action.kind === "diets") {
+      tabletPage = "diets";
+      return;
+    }
+    if (action.kind === "drinks") {
+      tabletPage = "drinks";
+      return;
+    }
+    if (action.kind === "retry") {
+      if (pending && connected && !submitting) await deliver(pending);
+      return;
+    }
+    if (disabled) return;
+    switch (action.kind) {
+      case "main":
+        if (availableMains.includes(action.id)) {
+          main = action.id;
+          tabletPage = "menu";
+          drink = "";
+          clearQuote();
+        }
+        break;
+      case "drink":
+        if (!action.id || availableDrinks.includes(action.id)) {
+          drink = action.id;
+          clearQuote();
+          tabletPage = "menu";
+        }
+        break;
+      case "diet":
+        if (dietaryProfiles.includes(action.id)) {
+          diet = action.id;
+          clearQuote();
+          tabletPage = "menu";
+        }
+        break;
+      case "review":
+        tabletPage = "review";
+        await showQuote(trayRequest);
+        break;
+      case "dessert":
+        tabletPage = "review";
+        await showQuote(dessertRequest);
+        break;
+      case "confirm":
+        await confirmCurrentQuote(action.token);
+        break;
+      case "skip":
+        await submit("decline_dessert", { visit_id: profile?.visit?.id });
+        break;
+      case "allowance":
+        await submit("request_allowance");
+        break;
+      case "guest":
+        if (tabletRegistering) return;
+        tabletRegistering = true;
+        try {
+          await newDevice();
+          await submit("bootstrap_guest", { name: t("tabletVisitorName") });
+        } catch (error) {
+          status = {
+            refusal: error instanceof ApiError ? error.code : "network_error",
+          };
+        } finally {
+          tabletRegistering = false;
+        }
+        break;
+      case "cancel":
+        if (profile?.visit?.can_cancel_dessert)
+          await submit("cancel_dessert", { visit_id: profile.visit.id });
+        else if (profile?.visit?.can_cancel)
+          await submit("cancel_tray", {
+            tray_id: profile.visit.id.replace(/^V:/, "T:"),
+          });
+        break;
+    }
+  }
   let hallInteraction = $state<{ stall: string; target: HallTarget } | null>(
     null,
   );
@@ -189,6 +315,18 @@
   };
 
   function openHallInteraction(id: string, target: HallTarget) {
+    const stall = view?.hall.stalls.find((stall) => stall.stall_id === id);
+    if (
+      hallMode === "3d" &&
+      stall &&
+      !ownStall(stall) &&
+      (target === "menu" ||
+        (target === "counter" && selectedShift?.stall_id !== id))
+    ) {
+      openTablet(id);
+      return;
+    }
+    tabletStall = "";
     hallActionTrigger =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -443,6 +581,7 @@
   );
   let checkoutScope = $derived(
     (page === "visit" ||
+      (page === "hall" && tabletStall === hallSelection && !!tabletStall) ||
       (page === "hall" &&
         hallInteraction?.stall === hallSelection &&
         hallInteraction.target !== "staff" &&
@@ -468,6 +607,193 @@
   let currentQuote = $derived(
     quoteRequest && isCurrentQuoteRequest(quoteRequest) ? quote : null,
   );
+
+  let tabletView = $derived.by((): TabletView | null => {
+    const stall = view?.hall.stalls.find(
+      (item) => item.stall_id === tabletStall,
+    );
+    if (!view || !stall || !tabletStall) return null;
+    const rows: TabletRow[] = [];
+    const add = (
+      text: string,
+      action?: TabletAction,
+      blocked = false,
+      selected = false,
+    ) =>
+      rows.push({
+        text,
+        action,
+        disabled: blocked || (!!action && disabled),
+        selected,
+      });
+    let subtitle = t("tabletMenu");
+    let notice = profile
+      ? t("balance") + " " + cash(profile.balance)
+      : t("tabletTap");
+    const visit = profile?.visit;
+    const problem = !connected
+      ? t("offline")
+      : status === "uncertain"
+        ? t("uncertain")
+        : status && typeof status === "object"
+          ? refusalMessage(locale, status.refusal)
+          : "";
+    if (problem) {
+      notice = t("tabletAttention");
+      const characters = Array.from(problem);
+      for (let i = 0; i < characters.length; i += 32)
+        add(characters.slice(i, i + 32).join(""));
+    }
+
+    if (pending)
+      rows.push({
+        text: t("retry"),
+        action: { kind: "retry" },
+        disabled: !connected || submitting,
+      });
+    if (ownStall(stall)) {
+      notice = t("ownStallDining");
+      for (const [id, amount] of Object.entries(stall.menu))
+        add(title(id) + " · " + cash(amount));
+    } else if (tabletPage === "review" && currentQuote) {
+      subtitle = t("quote");
+      add(t("tabletTotal") + " " + cash(currentQuote.total));
+      add(
+        t("estimatedWait") +
+          " " +
+          serviceDuration(currentQuote.earliest_completion - view.hall.now),
+      );
+      const components = currentQuote.terms.components;
+      let valid = Array.isArray(components) && components.length > 0;
+      if (Array.isArray(components))
+        for (const component of components) {
+          if (
+            !component ||
+            typeof component !== "object" ||
+            typeof component.recipe_id !== "string" ||
+            typeof component.price !== "string" ||
+            !/^[0-9]+$/.test(component.price) ||
+            !Array.isArray(component.lines)
+          ) {
+            valid = false;
+            break;
+          }
+          add(title(component.recipe_id) + " · " + cash(component.price));
+          for (const line of component.lines) {
+            if (
+              !line ||
+              typeof line !== "object" ||
+              typeof line.product !== "string"
+            ) {
+              valid = false;
+              break;
+            }
+            add(
+              title(line.product) +
+                (line.substituted ? " · " + t("tabletSubstitute") : ""),
+            );
+          }
+        }
+      const expires = currentQuote.terms.deadline;
+      add(
+        t(quoteRequest?.kind === "dessert" ? "acceptDessert" : "acceptOrder"),
+        { kind: "confirm", token: JSON.stringify(currentQuote.terms) },
+        !valid ||
+          !profile ||
+          (typeof expires === "number" && view.hall.now >= expires),
+      );
+      add(t("tabletChange"), { kind: "menu" });
+    } else if (visit) {
+      subtitle = t("visit");
+      add(
+        t(
+          visit.stage === "served"
+            ? "served"
+            : visit.stage === "queued"
+              ? "queuedVisit"
+              : visit.stage === "counter"
+                ? "atCounter"
+                : "preparing",
+        ),
+      );
+      if (visit.stall !== stall.stall_id) {
+        add(t("tabletOtherVisit"));
+        add(t("viewVisit"), { kind: "visit" });
+      }
+      if (visit.estimate != null)
+        add(
+          t("estimatedWait") +
+            " " +
+            serviceDuration(visit.estimate - view.hall.now),
+        );
+      if (visit.stall === stall.stall_id && visit.dessert === "offered") {
+        add(t("dessertQuote"), { kind: "dessert" });
+        add(t("skip"), { kind: "skip" });
+      } else if (
+        visit.stall === stall.stall_id &&
+        (visit.can_cancel || visit.can_cancel_dessert)
+      )
+        add(t("cancel"), { kind: "cancel" });
+    } else if (tabletPage === "diets") {
+      subtitle = t("diet");
+      for (const id of dietaryProfiles)
+        add(title(id), { kind: "diet", id }, false, id === diet);
+      add(t("tabletBack"), { kind: "menu" });
+    } else if (tabletPage === "drinks") {
+      subtitle = t("drink");
+      add(t("noDrink"), { kind: "drink", id: "" }, false, !drink);
+      for (const id of availableDrinks)
+        add(
+          title(id) + " · " + cash(stall.menu[id]),
+          { kind: "drink", id },
+          false,
+          id === drink,
+        );
+      add(t("tabletBack"), { kind: "menu" });
+    } else {
+      const receipt =
+        recentPickup === stall.stall_id ? receipts?.receipts[0] : null;
+      if (receipt) {
+        notice = t("pickupReady").replace("{stall}", stall.name);
+        add(t("diningCharged") + " " + cash(receipt.total));
+      }
+      if (!profile) add(t("startGuest"), { kind: "guest" }, tabletRegistering);
+      else if (!profile.allowance_claimed)
+        add(t("allowance"), { kind: "allowance" });
+      if (view.hall.access !== "open") add(t("cleaning"));
+      else if (!stall["open?"])
+        add(t("reopeningExpected") + " · " + reopeningTime(stall));
+      else {
+        add(t("diet") + " · " + title(diet), { kind: "diets" });
+        if (!checkoutMenu) add(t("tabletLoading"));
+        else if (!availableMains.length) add(t("noMealsAvailable"));
+        for (const id of availableMains)
+          add(
+            title(id) + " · " + cash(stall.menu[id]),
+            { kind: "main", id },
+            false,
+            main === id,
+          );
+        if (main && availableDrinks.length)
+          add(t("drink") + " · " + (drink ? title(drink) : t("noDrink")), {
+            kind: "drinks",
+          });
+        add(t("quote"), { kind: "review" }, !profile || !trayRequest);
+      }
+      if (tabletPage === "review" && !currentQuote && !status)
+        add(t("tabletLoading"));
+    }
+    return {
+      stall: stall.stall_id,
+      title: stall.name,
+      subtitle,
+      notice,
+      rows,
+      previous: t("tabletPrevious"),
+      next: t("tabletNext"),
+      close: t("tabletClose"),
+    };
+  });
 
   onMount(() => {
     locale = navigator.language.startsWith("ja") ? "ja" : "en";
@@ -602,6 +928,10 @@
   }
 
   $effect(() => {
+    if (tabletStall && hallSelection !== tabletStall) tabletStall = "";
+  });
+
+  $effect(() => {
     if (quoteRequest && !isCurrentQuoteRequest(quoteRequest)) {
       clearQuote();
     }
@@ -620,7 +950,10 @@
   $effect(() => {
     if (
       !view?.hall.visitor_play ||
-      !(page === "visit" || (page === "hall" && hallInteraction)) ||
+      !(
+        page === "visit" ||
+        (page === "hall" && (hallInteraction || tabletStall))
+      ) ||
       !connected ||
       !dessertRequest
     )
@@ -1022,17 +1355,7 @@
         </p>
         <button
           disabled={disabled || !profile}
-          onclick={() => {
-            if (!profile || !currentQuote || !quoteRequest) return;
-            const { kind, fields } = quoteRequest;
-            const payload = { ...fields, confirmed: currentQuote.terms };
-            if (kind === "dessert") void submit("accept_dessert", payload);
-            else
-              void submit("admit_visit", {
-                ...payload,
-                drink: fields.drink ?? null,
-              });
-          }}
+          onclick={() => confirmCurrentQuote()}
           >{t(
             quoteRequest?.kind === "dessert" ? "acceptDessert" : "acceptOrder",
           )}</button
@@ -1940,6 +2263,8 @@
               )}
               selected={hallSelection}
               {pickup}
+              tablet={tabletView}
+              onTabletAction={tabletAction}
               saved={camera}
               {t}
               {title}
@@ -1956,6 +2281,11 @@
               onUnavailable={() => {
                 sceneError = true;
                 hallMode = "list";
+                if (tabletStall) {
+                  hallInteraction = { stall: tabletStall, target: "menu" };
+                  if (phone) phoneDetail = true;
+                  tabletStall = "";
+                }
               }}
             />
           </div>

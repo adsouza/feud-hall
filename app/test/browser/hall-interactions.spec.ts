@@ -39,6 +39,31 @@ async function focusStall(page: Page, id: string) {
   ).toBeVisible();
 }
 
+async function tapTablet(page: Page, kind: string, id?: string) {
+  const host = page.locator("[data-hall-canvas]");
+  const rows = page.locator(".tablet-text-controls");
+  const button = rows
+    .locator(
+      `[data-tablet-kind="${kind}"]${id === undefined ? "" : `[data-tablet-id="${id}"]`}`,
+    )
+    .first();
+  await expect(button).toBeAttached();
+  await expect(button).toBeEnabled();
+  const index = Number(await button.getAttribute("data-tablet-row"));
+  await host.focus();
+  await host.press("Home");
+  const box = (await host.locator("canvas").boundingBox())!;
+  const scale = Math.min(box.height / 1.08, box.width / 0.7344);
+  const point = async (u: number, v: number) => {
+    await page.mouse.click(
+      box.x + box.width / 2 + (u - 0.5) * 0.62 * scale,
+      box.y + box.height / 2 + (v - 0.5) * 0.93 * scale,
+    );
+  };
+  for (let i = 0; i < Math.floor(index / 6); i++) await point(0.83, 0.92);
+  await point(0.5, (180 + (index % 6) * 120 + 60) / 1080);
+}
+
 test("a diner orders and follows service at the 3D counter without leaving the hall", async ({
   page,
   hall,
@@ -52,40 +77,86 @@ test("a diner orders and follows service at the 3D counter without leaving the h
     .locator("[data-hall-canvas] canvas")
     .elementHandle();
   await stationControl(page, "menu").click();
-  const panel = workbench(page);
-  await expect(panel).toBeFocused();
-  await panel.getByRole("button", { name: "Claim daily allowance" }).click();
-  await panel
-    .getByRole("combobox", { name: "Main", exact: true })
-    .selectOption({ index: 1 });
-  await panel
-    .getByRole("combobox", { name: "Dietary profile", exact: true })
-    .selectOption("unrestricted");
-  await panel.getByRole("button", { name: "Review order" }).click();
-  await expect(
-    panel.getByRole("button", { name: "Confirm order" }),
-  ).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("hall-checkout.png") });
-  await panel.getByRole("button", { name: "Confirm order" }).click();
+  await expect(workbench(page)).toHaveCount(0);
+  const host = page.locator("[data-hall-canvas]");
+  await expect(host).toHaveAttribute("data-hall-tablet", "s001");
+  // Read the accessible mirror, but act through real ray/UV picks on the mesh.
+  const rows = page.locator(".tablet-text-controls");
+  const tap = (kind: string) => tapTablet(page, kind);
+  await tap("allowance");
+  await expect(rows.locator('[data-tablet-kind="allowance"]')).toHaveCount(0);
+  await tap("diets");
+  await tap("diet");
+  await tap("main");
+  const quoteResponse = page.waitForResponse((response) =>
+    response.url().includes("/api/quote?"),
+  );
+  await tap("review");
+  const quoted = await (await quoteResponse).json();
+  await expect(rows.locator('[data-tablet-kind="confirm"]')).toBeAttached();
+  await page.screenshot({
+    path: testInfo.outputPath("hall-tablet-checkout.png"),
+  });
+  let attempts: { command_id: string; kind: string }[] = [];
+  await page.route("**/api/commands", async (route) => {
+    const data = route.request().postDataJSON();
+    if (data.kind !== "admit_visit") return route.continue();
+    attempts.push(data);
+    const response = await route.fetch();
+    if (attempts.length === 1) return route.abort("failed");
+    await route.fulfill({ response });
+  });
+  await tap("confirm");
+  await expect(rows.locator('[data-tablet-kind="retry"]')).toBeAttached();
+  await tap("retry");
+  await expect(rows.locator('[data-tablet-kind="retry"]')).toHaveCount(0);
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0].command_id).toBe(attempts[1].command_id);
   await expect
     .poll(async () => (await state(page)).profile.visit?.stall)
     .toBe("s001");
   const view = await state(page);
+  await host.focus();
+  await host.press("Escape");
+  await page
+    .getByRole("button", { name: "Restore hall layout", exact: true })
+    .click();
+  await focusStall(page, "s041");
+  await stationControl(page, "menu").click();
+  await expect(rows.locator('[data-tablet-kind="visit"]')).toBeAttached();
+  await expect(rows.locator('[data-tablet-kind="dessert"]')).toHaveCount(0);
+  await tap("visit");
+  await expect(host).toHaveAttribute("data-hall-tablet", "s001");
   await hall.control({ advance_to: view.profile.visit.estimate });
-  await expect(
-    panel.getByRole("status").filter({ hasText: /Meal served/ }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Hall", exact: true }),
-  ).toBeVisible();
+  await expect(rows).toContainText(/Meal served|Tray served/);
+  expect((await state(page)).profile.balance).toBe(
+    (1200n - BigInt(quoted.total)).toString(),
+  );
+  const history = await (
+    await page.request.get(hall.origin + "/api/dining-history")
+  ).json();
+  expect(history.receipts).toHaveLength(1);
   expect(await canvas!.evaluate((node) => node.isConnected)).toBe(true);
-  await panel.getByRole("button", { name: "Close stall actions" }).click();
-  await expect(stationControl(page, "menu")).toBeFocused();
-  await page.locator("[data-hall-canvas]").focus();
-  await page.locator("[data-hall-canvas]").press("e");
-  await expect(panel).toBeVisible();
-  await panel.press("Escape");
-  await expect(panel).toHaveCount(0);
+  await host.focus();
+  await host.press("Escape");
+  await expect(host).toHaveAttribute("data-hall-tablet", "");
+  await host.press("e");
+  await expect(host).toHaveAttribute("data-hall-tablet", "s001");
+  await page.setViewportSize({ width: 375, height: 780 });
+  await page.getByLabel("Language / 言語").selectOption("ja");
+  await page.screenshot({
+    path: testInfo.outputPath("hall-tablet-phone-ja.png"),
+  });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(375);
+  await host
+    .locator("canvas")
+    .dispatchEvent("webglcontextlost", { cancelable: true });
+  await expect(host).toHaveCount(0);
+  await expect(
+    page.getByRole("region", { name: "店舗での操作", exact: true }),
+  ).toBeVisible();
 });
 
 test("a helper accepts, stages and selects a tray entirely in the 3D hall", async ({
@@ -265,4 +336,38 @@ test("an owner runs the stall from the hall and shared drafts survive a narrow J
   await expect(japanesePrice).toHaveValue("831");
   await expect(japanesePrice).toBeFocused();
   expect(await input!.evaluate((node) => node.isConnected)).toBe(true);
+});
+
+test("a tablet supports visitor signup, dietary availability and the cleaning cutoff", async ({
+  page,
+  hall,
+}) => {
+  await page.goto(hall.origin);
+  await focusStall(page, "s001");
+  await stationControl(page, "menu").click();
+  const host = page.locator("[data-hall-canvas]");
+  const rows = page.locator(".tablet-text-controls");
+  await expect(rows.locator('[data-tablet-kind="guest"]')).toBeAttached();
+  // Home/Enter activates the first screen row without a pointer or HTML form.
+  await host.focus();
+  await host.press("Home");
+  await host.press("Enter");
+  await expect
+    .poll(async () => (await state(page)).profile?.account.name)
+    .toBe("Visitor");
+  await tapTablet(page, "allowance");
+  await expect(rows.locator('[data-tablet-kind="main"]')).toBeAttached();
+  await tapTablet(page, "diets");
+  await tapTablet(page, "diet", "keto_style");
+  await expect(rows.locator('[data-tablet-kind="main"]')).toHaveCount(0);
+  await expect(rows.locator('[data-tablet-kind="review"]')).toBeDisabled();
+  await tapTablet(page, "diets");
+  await tapTablet(page, "diet", "unrestricted");
+  await expect(rows.locator('[data-tablet-kind="main"]')).toBeAttached();
+  await hall.control({ advance_to: 27 * 60 * 60_000 });
+  await expect(rows).toContainText("Cleaning");
+  await expect(rows.locator('[data-tablet-kind="main"]')).toHaveCount(0);
+  await expect(rows.locator('[data-tablet-kind="review"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "Reset camera", exact: true }).click();
+  await expect(host).toHaveAttribute("data-hall-tablet", "");
 });

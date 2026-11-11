@@ -414,9 +414,9 @@ advance game time by itself.
 The hall presentation routes stall-toolbar actions to the same dining, helper,
 and business controls used by the ordinary screens. `App.svelte` retains their
 shared drafts, quotes, pending IDs, and authorized projections; `HallScene`
-exposes controls below the scene and emits stall/target intents only. Camera changes,
+exposes stall controls and a counter-mounted Three.js tablet. A canvas texture renders the tablet screen, and raycast UV coordinates resolve screen actions. The renderer emits typed intents only; it never sends economic commands or calculates eligibility. An optional accessible text mirror uses those same intents. The application builds the tablet view from the shared authorized menu, drafts, bound quote and committed visit/receipt projections. Confirmation carries the displayed terms token, and an uncertain-response retry retains the original command ID. Camera fitting adapts to portrait/landscape and stepping back restores the previous pose. Camera changes,
 E, and opening/closing the non-modal workbench perform no economic command.
-Workbenches remain mounted across layout changes and WebGL fallback. World
+Workbenches remain mounted across layout changes and WebGL fallback. Losing WebGL while reading a tablet opens the ordinary stall controls using the same draft and pending state. World
 animation and pointer hit tests cannot choose another helper's task, reserve
 stock, award wages, serve a dish, or bypass price confirmation. Receipt refresh
 also observes wallet changes, covering a paid visit that finishes between

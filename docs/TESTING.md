@@ -523,3 +523,17 @@ view uses D3's Equal Earth projection and [Natural Earth public-domain land
 geometry](https://www.naturalearthdata.com/about/terms-of-use/) distributed by
 [World Atlas](https://github.com/topojson/world-atlas). The highlighted areas are
 approximate cultural locator footprints for the launch catalog.
+
+The focused `app/test/browser/hall-interactions.spec.ts` coverage includes real
+ray/UV clicks on the physical menu tablet (allowance, diet, main, paginated bill
+and confirmation), a lost accepted response retried with the same command ID,
+committed service/receipt, keyboard stepping back, Japanese portrait rendering
+and WebGL fallback. It also checks helper and owner workbenches. Run this file
+with one worker against the disposable browser-hall fixture; inspect its tablet
+screenshots as well as the assertions. The accessible text mirror is inspected
+for action metadata, but purchase actions in the tablet journey use canvas clicks.
+
+`app/test/browser/tablet-text.spec.ts` checks all shipped English/Japanese dish
+labels with real canvas font metrics and several prices. It requires complete
+prices, English word boundaries, no clipped text, and at most two readable lines
+per tablet row, including a regression where only part of a price used to fit.

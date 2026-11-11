@@ -3,6 +3,7 @@
   import type { Stall } from "./api";
   import type { Key } from "./i18n";
   import type { CameraState, HallTarget, createHallScene } from "./hall-scene";
+  import type { TabletView, TabletAction } from "./hall-tablet";
   import { createHallAudio } from "./hall-audio";
 
   let {
@@ -10,6 +11,8 @@
     ownedStalls,
     selected,
     pickup,
+    tablet,
+    onTabletAction,
     saved,
     t,
     title,
@@ -26,6 +29,8 @@
     ownedStalls: Stall[];
     selected: string;
     pickup: string;
+    tablet: TabletView | null;
+    onTabletAction: (id: string, action: TabletAction) => void;
     saved: CameraState | undefined;
     t: (key: Key) => string;
     title: (id: string) => string;
@@ -80,6 +85,7 @@
             {
               select: (id) => inspect(id),
               interact,
+              tablet: onTabletAction,
               hover: (id) => (hovered = id),
               fail: onUnavailable,
               inside: (id) => (inside = id),
@@ -115,12 +121,16 @@
       reopeningTime,
       detail: !reduced,
       motion: !motionPreference && !reduced,
+      tablet,
+      tabletLabel: t("tabletMenu"),
+      tabletHint: t("tabletTap"),
     });
     if (inside && !ownedStalls.some((stall) => stall.stall_id === inside))
       inside = "";
     hall.setInside(inside);
     if (hall && !inside && selected && selected !== lastSelection)
       hall.focus(selected);
+    hall.readMenu(tablet?.stall ?? "");
     lastSelection = selected;
   });
 
@@ -149,6 +159,7 @@
     class="canvas"
     data-hall-canvas
     data-hall-view={inside || "hall"}
+    data-hall-tablet={tablet?.stall ?? ""}
     role="application"
     aria-label={t("hall3d")}
     aria-describedby="hall-keyboard-help"
@@ -176,6 +187,32 @@
   {/if}
 </div>
 <p class="keyboard-help">{t("hallInteractHelp")}</p>
+{#if tablet}
+  <p role="status" class="keyboard-help">{t("tabletKeyboardHelp")}</p>
+  <details class="tablet-text-controls">
+    <summary>{t("tabletAccessible")}</summary>
+    <h2>{tablet.title} · {tablet.subtitle}</h2>
+    <p>{tablet.notice}</p>
+    <ol>
+      {#each tablet.rows as row, index}
+        <li>
+          {#if row.action}<button
+              data-tablet-kind={row.action.kind}
+              data-tablet-id={"id" in row.action ? row.action.id : undefined}
+              data-tablet-row={index}
+              disabled={row.disabled}
+              onclick={() => onTabletAction(tablet.stall, row.action!)}
+              >{row.text}</button
+            >
+          {:else}<span>{row.text}</span>{/if}
+        </li>
+      {/each}
+    </ol>
+    <button onclick={() => onTabletAction(tablet.stall, { kind: "close" })}
+      >{t("tabletClose")}</button
+    >
+  </details>
+{/if}
 {#if ownerStall}
   <div class="controls" role="group" aria-label={t("ownerView")}>
     {#if ownedStalls.length > 1}
@@ -226,8 +263,12 @@
   {t(inside ? "ownerKeyboardHelp" : "hallKeyboardHelp")}
 </p>
 <div class="controls" role="group" aria-label={t("cameraControls")}>
-  <button disabled={!hall} onclick={() => hall?.reset()}
-    >{t("resetCamera")}</button
+  <button
+    disabled={!hall}
+    onclick={() => {
+      if (tablet) onTabletAction(tablet.stall, { kind: "close" });
+      hall?.reset();
+    }}>{t("resetCamera")}</button
   >
   <button disabled={!hall} onclick={() => hall?.rotate(Math.PI / 8)}
     >{t(inside ? "lookLeft" : "rotateLeft")}</button
