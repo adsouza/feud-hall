@@ -537,3 +537,11 @@ for action metadata, but purchase actions in the tablet journey use canvas click
 labels with real canvas font metrics and several prices. It requires complete
 prices, English word boundaries, no clipped text, and at most two readable lines
 per tablet row, including a regression where only part of a price used to fit.
+
+`app/test/browser/hall-layout.spec.ts` checks corner-first/largest-gap placement,
+the sixteen-stall island threshold, eight-stall cap, balanced splitting, stable logical identities, inward/outward
+headings, room bounds, and independent world-space booth separation at every
+size through 150. A bounded seeded property checks vacancies and coordinate
+transforms. Browser artifacts cover a populated outer ring, multiple compact islands, a tablet that stays pickable when its stall changes island and heading, and 150-stall rendering; these are presentation checks, not a simulation
+capacity benchmark. Run with one worker alongside focused hall-interaction and
+owner-view tests when changing stall orientation or placement.

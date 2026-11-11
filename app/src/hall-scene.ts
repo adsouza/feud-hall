@@ -6,6 +6,14 @@ import { createCuisineArt } from "./cuisine-art";
 import { createHallShell } from "./hall-shell";
 import { createTabletScreen } from "./hall-tablet";
 import type { TabletView, TabletAction } from "./hall-tablet";
+import {
+  layoutStalls,
+  nextStallSlot,
+  type StallSlot,
+  toHall,
+  toStall,
+  type StallPlacement,
+} from "./hall-layout";
 
 type Point = [number, number, number];
 type CameraPose = { position: Point; target: Point; fov?: number };
@@ -46,6 +54,7 @@ type Diner = {
 };
 type Departure = {
   diner: Diner;
+  yaw: number;
   x: number;
   z: number;
   side: number;
@@ -68,6 +77,7 @@ type Counter = {
   pickup: T.Mesh;
   serviceLamp: T.Mesh;
   index: number;
+  placement: StallPlacement;
   name: string;
   cuisine: string;
   color: T.Color;
@@ -79,9 +89,7 @@ type Counter = {
   open: boolean;
 };
 
-const COLS = 5;
-const GAP_X = 4.7;
-const GAP_Z = 5.5;
+const SMALL_HALL = 4;
 const STALL_LIMIT = 150;
 const ORBIT_POLAR_LIMIT = 1.46;
 const EYE_HEIGHT = 1.55;
@@ -280,7 +288,8 @@ export function createHallScene(
   host.appendChild(renderer.domElement);
 
   const scene = new T.Scene();
-  scene.fog = new T.FogExp2("#111526", 0.012);
+  const fog = new T.FogExp2("#111526", 0.012);
+  scene.fog = fog;
   const camera = new T.PerspectiveCamera(42, 1, 0.25, 175);
   const orbit = new OrbitControls(camera, renderer.domElement);
   orbit.enableDamping = false;
@@ -293,6 +302,7 @@ export function createHallScene(
   orbit.touches.ONE = T.TOUCH.ROTATE;
   let insideStall = saved?.inside?.stall ?? "";
   let hallView: CameraPose | undefined = saved?.inside?.hall;
+  let radius = 15;
   let readingMenu = saved?.menu?.stall ?? "";
   let menuReturn: CameraPose | undefined = saved?.menu?.hall;
   const tabletGeometry = new T.PlaneGeometry(0.62, 0.93);
@@ -461,65 +471,42 @@ export function createHallScene(
     color: "#3a4359",
     roughness: 0.9,
   });
+  const islandFloors = new T.InstancedMesh(
+    box,
+    laneMat,
+    Math.ceil(STALL_LIMIT / 8),
+  );
+  islandFloors.count = 0;
+  islandFloors.frustumCulled = false;
+  floor.add(islandFloors);
+  const islandTransform = new T.Object3D();
   const lines = new T.Group();
   floor.add(lines);
   let floorSignature = "";
   let centre = new T.Vector3();
-  let radius = 15;
 
-  function resizeFloor(columns: number, rows: number) {
-    const signature = `${columns}:${rows}`;
+  function resizeFloor(width: number, depth: number) {
+    const signature = `${width}:${depth}`;
     if (signature === floorSignature) return;
     floorSignature = signature;
-    const width = Math.max(2, columns) * GAP_X + 1.3;
-    const depth = rows * GAP_Z + 1.7;
-    centre = new T.Vector3(
-      ((columns - 1) * GAP_X) / 2,
-      0,
-      ((rows - 1) * GAP_Z + 1.3) / 2,
-    );
+    centre = new T.Vector3();
     radius = Math.hypot(width, depth) * 0.91;
+    // Keep the whole-room view readable as the rendered hall expands.
+    fog.density = Math.min(0.012, 0.45 / radius);
     camera.far = Math.max(175, radius * 3);
+    configureCamera();
     camera.updateProjectionMatrix();
-    floorBase.position.set(centre.x, -0.32, centre.z);
+    floorBase.position.set(0, -0.32, 0);
     floorBase.scale.set(width + 0.3, 0.4, depth + 0.3);
-    floorTop.position.set(centre.x, -0.09, centre.z);
+    floorTop.position.set(0, -0.09, 0);
     floorTop.scale.set(width, 0.1, depth);
-    hallShell.resize(centre.x, centre.z, width, depth);
+    hallShell.resize(0, 0, width, depth);
     lines.clear();
-    for (let row = 0; row < rows; row++) {
-      brick(
-        lines,
-        laneMat,
-        centre.x,
-        -0.028,
-        row * GAP_Z + 1.5,
-        width - 0.6,
-        0.025,
-        0.065,
-      );
-      brick(
-        lines,
-        slate,
-        centre.x,
-        -0.026,
-        row * GAP_Z + 3.05,
-        width - 0.6,
-        0.026,
-        0.08,
-      );
-    }
-    for (let col = 0; col <= columns; col++) {
-      brick(
-        lines,
-        slate,
-        (col - 0.5) * GAP_X,
-        -0.03,
-        centre.z,
-        0.07,
-        0.02,
-        depth - 0.6,
-      );
+    const insetX = width / 2 - 4.5,
+      insetZ = depth / 2 - 4.5;
+    for (const sign of [-1, 1]) {
+      brick(lines, laneMat, sign * insetX, -0.028, 0, 0.065, 0.025, insetZ * 2);
+      brick(lines, laneMat, 0, -0.028, sign * insetZ, insetX * 2, 0.025, 0.065);
     }
   }
 
@@ -618,15 +605,24 @@ export function createHallScene(
     }
   }
 
-  function createCounter(stall: Stall, index: number): Counter {
+  function createCounter(
+    stall: Stall,
+    index: number,
+    slot: StallSlot = nextStallSlot(
+      [...stalls.values()].map((model) => model.placement),
+    ),
+  ): Counter {
     const root = new T.Group();
     const trim = new T.Group();
     root.add(trim);
-    root.position.set(
-      (index % COLS) * GAP_X,
-      0,
-      Math.floor(index / COLS) * GAP_Z,
-    );
+    const placement = layoutStalls([
+      ...[...stalls.values()]
+        .filter((model) => model.index !== index)
+        .map((model) => model.placement),
+      slot,
+    ]).placements.at(-1)!;
+    root.position.set(placement.x, 0, placement.z);
+    root.rotation.y = placement.yaw;
     const colorIndex = hash(stall.cuisine) % hues.length;
     const accent = accents[colorIndex];
     const canopy = awnings[colorIndex];
@@ -713,6 +709,7 @@ export function createHallScene(
       pickup,
       serviceLamp,
       index,
+      placement,
       name: "",
       cuisine: stall.cuisine,
       color: accent.color,
@@ -874,15 +871,16 @@ export function createHallScene(
     z: number,
     color: T.Color,
     faceYaw = 0,
+    yaw = 0,
   ) {
-    dummy.rotation.y = 0;
+    dummy.rotation.y = yaw;
     dummy.rotation.z = 0;
     dummy.scale.set(1.45, 2.1, 1);
     dummy.position.set(x, 0.65, z);
     dummy.updateMatrix();
     body.setMatrixAt(index, dummy.matrix);
     body.setColorAt(index, color);
-    dummy.rotation.y = faceYaw;
+    dummy.rotation.y = yaw + faceYaw;
     dummy.scale.setScalar(1.45);
     dummy.position.y = 1.34;
     dummy.updateMatrix();
@@ -899,32 +897,36 @@ export function createHallScene(
     torso: T.InstancedMesh,
     head: T.InstancedMesh,
     gait?: Gait,
+    yaw = 0,
   ) {
     const stride = gait?.stride ?? 0;
     const lean = stride * 0.1;
     const bob = Math.abs(stride) * 0.04;
     const height = diner.height * 0.85;
+    dummy.rotation.y = yaw;
     dummy.rotation.z = lean;
     dummy.scale.set(1, height, 1);
     dummy.position.set(x, 0.16 + 0.28 * height + bob, z);
     dummy.updateMatrix();
     torso.setMatrixAt(index, dummy.matrix);
-    dummy.rotation.y = gait?.faceYaw ?? diner.faceYaw;
+    dummy.rotation.y = yaw + (gait?.faceYaw ?? diner.faceYaw);
     dummy.rotation.z = 0;
     dummy.scale.setScalar(1);
-    dummy.position.x = x - Math.sin(lean) * 0.29 * height;
+    dummy.position.x = x - Math.cos(yaw) * Math.sin(lean) * 0.29 * height;
+    dummy.position.z = z + Math.sin(yaw) * Math.sin(lean) * 0.29 * height;
     dummy.position.y = 0.24 + 0.55 * height + bob;
     dummy.updateMatrix();
     head.setMatrixAt(index, dummy.matrix);
-    dummy.rotation.y = 0;
+    dummy.rotation.y = yaw;
 
     dummy.scale.set(0.39, 0.39, 0.45);
     for (const leg of [-1, 1]) {
       const step = leg * stride;
+      const footX = leg * 0.074 + (gait?.side ?? 0) * step * 0.05;
       dummy.position.set(
-        x + leg * 0.074 + (gait?.side ?? 0) * step * 0.05,
+        x + Math.cos(yaw) * footX + Math.sin(yaw) * step * 0.11,
         0.11 + Math.max(0, step) * 0.065,
-        z + step * 0.11,
+        z - Math.sin(yaw) * footX + Math.cos(yaw) * step * 0.11,
       );
       dummy.updateMatrix();
       const part = dinerLegs.mesh.count++;
@@ -959,16 +961,23 @@ export function createHallScene(
     const diner = model.queue[index];
     const distance = aisleDistance(diner, now);
     if (distance === 1) return false;
-    const { x, z } = model.root.position;
     const [dx, dz] = queuePositions[index];
+    const { x, z } = toHall(
+      model.placement,
+      dx + queueSway(model.index, index, now),
+      dz,
+    );
     departures.push({
       diner,
-      x: x + dx + queueSway(model.index, index, now),
-      z: z + dz,
+      x,
+      z,
+      yaw: model.placement.yaw,
       side: index % 2 === 0 ? -1 : 1,
       // An interrupted arrival heads back from its current point in the aisle.
       startedAt: now - distance * WALK_MS,
-      trayFrom: carrying ? [x, 0.93, z + 0.88] : undefined,
+      trayFrom: carrying
+        ? point(model.root.localToWorld(new T.Vector3(0, 0.93, 0.88)))
+        : undefined,
     });
     return true;
   }
@@ -1020,15 +1029,21 @@ export function createHallScene(
     distance: number,
     departing = false,
     trayFrom?: Point,
+    yaw = 0,
   ) {
     const index = walkingBodies.mesh.count++;
     const stride = Math.sin(distance * Math.PI * 8);
     const opacity = 1 - T.MathUtils.smoothstep(distance, 0.14, 1);
+    const walking = toHall(
+      { x, z, yaw },
+      side * 1.18 * T.MathUtils.smoothstep(distance, 0.05, 1),
+      distance * 1.4,
+    );
     dinerPose(
       index,
       diner,
-      x + side * 1.18 * T.MathUtils.smoothstep(distance, 0.05, 1),
-      z + distance * 1.4,
+      walking.x,
+      walking.z,
       walkingBodies.mesh,
       walkingHeads.mesh,
       {
@@ -1037,23 +1052,31 @@ export function createHallScene(
         opacity,
         faceYaw: departing ? Math.atan2(side * 1.18, 1.4) : diner.faceYaw,
       },
+      yaw,
     );
     const { torso, head } = diner;
     walkingBodies.colors.setXYZW(index, torso.r, torso.g, torso.b, opacity);
     walkingHeads.colors.setXYZW(index, head.r, head.g, head.b, opacity);
     if (trayFrom) {
-      const yaw = Math.atan2(side * 1.18, 1.4);
-      const walkX = x + side * 1.18 * T.MathUtils.smoothstep(distance, 0.05, 1);
-      const walkZ = z + distance * 1.4;
+      const heading = yaw + Math.atan2(side * 1.18, 1.4);
+      const { x: walkX, z: walkZ } = walking;
       const height =
         0.16 + 0.38 * diner.height * 0.85 + Math.abs(stride) * 0.04;
       const handover = T.MathUtils.smoothstep(distance, 0, 0.16);
-      dummy.rotation.set(0, yaw, 0);
+      dummy.rotation.set(0, heading, 0);
       dummy.scale.setScalar(0.75);
       dummy.position.set(
-        T.MathUtils.lerp(trayFrom[0], walkX + Math.sin(yaw) * 0.29, handover),
+        T.MathUtils.lerp(
+          trayFrom[0],
+          walkX + Math.sin(heading) * 0.29,
+          handover,
+        ),
         T.MathUtils.lerp(trayFrom[1], height, handover),
-        T.MathUtils.lerp(trayFrom[2], walkZ + Math.cos(yaw) * 0.29, handover),
+        T.MathUtils.lerp(
+          trayFrom[2],
+          walkZ + Math.cos(heading) * 0.29,
+          handover,
+        ),
       );
       dummy.updateMatrix();
       const trayIndex = carriedTrays.count++;
@@ -1081,7 +1104,7 @@ export function createHallScene(
     departures = departures.filter(
       ({ startedAt }) => now - startedAt < WALK_MS,
     );
-    for (const { diner, x, z, side, startedAt, trayFrom } of departures) {
+    for (const { diner, x, z, side, startedAt, trayFrom, yaw } of departures) {
       walkDiner(
         diner,
         x,
@@ -1090,6 +1113,7 @@ export function createHallScene(
         Math.max(0, now - startedAt) / WALK_MS,
         true,
         trayFrom,
+        yaw,
       );
     }
   }
@@ -1137,21 +1161,22 @@ export function createHallScene(
         id === appearance.selected || id === hover || id === appearance.pickup;
       const detailed = inspected || (appearance.detail && nearby);
       model.trim.visible = detailed;
-      model.sign.visible = detailed || stalls.size <= COLS;
+      model.sign.visible = detailed || stalls.size <= SMALL_HALL;
       model.edge.visible = inspected;
       model.pickup.visible = Boolean(model.activity?.handover);
       const activity = model.activity;
-      const x = model.root.position.x;
-      const z = model.root.position.z;
+      const yaw = model.placement.yaw;
+      const owner = toHall(model.placement, -0.61, 0.08);
       if (model.open) {
         const glance = appearance.motion && detailed;
         if (insideStall !== id)
           staffActor(
             actors++,
-            x - 0.61,
-            z + 0.08,
+            owner.x,
+            owner.z,
             ownerTint,
             glance ? staffGlance(time, model.index, 0) : 0,
+            yaw,
           );
         const workers = activity?.workers ?? Number(Boolean(activity?.staffed));
         const count = Math.min(workers, detailed ? staffPositions.length : 1);
@@ -1160,13 +1185,15 @@ export function createHallScene(
           const sway = appearance.motion
             ? Math.sin(time * 2 + model.index + n) * 0.045
             : 0;
+          const worker = toHall(model.placement, dx + sway, dz);
           staffActor(
             actors++,
-            x + dx + sway,
-            z + dz,
+            worker.x,
+            worker.z,
             workerTint,
             (n % 2 ? 1 : -1) * 0.22 +
               (glance ? staffGlance(time, model.index, n + 1) : 0),
+            yaw,
           );
         }
       }
@@ -1179,17 +1206,30 @@ export function createHallScene(
         const [dx, dz] = queuePositions[n];
         const sway = appearance.motion ? queueSway(model.index, n, now) : 0;
         const distance = aisleDistance(diner, now);
+        const position = toHall(model.placement, dx + sway, dz);
         if (distance > 0) {
           walkDiner(
             diner,
-            x + dx + sway,
-            z + dz,
+            position.x,
+            position.z,
             n % 2 === 0 ? -1 : 1,
             distance,
+            false,
+            undefined,
+            yaw,
           );
           continue;
         }
-        dinerPose(actors, diner, x + dx + sway, z + dz, body, heads);
+        dinerPose(
+          actors,
+          diner,
+          position.x,
+          position.z,
+          body,
+          heads,
+          undefined,
+          yaw,
+        );
         body.setColorAt(actors, diner.torso);
         heads.setColorAt(actors++, diner.head);
       }
@@ -1197,11 +1237,12 @@ export function createHallScene(
       if (detailed && activity.cooking > 0) {
         for (let n = 0; n < Math.min(2, activity.cooking); n++) {
           const progress = (time * 0.7 + model.index * 0.27 + n * 0.42) % 1;
-          dummy.position.set(
-            x + 0.82 + n * 0.26 + progress * 0.13,
-            1.1 + progress * 0.52,
-            z - 0.45,
+          const puff = toHall(
+            model.placement,
+            0.82 + n * 0.26 + progress * 0.13,
+            -0.45,
           );
+          dummy.position.set(puff.x, 1.1 + progress * 0.52, puff.z);
           dummy.scale.setScalar(0.8 + progress * 0.75);
           dummy.updateMatrix();
           steam.setMatrixAt(puffs++, dummy.matrix);
@@ -1266,23 +1307,27 @@ export function createHallScene(
   }
 
   function blockingStall(x: number, z: number) {
-    for (const { root } of stalls.values()) {
-      const dx = x - root.position.x;
-      const dz = z - root.position.z;
+    for (const model of stalls.values()) {
+      const { x: dx, z: dz } = toStall(model.placement, x, z);
       // Leave room for the near plane outside the counter and side walls.
-      if (Math.abs(dx) < 1.92 && dz > -1.27 && dz < 1.44) return root;
+      if (Math.abs(dx) < 1.92 && dz > -1.27 && dz < 1.44) return model;
     }
   }
 
   function walk(dx: number, dz: number) {
     const booth = stalls.get(insideStall);
     if (booth) {
-      const { x, z } = booth.root.position;
-      camera.position.set(
-        T.MathUtils.clamp(camera.position.x + dx, x - 1.2, x + 1.2),
-        EYE_HEIGHT,
-        T.MathUtils.clamp(camera.position.z + dz, z - 0.5, z + 0.16),
+      const local = toStall(
+        booth.placement,
+        camera.position.x + dx,
+        camera.position.z + dz,
       );
+      const next = toHall(
+        booth.placement,
+        T.MathUtils.clamp(local.x, -1.2, 1.2),
+        T.MathUtils.clamp(local.z, -0.5, 0.16),
+      );
+      camera.position.set(next.x, EYE_HEIGHT, next.z);
       return;
     }
     const { x, z } = floorTop.position;
@@ -1295,7 +1340,16 @@ export function createHallScene(
     const position = camera.position;
     position.set(clampX(position.x), EYE_HEIGHT, clampZ(position.z));
     const blocked = blockingStall(position.x, position.z);
-    if (blocked) position.z = clampZ(blocked.position.z + 1.5);
+    if (blocked) {
+      const local = toStall(blocked.placement, position.x, position.z);
+      const exit = toHall(
+        blocked.placement,
+        T.MathUtils.clamp(local.x, -1.2, 1.2),
+        1.5,
+      );
+      position.x = clampX(exit.x);
+      position.z = clampZ(exit.z);
+    }
 
     const nextX = clampX(position.x + dx);
     if (!blockingStall(nextX, position.z)) position.x = nextX;
@@ -1431,7 +1485,7 @@ export function createHallScene(
     // A tiny orbit pivot turns the owner's head in place. Panning or dollying
     // would take the camera through the booth walls or the counter.
     orbit.minDistance = insideStall ? 0.01 : readingMenu ? 0.5 : 3.5;
-    orbit.maxDistance = insideStall ? 0.01 : 115;
+    orbit.maxDistance = insideStall ? 0.01 : Math.max(115, radius * 2);
     orbit.enablePan = !insideStall;
     orbit.enableZoom = !insideStall;
     orbit.maxPolarAngle =
@@ -1450,8 +1504,20 @@ export function createHallScene(
       const root = stalls.get(id)!.root;
       camera.position
         .copy(root.position)
-        .add(new T.Vector3(-0.61, EYE_HEIGHT, 0.08));
-      orbit.target.copy(camera.position).add(new T.Vector3(0, -0.0045, 0.01));
+        .add(
+          new T.Vector3(-0.61, EYE_HEIGHT, 0.08).applyAxisAngle(
+            new T.Vector3(0, 1, 0),
+            root.rotation.y,
+          ),
+        );
+      orbit.target
+        .copy(camera.position)
+        .add(
+          new T.Vector3(0, -0.0045, 0.01).applyAxisAngle(
+            new T.Vector3(0, 1, 0),
+            root.rotation.y,
+          ),
+        );
       camera.fov = 42;
     } else {
       insideStall = "";
@@ -1480,7 +1546,7 @@ export function createHallScene(
     orbit.target.copy(centre);
     camera.position
       .copy(centre)
-      .add(new T.Vector3(radius * 0.31, radius * 0.25, radius * 0.88));
+      .add(new T.Vector3(radius * 0.5, radius * 0.75, radius * 0.85));
     orbit.update();
     draw();
   }
@@ -1490,15 +1556,11 @@ export function createHallScene(
     setInside("");
     const model = stalls.get(id);
     if (!model) return;
-    const offset = camera.position.clone().sub(orbit.target);
-    // Keep the counter opening visible beneath the canopy when inspecting.
-    offset.y = T.MathUtils.clamp(
-      offset.y,
-      0,
-      Math.hypot(offset.x, offset.z) * 0.22,
+    orbit.target.copy(model.root.localToWorld(new T.Vector3(0, 0.75, 0.35)));
+    const offset = new T.Vector3(0.7, 1.65, 7.8).applyAxisAngle(
+      new T.Vector3(0, 1, 0),
+      model.placement.yaw,
     );
-    offset.setLength(8);
-    orbit.target.copy(model.root.position).add(new T.Vector3(0, 0.75, 0.35));
     camera.position.copy(orbit.target).add(offset);
     orbit.maxPolarAngle = ORBIT_POLAR_LIMIT;
     orbit.update();
@@ -1519,7 +1581,14 @@ export function createHallScene(
       const distance =
         Math.max(0.5 / tangent, 0.34 / (tangent * camera.aspect)) * 1.08;
       orbit.target.copy(target);
-      camera.position.copy(target).add(new T.Vector3(0, 0, distance));
+      camera.position
+        .copy(target)
+        .add(
+          new T.Vector3(0, 0, distance).applyAxisAngle(
+            new T.Vector3(0, 1, 0),
+            model.placement.yaw,
+          ),
+        );
     } else {
       readingMenu = "";
       if (menuReturn) {
@@ -1674,7 +1743,7 @@ export function createHallScene(
         if (model && model.cuisine !== stall.cuisine) {
           const previous = model;
           discardCounter(previous);
-          model = createCounter(stall, previous.index);
+          model = createCounter(stall, previous.index, previous.placement);
           model.queue = previous.queue;
           model.visibleDiners = previous.visibleDiners;
           model.nextDiner = previous.nextDiner;
@@ -1727,9 +1796,62 @@ export function createHallScene(
       )
         setInside("");
       hasHallView = true;
+      const models = [...stalls.values()];
+      const layout = layoutStalls(models.map((model) => model.placement));
+      const anchor = stalls.get(insideStall || readingMenu || next.selected);
+      const before = anchor?.placement;
+      for (const [i, model] of models.entries()) {
+        const placement = layout.placements[i];
+        model.placement = placement;
+        model.root.position.set(placement.x, 0, placement.z);
+        model.root.rotation.y = placement.yaw;
+      }
+      if (anchor && before) {
+        const reframe = (position: T.Vector3) => {
+          if (
+            before.x === anchor.placement.x &&
+            before.z === anchor.placement.z &&
+            before.yaw === anchor.placement.yaw
+          )
+            return;
+          const local = toStall(before, position.x, position.z);
+          const moved = toHall(anchor.placement, local.x, local.z);
+          position.x = moved.x;
+          position.z = moved.z;
+        };
+        reframe(camera.position);
+        reframe(orbit.target);
+        for (const savedPose of [hallView, menuReturn])
+          if (savedPose) {
+            const position = vec(savedPose.position),
+              target = vec(savedPose.target);
+            reframe(position);
+            reframe(target);
+            savedPose.position = point(position);
+            savedPose.target = point(target);
+          }
+      } else if (
+        initialized &&
+        (floorTop.scale.x !== layout.floorWidth ||
+          floorTop.scale.z !== layout.floorDepth)
+      ) {
+        const ratio =
+          Math.hypot(layout.floorWidth, layout.floorDepth) /
+          Math.hypot(floorTop.scale.x, floorTop.scale.z);
+        camera.position.multiplyScalar(ratio);
+        orbit.target.multiplyScalar(ratio);
+      }
+      resizeFloor(layout.floorWidth, layout.floorDepth);
+      islandFloors.count = layout.islands.length;
+      for (const island of layout.islands) {
+        islandTransform.position.set(island.x, -0.027, island.z);
+        islandTransform.scale.set(island.side + 2.6, 0.025, island.side + 2.6);
+        islandTransform.updateMatrix();
+        islandFloors.setMatrixAt(island.id, islandTransform.matrix);
+      }
+      islandFloors.instanceMatrix.needsUpdate = true;
+      orbit.update();
       cuisineArt.update(stalls.values(), next.cuisineLabel);
-      const last = Math.max(0, ...indices);
-      resizeFloor(Math.min(COLS, last + 1), 1 + Math.floor(last / COLS));
       if (detailChanged)
         renderer.setPixelRatio(
           Math.min(window.devicePixelRatio, next.detail ? 1.65 : 1),
@@ -1825,6 +1947,7 @@ export function createHallScene(
       idleTablet.dispose();
       activeTablet.dispose();
       tabletGeometry.dispose();
+      islandFloors.dispose();
       cuisineArt.dispose();
       hallShell.dispose();
       shut.map?.dispose();
