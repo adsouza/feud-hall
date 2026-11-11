@@ -3,13 +3,17 @@ defmodule FeudHall.Application.DinerBrowse do
 
   alias FeudHall.Application.Replay
   alias FeudHall.Domain.{Dietary, Identity, Inventory, Money, Offers, PublicView, Substitution}
+  alias FeudHall.Domain.Hall.Admission
 
   @limit 12
 
   @doc "Available mains and their compatible drinks for one stall and dietary profile."
-  def checkout_menu(state, stall_id, profile_id) when is_binary(stall_id) and is_binary(profile_id) do
+  def checkout_menu(state, stall_id, profile_id, principal \\ nil)
+
+  def checkout_menu(state, stall_id, profile_id, principal) when is_binary(stall_id) and is_binary(profile_id) do
     mains =
-      with {:ok, requirement} <- Dietary.requirement(state.catalog, profile_id),
+      with :ok <- Admission.customer_access(state, principal, stall_id),
+           {:ok, requirement} <- Dietary.requirement(state.catalog, profile_id),
            {:ok, _stall, restaurant} <- Offers.open_stall_for_main(state, stall_id) do
         terms = %{requirement: requirement, carbs_reserved: 0, carbs_served: 0}
         recipes = state.catalog.recipes
@@ -30,7 +34,7 @@ defmodule FeudHall.Application.DinerBrowse do
     %{stall_id: stall_id, profile_id: profile_id, mains: mains}
   end
 
-  def checkout_menu(_state, _stall_id, _profile_id), do: nil
+  def checkout_menu(_state, _stall_id, _profile_id, _principal), do: nil
 
   def compare(%{state: nil}, _device, _params), do: {:error, :hall_not_initialized}
 
@@ -41,6 +45,7 @@ defmodule FeudHall.Application.DinerBrowse do
     include_drink = Map.get(params, "include_drink") == "1"
     new_to_me = Map.get(params, "new_to_me") == "1"
     stall_id = params["stall_id"]
+    principal = Identity.principal_for_device(Identity.get(runtime.control), device)
 
     with true <- sort in ["wait", "price"],
          {:ok, budget} <- budget(params["budget"]),
@@ -48,11 +53,18 @@ defmodule FeudHall.Application.DinerBrowse do
          {:ok, tasted} <- tasting(runtime, device) do
       terms = %{requirement: requirement, carbs_reserved: 0, carbs_served: 0}
       seen = MapSet.new(tasted)
-      items = options(state, terms, include_drink, budget, new_to_me, seen, stall_id)
+      items = options(state, terms, include_drink, budget, new_to_me, seen, stall_id, principal)
       options = items |> Enum.sort_by(&rank(&1, sort)) |> Enum.take(@limit) |> Enum.map(&encode/1)
 
       {:ok,
-       %{at: state.now, options: options, tasted: tasted, matched: length(items), sold_out: sold_out(state, stall_id)}}
+       %{
+         at: state.now,
+         options: options,
+         tasted: tasted,
+         matched: length(items),
+         sold_out:
+           if(Admission.customer_access(state, principal, stall_id) == :ok, do: sold_out(state, stall_id), else: [])
+       }}
     else
       false -> {:error, :invalid_dining_filters}
       {:error, _} = error -> error
@@ -97,8 +109,9 @@ defmodule FeudHall.Application.DinerBrowse do
     end
   end
 
-  defp options(%{access: :open} = state, terms, include_drink, budget, new_to_me, seen, stall_id) do
+  defp options(%{access: :open} = state, terms, include_drink, budget, new_to_me, seen, stall_id, principal) do
     for stall <- PublicView.stalls(state),
+        Admission.customer_access(state, principal, stall.stall_id) == :ok,
         is_nil(stall_id) or stall.stall_id == stall_id,
         stall.open?,
         include <- [if(include_drink, do: drink(stall.menu, state.catalog.recipes), else: nil)],
@@ -120,7 +133,7 @@ defmodule FeudHall.Application.DinerBrowse do
     end
   end
 
-  defp options(_state, _terms, _include_drink, _budget, _new_to_me, _seen, _stall_id), do: []
+  defp options(_state, _terms, _include_drink, _budget, _new_to_me, _seen, _stall_id, _principal), do: []
 
   defp sold_out(_state, nil), do: []
 

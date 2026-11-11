@@ -110,5 +110,10 @@
   ["halibut", "Halibut", "オヒョウ", ["fish"], 0, 2150, 2, "frozen"],
   ["kelp", "Culinary kelp", "食用コンブ", ["plant"], 96, 850, 35, "value"],
   ["huckleberries", "Huckleberries", "ハックルベリー", ["plant"], 150, 1300, 3, "frozen"],
-  ["nettles", "Food-grade nettle", "イラクサの茶葉", ["plant"], 15, 1300, 30, null]
+  ["nettles", "Food-grade nettle", "イラクサの茶葉", ["plant"], 15, 1300, 30, null],
+  ["puha", "Pūhā greens", "プーハー（ノゲシの葉）", ["plant"], 30, 650, 3, "frozen"],
+  ["cabbage", "Cabbage", "キャベツ", ["plant"], 58, 280, 7, "frozen"],
+  ["green_lipped_mussels", "Shelled green-lipped mussels", "むき身のニュージーランドミドリイガイ", ["fish"], 40, 1150, 2, "frozen"],
+  ["golden_syrup", "Golden syrup", "ゴールデンシロップ", ["plant"], 820, 520, 90, "value"],
+  ["kawakawa_leaf", "Food-grade kawakawa leaves", "食用カワカワの葉", ["plant"], 0, 1900, 30, null]
 ]

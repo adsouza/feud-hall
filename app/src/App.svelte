@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { fade } from "svelte/transition";
   import appIcon from "../../assets/branding/feud-hall-icon.svg?no-inline";
   import CuisinePicker from "./CuisinePicker.svelte";
@@ -36,6 +36,131 @@
 
   let locale = $state<Locale>("en");
   let page = $state<Page>("hall");
+  type BusinessSection =
+    "locations" | "menu" | "supply" | "staff" | "performance" | "recognition";
+  type PhoneRoute = {
+    page: Page;
+    detail: boolean;
+    section: BusinessSection;
+    stall: string;
+    scroll: number;
+  };
+  const businessLabels: Record<BusinessSection, Key> = {
+    locations: "currentLocations",
+    menu: "viewMenu",
+    supply: "supply",
+    staff: "staff",
+    performance: "performance",
+    recognition: "recognition",
+  };
+  const navigationIcons: Record<Page, string> = {
+    business: "M3 10h18M5 10v11h14V10M2 10l3-7h14l3 7M9 21v-7h6v7",
+    hall: "M3 21V7l9-4 9 4v14M7 11h10M7 16h10M7 21h10",
+    visit:
+      "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z",
+    work: "M8 7V3h8v4M3 7h18v14H3ZM3 12h18M10 12v3h4v-3",
+    profile: "M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM3 22a9 9 0 0 1 18 0",
+    review: "M5 3h14v18H5ZM8 8h8M8 13h8M8 18h5",
+  };
+  let phone = $state(false);
+  let phoneDetail = $state(false);
+  let businessSection = $state<BusinessSection>("menu");
+  let stallInspector = $state<HTMLElement>();
+  let hallPicker = $state<HTMLSelectElement>();
+  let hallTrigger: HTMLElement | null = null;
+
+  function route(): PhoneRoute {
+    return {
+      page,
+      detail: phoneDetail,
+      section: businessSection,
+      stall: hallSelection,
+      scroll: window.scrollY,
+    };
+  }
+  function rememberRoute(push = false, scroll = window.scrollY) {
+    const state = { ...history.state, feudHallUI: { ...route(), scroll } };
+    if (push) history.pushState(state, "");
+    else history.replaceState(state, "");
+  }
+  function readRoute(value: unknown): PhoneRoute | null {
+    if (!value || typeof value !== "object") return null;
+    const r = value as Record<string, unknown>;
+    if (!(
+      typeof r.page === "string" &&
+      ["business", "hall", "visit", "work", "profile", "review"].includes(
+        r.page,
+      ) &&
+      typeof r.detail === "boolean" &&
+      typeof r.section === "string" &&
+      Object.hasOwn(businessLabels, r.section) &&
+      typeof r.stall === "string" &&
+      typeof r.scroll === "number" &&
+      Number.isFinite(r.scroll)
+    ))
+      return null;
+    return {
+      page: r.page as Page,
+      detail: r.detail,
+      section: r.section as BusinessSection,
+      stall: r.stall,
+      scroll: Math.max(0, r.scroll),
+    };
+  }
+  function navigate(
+    next: Page,
+    detail = false,
+    section = businessSection,
+    stall = hallSelection,
+  ) {
+    if (
+      next === page &&
+      detail === phoneDetail &&
+      section === businessSection &&
+      stall === hallSelection
+    )
+      return;
+    if (phone) rememberRoute();
+    page = next;
+    phoneDetail = detail;
+    businessSection = section;
+    hallSelection = stall;
+    if (phone) {
+      rememberRoute(true, 0);
+      void tick().then(() => {
+        window.scrollTo(0, 0);
+        if (detail) stallInspector?.focus({ preventScroll: true });
+      });
+    }
+  }
+  function openStallDetails(id: string, trigger?: HTMLElement) {
+    hallTrigger =
+      trigger ??
+      (document.activeElement instanceof HTMLElement &&
+      document.activeElement !== document.body &&
+      document.activeElement !== document.documentElement
+        ? document.activeElement
+        : null);
+    hallSelection = id;
+    if (phone) navigate("hall", true, businessSection, id);
+  }
+  function focusHall() {
+    void tick().then(() => {
+      if (hallTrigger?.isConnected && hallTrigger.getClientRects().length)
+        hallTrigger.focus({ preventScroll: true });
+      else if (phone) hallPicker?.focus({ preventScroll: true });
+      else stallInspector?.focus({ preventScroll: true });
+    });
+  }
+  function backToHall() {
+    const current = readRoute(history.state?.feudHallUI);
+    if (current?.page === "hall" && current.detail) history.back();
+    else {
+      phoneDetail = false;
+      rememberRoute();
+      focusHall();
+    }
+  }
   let view = $state<View | null>(null);
   let connected = $state(true);
   let updateRequired = $state(false);
@@ -137,6 +262,17 @@
     restaurant?.stalls.find((stall) => stall.id === ownerStallId) ??
       restaurant?.stalls[0],
   );
+  let businessSections = $derived<BusinessSection[]>([
+    ...(restaurant?.stall_limit ? ["locations" as const] : []),
+    "menu",
+    "supply",
+    ...(ownerStall ? ["staff" as const] : []),
+    "performance",
+    ...(restaurant?.stall_limit ? ["recognition" as const] : []),
+  ]);
+  let visibleBusinessSection = $derived(
+    businessSections.includes(businessSection) ? businessSection : "menu",
+  );
   let ownerMenu = $derived(ownerStall?.menu ?? restaurant?.menu ?? {});
   let starterStock = $derived(
     ownerStall?.starter_stock ?? restaurant?.starter_stock,
@@ -171,10 +307,15 @@
         )
       : selectedStall,
   );
-  let orderingStalls = $derived(
+  const ownStall = (stall: Stall) =>
+    !!restaurant && stall.restaurant_id === restaurant.id;
+  let servingStalls = $derived(
     view?.hall.access === "open"
       ? view.hall.stalls.filter((stall) => stall["open?"])
       : [],
+  );
+  let orderingStalls = $derived(
+    servingStalls.filter((stall) => !ownStall(stall)),
   );
   let orderLocation = $derived(
     orderingStalls.find((stall) => stall.stall_id === stallId)?.stall_id ?? "",
@@ -205,7 +346,6 @@
           "business",
           "hall",
           "visit",
-          "work",
           "profile",
           ...(profile.account["reviewer?"] ? ["review" as const] : []),
         ]
@@ -268,6 +408,40 @@
 
   onMount(() => {
     locale = navigator.language.startsWith("ja") ? "ja" : "en";
+    const media = window.matchMedia("(width < 400px)");
+    const reflow = () => {
+      if (media.matches) {
+        const active = document.activeElement;
+        const panel = active?.closest<HTMLElement>("[data-business-section]")
+          ?.dataset.businessSection;
+        if (panel && Object.hasOwn(businessLabels, panel))
+          businessSection = panel as BusinessSection;
+        if (active?.closest(".stall-inspector")) phoneDetail = true;
+      }
+      phone = media.matches;
+    };
+    reflow();
+    rememberRoute();
+    const scrollRestoration = history.scrollRestoration;
+    history.scrollRestoration = "manual";
+    const pop = (event: PopStateEvent) => {
+      const saved = readRoute(event.state?.feudHallUI);
+      if (!saved) return;
+      page = navigation.includes(saved.page) ? saved.page : "hall";
+      phoneDetail = saved.detail;
+      businessSection = saved.section;
+      hallSelection = saved.stall;
+      void tick().then(() => {
+        window.scrollTo(0, saved.scroll);
+        if (page === "hall") {
+          if (phoneDetail && phone)
+            stallInspector?.focus({ preventScroll: true });
+          else focusHall();
+        }
+      });
+    };
+    media.addEventListener("change", reflow);
+    window.addEventListener("popstate", pop);
     void refresh();
     const timer = window.setInterval(() => {
       if (!document.hidden && Date.now() >= nextPoll) void refresh();
@@ -280,7 +454,12 @@
     const presence = window.setInterval(() => {
       if (!document.hidden && connected && profile?.account["owner?"])
         void heartbeat();
-      if (!document.hidden && connected && selectedShift) {
+      if (
+        !document.hidden &&
+        connected &&
+        selectedShift &&
+        !profile?.account["owner?"]
+      ) {
         void send(
           command("report_helper_presence", {
             shift_id: selectedShift.shift_id,
@@ -299,6 +478,9 @@
     window.addEventListener("compositionstart", compositionStart, true);
     window.addEventListener("compositionend", compositionEnd, true);
     return () => {
+      media.removeEventListener("change", reflow);
+      window.removeEventListener("popstate", pop);
+      history.scrollRestoration = scrollRestoration;
       window.clearInterval(timer);
       window.clearInterval(presence);
       document.removeEventListener("visibilitychange", resume);
@@ -418,7 +600,10 @@
         view = current;
         if (!selectedLanding) {
           selectedLanding = true;
-          if (current.profile?.account["owner?"]) page = "business";
+          if (current.profile?.account["owner?"]) {
+            page = "business";
+            rememberRoute();
+          }
         }
       }
       connected = true;
@@ -507,7 +692,7 @@
           code: invitationCode.trim(),
         });
       else await submit("bootstrap_guest", { name: guestName });
-      if (profile?.account["owner?"]) page = "business";
+      if (profile?.account["owner?"]) navigate("business");
     } catch (error) {
       status = {
         refusal: error instanceof ApiError ? error.code : "network_error",
@@ -520,7 +705,7 @@
     main = "";
     drink = "";
     clearQuote();
-    page = "visit";
+    navigate("visit");
   }
 
   function chooseMeal(option: DiningOption, profileId: string) {
@@ -541,7 +726,11 @@
     const visit = profile?.visit;
     let fields: Record<string, string>;
     if (kind === "dessert") {
-      if (visit?.dessert !== "offered" || view?.hall.access !== "open")
+      if (
+        visit?.dessert !== "offered" ||
+        view?.hall.access !== "open" ||
+        (visitStall && ownStall(visitStall))
+      )
         return null;
       fields = { visit_id: visit.id };
     } else {
@@ -606,6 +795,28 @@
   }
 </script>
 
+{#snippet workHistory()}
+  {#if profile && profile.work.history.length}
+    <h2>{t("workHistory")}</h2>
+    <ul>
+      {#each profile.work.history as shift (shift.shift_id)}<li>
+          {cash(shift.amount)} · {title(shift.reason)}
+          {#if shift.qualified}· {t("qualified")}{/if}
+          {#if shift.staged}· {t("stagedTasks")} {shift.staged}{/if}
+          {#if shift.reason === "actionable_idle"}
+            <details class="shift-help">
+              <summary>
+                <span class="shift-help-icon" aria-hidden="true">?</span>
+                <span class="sr-only">{t("selectionWindowHelpLabel")}</span>
+              </summary>
+              <p>{t("selectionWindowHelp")}</p>
+            </details>
+          {/if}
+        </li>{/each}
+    </ul>
+  {/if}
+{/snippet}
+
 {#snippet visitProgress()}
   {#if profile?.visit && view}
     {@const visit = profile.visit}
@@ -660,14 +871,30 @@
   </div>
 </header>
 
-<nav aria-label={t("hall")}>
+<nav
+  class="primary-navigation"
+  aria-label={t("mainNavigation")}
+  style:--nav-items={navigation.length}
+>
   {#each navigation as section (section)}
     <button
       class:current={page === section}
       aria-current={page === section ? "page" : undefined}
       onclick={() => {
-        page = section;
-      }}>{t(section)}</button
+        if (phone && section === "hall" && page === "hall" && phoneDetail)
+          backToHall();
+        else navigate(section);
+      }}
+      ><svg
+        class="nav-icon"
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"><path d={navigationIcons[section]} /></svg
+      ><span>{t(section)}</span></button
     >
   {/each}
 </nav>
@@ -719,48 +946,84 @@
   {#if !view}
     <p>{t("loading")}</p>
   {:else if page === "hall"}
-    <h1>{t("hall")}</h1>
-    {#if !profile}<p>
-        {t("guestHint")}
-        <button
-          onclick={() => {
-            page = "profile";
-          }}>{t("startGuest")}</button
-        >
-      </p>{/if}
-    {#if view.hall.visitor_play}
-      {#if profile?.visit || pickup}
-        <section class="visit-tracker" aria-label={t("visit")}>
-          {@render visitProgress()}
-          {#if pickup}
-            <p role="status">
-              {t("pickupReady").replace(
-                "{stall}",
-                view.hall.stalls.find((stall) => stall.stall_id === pickup)
-                  ?.name ?? pickup,
-              )}
-            </p>
-          {/if}
-          <button onclick={() => (page = "visit")}>{t("viewVisit")}</button>
-        </section>
+    <div class:phone-section-hidden={phoneDetail}>
+      <h1>{t("hall")}</h1>
+      {#if !profile}<p>
+          {t("guestHint")}
+          <button
+            onclick={() => {
+              navigate("profile");
+            }}>{t("startGuest")}</button
+          >
+        </p>{/if}
+      {#if view.hall.visitor_play}
+        {#if profile?.visit || pickup}
+          <section class="visit-tracker" aria-label={t("visit")}>
+            {@render visitProgress()}
+            {#if pickup}
+              <p role="status">
+                {t("pickupReady").replace(
+                  "{stall}",
+                  view.hall.stalls.find((stall) => stall.stall_id === pickup)
+                    ?.name ?? pickup,
+                )}
+              </p>
+            {/if}
+            <button onclick={() => navigate("visit")}>{t("viewVisit")}</button>
+          </section>
+        {/if}
+        <div class="hall-mode" role="group" aria-label={t("hall")}>
+          <button
+            aria-pressed={hallMode === "3d"}
+            onclick={() => {
+              sceneError = false;
+              hallMode = "3d";
+            }}>{t("hall3d")}</button
+          >
+          <button
+            aria-pressed={hallMode === "list"}
+            onclick={() => (hallMode = "list")}>{t("hallList")}</button
+          >
+        </div>
+        {#if sceneError}<p role="status">{t("sceneUnavailable")}</p>{/if}
+        <div class="phone-only hall-phone-picker">
+          <label
+            >{t("location")}<select
+              bind:this={hallPicker}
+              value={hallSelection}
+              onchange={(event) =>
+                openStallDetails(
+                  event.currentTarget.value,
+                  event.currentTarget,
+                )}
+            >
+              <option value="">—</option>
+              {#each view.hall.stalls as stall (stall.stall_id)}<option
+                  value={stall.stall_id}>{stall.name} · {stall.stall_id}</option
+                >{/each}
+            </select></label
+          >
+          <button onclick={() => openStallDetails(hallSelection)}
+            >{t(hallSelection ? "viewMenu" : "compareDining")}</button
+          >
+        </div>
       {/if}
-      <div class="hall-mode" role="group" aria-label={t("hall")}>
-        <button
-          aria-pressed={hallMode === "3d"}
-          onclick={() => {
-            sceneError = false;
-            hallMode = "3d";
-          }}>{t("hall3d")}</button
+    </div>
+    {#if view.hall.visitor_play}
+      <div
+        class="hall-layout"
+        class:list-mode={hallMode === "list"}
+        class:phone-detail-open={phoneDetail}
+      >
+        <div
+          class="phone-only stall-detail-heading"
+          class:phone-section-hidden={!phoneDetail}
         >
-        <button
-          aria-pressed={hallMode === "list"}
-          onclick={() => (hallMode = "list")}>{t("hallList")}</button
-        >
-      </div>
-      {#if sceneError}<p role="status">{t("sceneUnavailable")}</p>{/if}
-      <div class="hall-layout" class:list-mode={hallMode === "list"}>
-        {#if hallMode === "3d"}
-          <div>
+          <button onclick={backToHall}>{t("backToHall")}</button>
+          <h1>{hallStall?.name ?? t("stallDetails")}</h1>
+        </div>
+        {#if hallMode === "3d" && !(phone && phoneDetail)}
+          <div class="hall-scene-pane">
             <HallScene
               stalls={view.hall.stalls}
               ownedStalls={view.hall.stalls.filter((stall) =>
@@ -773,6 +1036,7 @@
               {title}
               {reopeningTime}
               select={(id) => (hallSelection = id)}
+              inspect={openStallDetails}
               saveCamera={(state) => (camera = state)}
               onUnavailable={() => {
                 sceneError = true;
@@ -781,7 +1045,13 @@
             />
           </div>
         {/if}
-        <section class="stall-inspector" aria-label={t("viewMenu")}>
+        <section
+          class="stall-inspector"
+          class:phone-section-hidden={!phoneDetail}
+          aria-label={t("viewMenu")}
+          tabindex="-1"
+          bind:this={stallInspector}
+        >
           <label
             >{t("location")}
             <select bind:value={hallSelection}>
@@ -794,7 +1064,7 @@
             </select>
           </label>
           {#if hallStall}
-            <h2>{hallStall.name}</h2>
+            <h2 class="desktop-only">{hallStall.name}</h2>
             <p>
               {title(hallStall.cuisine)} · {t(
                 hallStall["open?"] ? "open" : "closed",
@@ -810,9 +1080,11 @@
                 <li>{title(id)} · {cash(price)}</li>
               {/each}
             </ul>
+            {#if ownStall(hallStall)}<p>{t("ownStallDining")}</p>{/if}
             {#if pickup === hallStall.stall_id}
-              <button onclick={() => (page = "visit")}>{t("viewVisit")}</button>
-            {:else if !profile?.visit && hallStall["open?"] && view.hall.access === "open"}
+              <button onclick={() => navigate("visit")}>{t("viewVisit")}</button
+              >
+            {:else if !profile?.visit && !ownStall(hallStall) && hallStall["open?"] && view.hall.access === "open"}
               <button onclick={() => inspect(hallSelection)}
                 >{t("orderHere")}</button
               >
@@ -837,7 +1109,7 @@
       </div>
     {/if}
     {#if !view.hall.visitor_play || hallMode === "list"}
-      <div class="cards">
+      <div class="cards" class:phone-section-hidden={phoneDetail}>
         {#each view.hall.stalls as stall (stall.stall_id)}
           <article class="stall">
             <p class="eyebrow">{stall.stall_id} · {title(stall.tier)}</p>
@@ -866,7 +1138,7 @@
             <button
               onclick={() =>
                 view?.hall.visitor_play
-                  ? (hallSelection = stall.stall_id)
+                  ? openStallDetails(stall.stall_id)
                   : inspect(stall.stall_id)}
             >
               {t("viewMenu")}
@@ -876,7 +1148,7 @@
       </div>
     {/if}
     {#if view.hall.failed_ventures?.length}
-      <details>
+      <details class:phone-section-hidden={phoneDetail}>
         <summary>{t("businessHistory")}</summary>
         <ul>
           {#each view.hall.failed_ventures as venture (venture.id)}
@@ -1051,11 +1323,49 @@
         </details>
       </section>
     {:else}
+      <div class="phone-only business-navigation">
+        {#if ownerStall}
+          <label
+            >{t("location")}<select
+              value={ownerStall.id}
+              onchange={(event) => {
+                ownerStallId = event.currentTarget.value;
+                refitCuisine = "";
+              }}
+            >
+              {#each restaurant.stalls as stall (stall.id)}<option
+                  value={stall.id}
+                  >{stall.id} · {title(
+                    stall.cuisine ?? restaurant.cuisine,
+                  )}</option
+                >{/each}
+            </select></label
+          >
+        {/if}
+        <label
+          >{t("businessSection")}<select
+            value={visibleBusinessSection}
+            onchange={(event) =>
+              navigate(
+                "business",
+                false,
+                event.currentTarget.value as BusinessSection,
+              )}
+          >
+            {#each businessSections as section}<option value={section}
+                >{t(businessLabels[section])}</option
+              >{/each}
+          </select></label
+        >
+      </div>
       {#if restaurant.stall_limit}
-        <section>
+        <section
+          data-business-section="locations"
+          class:phone-section-hidden={visibleBusinessSection !== "locations"}
+        >
           <h2>{t("currentLocations")}</h2>
           {#if ownerStall}
-            <label
+            <label class="desktop-only"
               >{t("location")}
               <select
                 value={ownerStall.id}
@@ -1216,7 +1526,10 @@
             </button>
           {/if}
         </section>
-        <section>
+        <section
+          data-business-section="recognition"
+          class:phone-section-hidden={visibleBusinessSection !== "recognition"}
+        >
           <h2>{t("recognition")}</h2>
           <p>{t("reputation")} {(restaurant.reputation ?? 0) / 100}%</p>
           {#if restaurant.award_review_at != null}
@@ -1247,7 +1560,10 @@
         </section>
       {/if}
       <div class="business-grid">
-        <section>
+        <section
+          data-business-section="menu"
+          class:phone-section-hidden={visibleBusinessSection !== "menu"}
+        >
           <h2>{t("viewMenu")}</h2>
           <p>
             {t("availableCash")}
@@ -1325,7 +1641,10 @@
             <button {disabled}>{t("setPrice")}</button>
           </form>
         </section>
-        <section>
+        <section
+          data-business-section="supply"
+          class:phone-section-hidden={visibleBusinessSection !== "supply"}
+        >
           <h2>{t("supply")}</h2>
           {#if starterStock && starterStock.items.length > 0}
             <details>
@@ -1474,7 +1793,10 @@
           </ul>
         </section>
         {#if ownerStall}
-          <section>
+          <section
+            data-business-section="staff"
+            class:phone-section-hidden={visibleBusinessSection !== "staff"}
+          >
             <h2>{t("staff")}</h2>
             <p>
               {ownerStall.id} · {ownerStall.lease.start_hour}:00–{ownerStall
@@ -1615,7 +1937,10 @@
             >
           </section>
         {/if}
-        <section>
+        <section
+          data-business-section="performance"
+          class:phone-section-hidden={visibleBusinessSection !== "performance"}
+        >
           <h2>{t("performance")}</h2>
           <dl>
             {#each Object.entries(restaurant.ledger) as [id, amount] (id)}<dt>
@@ -1653,7 +1978,7 @@
               {t("guestHint")}
               <button
                 onclick={() => {
-                  page = "profile";
+                  navigate("profile");
                 }}>{t("startGuest")}</button
               >
             </p>
@@ -1680,11 +2005,15 @@
                 {#if dessertPreviewUnavailable}
                   <p role="status">{t("dessertPreviewUnavailable")}</p>
                 {/if}
-                <button
-                  disabled={disabled || !dessertRequest}
-                  onclick={() => showQuote(dessertRequest)}
-                  >{t("dessertQuote")}</button
-                >
+                {#if visitStall && ownStall(visitStall)}
+                  <p>{t("ownStallDining")}</p>
+                {:else}
+                  <button
+                    disabled={disabled || !dessertRequest}
+                    onclick={() => showQuote(dessertRequest)}
+                    >{t("dessertQuote")}</button
+                  >
+                {/if}
                 <button
                   {disabled}
                   onclick={() =>
@@ -1713,9 +2042,17 @@
             {#if view.hall.access === "cleaning"}
               <p role="status">{t("cleaning")}</p>
             {:else if orderingStalls.length === 0}
-              <p role="status">{t("noStallsServing")}</p>
+              <p role="status">
+                {t(
+                  servingStalls.length
+                    ? "noOtherStallsServing"
+                    : "noStallsServing",
+                )}
+              </p>
             {:else}
-              {#if selectedStall && !orderLocation}
+              {#if selectedStall && ownStall(selectedStall)}
+                <p role="status">{t("ownStallDining")}</p>
+              {:else if selectedStall && !orderLocation}
                 <p role="status">{t("selectedStallClosed")}</p>
               {/if}
               <label
@@ -1876,9 +2213,10 @@
   {:else if page === "work"}
     <h1>{t("work")}</h1>
     <p>{t("workHint")}</p>
-    {#if !profile}<button
+    {#if profile?.account["owner?"]}<p>{t("ownerCannotWork")}</p>
+    {:else if !profile}<button
         onclick={() => {
-          page = "profile";
+          navigate("profile");
         }}>{t("startGuest")}</button
       >
     {:else if selectedShift}
@@ -2059,25 +2397,7 @@
         {:else}<p>{t("noShifts")}</p>{/each}
       </div>
     {/if}
-    {#if profile && profile.work.history.length}
-      <h2>{t("history")}</h2>
-      <ul>
-        {#each profile.work.history as shift (shift.shift_id)}<li>
-            {cash(shift.amount)} · {title(shift.reason)}
-            {#if shift.qualified}· {t("qualified")}{/if}
-            {#if shift.staged}· {t("stagedTasks")} {shift.staged}{/if}
-            {#if shift.reason === "actionable_idle"}
-              <details class="shift-help">
-                <summary>
-                  <span class="shift-help-icon" aria-hidden="true">?</span>
-                  <span class="sr-only">{t("selectionWindowHelpLabel")}</span>
-                </summary>
-                <p>{t("selectionWindowHelp")}</p>
-              </details>
-            {/if}
-          </li>{/each}
-      </ul>
-    {/if}
+    {@render workHistory()}
   {:else if page === "profile"}
     <h1>{t("profile")}</h1>
     {#if !profile}
@@ -2125,6 +2445,9 @@
       </section>
     {:else}
       <h2>{profile.account.name}</h2>
+      {#if profile.account["owner?"] && profile.work.history.length}<section>
+          {@render workHistory()}
+        </section>{/if}
       {#if profile.ventures?.length}
         <section>
           <h3>{t("businessHistory")}</h3>

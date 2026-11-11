@@ -251,6 +251,20 @@ Object.assign(regions, {
     [-103, 41],
     [-107, 43],
   ],
+  // Aotearoa/New Zealand locator, both main islands. Not an iwi boundary map.
+  maori: [
+    [166, -47.5],
+    [165.5, -45],
+    [169, -42],
+    [172, -40],
+    [172, -35],
+    [173.5, -34],
+    [179, -38],
+    [178, -41],
+    [174.5, -42],
+    [171, -46],
+    [166, -47.5],
+  ],
   coast_salish: [
     [-125.5, 46],
     [-127, 50.5],

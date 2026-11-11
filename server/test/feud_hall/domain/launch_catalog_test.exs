@@ -12,8 +12,8 @@ defmodule FeudHall.Domain.LaunchCatalogTest do
     assert :ok = Content.validate(catalog)
 
     cuisines = catalog.recipes |> Map.values() |> Enum.group_by(& &1.cuisine)
-    assert map_size(cuisines) == 24
-    assert map_size(catalog.recipes) == 120
+    assert map_size(cuisines) == 25
+    assert map_size(catalog.recipes) == 125
 
     for {cuisine, recipes} <- cuisines do
       assert %{main: 3, dessert: 1, drink: 1} == Enum.frequencies_by(recipes, & &1.kind)
@@ -71,6 +71,53 @@ defmodule FeudHall.Domain.LaunchCatalogTest do
       assert state.restaurants["r1"].ledger.revenue ==
                starter.suggested_price + drink.suggested_price + dessert.suggested_price
 
+      assert :ok = Invariants.check(state)
+      assert Hall.replay(events) == state
+    end
+  end
+
+  test "Maori's unlockable mains buy their own ingredients and serve through their station" do
+    catalog = quiet_catalog(LaunchCatalog.catalog())
+    npc = {:npc, "budget"}
+
+    for id <- ~w(hangi_style_chicken green_lipped_mussel_fritters) do
+      recipe = catalog.recipes[id]
+
+      world =
+        run!(
+          {nil, []},
+          {:initialize_hall, %{hall_id: "maori", catalog: catalog, managed: true}},
+          {:system, :admin},
+          "init"
+        )
+        |> run!(
+          {:create_restaurant, %{stall_id: "s001", restaurant_id: "r1", name: "Maori", cuisine: "maori"}},
+          npc,
+          "create"
+        )
+        |> run!({:unlock_recipe, %{restaurant_id: "r1", recipe_id: id}}, npc, "unlock")
+        |> run!({:set_menu_price, %{restaurant_id: "r1", recipe_id: id, price: recipe.suggested_price}}, npc, "price")
+        |> run!({:open_stall, %{stall_id: "s001"}}, npc, "open")
+
+      world =
+        Enum.reduce(recipe.lines, world, fn line, world ->
+          run!(
+            world,
+            {:submit_purchase_request,
+             %{restaurant_id: "r1", product: line.product, qty: line.qty, max_price_per_kunit: 1_000_000}},
+            npc,
+            "buy-" <> line.product
+          )
+        end)
+
+      {state, events} =
+        world
+        |> advance_hall(4 * Clock.minute())
+        |> simulated_visit("diner", id, nil, "unrestricted", 10_000, false)
+        |> advance_hall(40 * Clock.minute())
+
+      assert state.stats.served_mains == 1
+      assert state.restaurants["r1"].ledger.revenue == recipe.suggested_price
       assert :ok = Invariants.check(state)
       assert Hall.replay(events) == state
     end

@@ -397,12 +397,18 @@ The identity property checks cumulative earning against an independent quota ora
 
 For progression, run `mix test test/feud_hall/application/progression_test.exs
 test/feud_hall/domain/launch_catalog_test.exs --max-cases 1` from `server/`.
-These checks exercise all 24 starter, drink, and dessert combinations with
+These checks exercise all 25 starter, drink, and dessert combinations with
 funded purchases and managed kitchen service. They also check a PostgreSQL
 catalog upgrade, scoped equipment and prices, expiry and fresh starts across
 clock partitions, receipt paging and authorization, award review eligibility,
 and NPC retirement and restoration. The mutation cohort includes the
 location limit, distress cost freeze, and guest exclusion from awards.
+
+The Māori additions also exercise both unlockable mains and a version-1 to
+version-2 launch expansion with a pending order. Check preserved terms and
+pools, forward-only versions, PostgreSQL replay and snapshot-tail replay.
+The curated `Māori catalog expansion` mutation must fail the same-version
+rejection assertion.
 
 The web workflow runs frozen Bun install, Prettier, Oxlint, native `bun check`,
 and a Vite production build. It also runs a one-worker Chromium suite for
@@ -436,6 +442,16 @@ staging across different readiness boundaries. The curated mutation
 CI retains failure traces and hall logs. A separate Svelte template type-check
 and broader cross-browser coverage remain release qualification work.
 
+`participation.spec.ts` exercises a visitor receiving a license during a shift,
+owner navigation/history, own-stall purchase exclusion, and competitor dining.
+The focused `visitor_play_test.exs`, `management_test.exs`, and
+`progression_test.exs` files cover all admission routes, staging/selection
+release, exact earned payroll, unchanged state on rejection, expansion stalls,
+main and dessert guards, receipt retries, and PostgreSQL/genesis/snapshot-tail
+replay. The four curated `participation` mutants remove purchase, helper-role,
+promotion-termination, and dessert guards; run just that cohort with
+`elixir scripts/mutation_cohort.exs <empty-work-dir> --match participation`.
+
 For a focused local browser run, fetch the locked Mix dependencies from
 `server/`. From `app/`, run `bun install --frozen-lockfile`, `bun run playwright
 install chromium`, `bun run --bun build`, and `bun run test:browser --grep
@@ -444,6 +460,13 @@ databases. Each scenario uses its own loopback port and creates and drops a
 `feud_hall_browser_*` database. The runner supplies its own signing key and
 starts the test endpoint without the live hall environment file. Respect the
 local worker and memory limits above.
+
+`bun run test:browser phone-layout.spec.ts --workers=1` checks the compact
+phone layout at 320/390/399 CSS px and the return to the wider layout at 400px.
+It covers English/Japanese, bottom navigation, business-section drafts,
+composition/focus continuity during reflow, and stall-detail Back/Forward.
+The browser dispatches composition events; real mobile keyboards/IME, safe-area
+insets and touch/GPU performance still need device qualification.
 
 To regenerate the launch cuisine map after changing its
 source footprints, run `bun scripts/build-map.js` from `app/`. The equal-area

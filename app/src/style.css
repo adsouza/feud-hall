@@ -54,18 +54,18 @@ header {
 .clock.cleaning {
   color: #ffcd6d;
 }
-nav {
+.primary-navigation {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
   padding: 0.6rem clamp(1rem, 5vw, 4rem);
   background: #1b1f30;
 }
-nav button {
+.primary-navigation button {
   border-color: transparent;
   background: transparent;
 }
-nav button.current {
+.primary-navigation button.current {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -316,5 +316,127 @@ textarea {
 @container (min-width: 60rem) {
   .visit-grid:has(.cuisine-artwork) {
     grid-template-columns: minmax(0, 1fr) minmax(16rem, 28rem);
+  }
+}
+
+.phone-only,
+.nav-icon {
+  display: none;
+}
+@media (width < 400px) {
+  html {
+    scroll-padding-block: 1rem calc(6rem + env(safe-area-inset-bottom));
+  }
+  header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.2rem 0.5rem;
+    padding: calc(0.4rem + env(safe-area-inset-top)) 0.75rem 0.4rem;
+  }
+  .brand {
+    flex-wrap: nowrap;
+    gap: 0.45rem;
+  }
+  .brand-icon {
+    width: 2rem;
+    height: 2rem;
+  }
+  .brand strong {
+    font-size: 1.05rem;
+    white-space: nowrap;
+  }
+  .brand small {
+    display: none;
+  }
+  .header-end {
+    display: contents;
+  }
+  .locale {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .locale select {
+    font-size: 0.85rem;
+    padding-inline: 0.4rem;
+  }
+  .clock {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    font-size: 0.8rem;
+  }
+  .primary-navigation {
+    position: fixed;
+    z-index: 20;
+    inset: auto 0 0;
+    display: grid;
+    grid-template-columns: repeat(var(--nav-items), minmax(0, 1fr));
+    align-items: stretch;
+    gap: 0;
+    padding: 0.25rem 0.25rem calc(0.25rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+  }
+  .primary-navigation button {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 0.2rem;
+    min-width: 0;
+    min-height: 4rem;
+    margin: 0;
+    padding: 0.25rem 0.1rem;
+    font-size: 0.7rem;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+  .primary-navigation .nav-icon {
+    display: block;
+    flex: none;
+    width: 1.3rem;
+    height: 1.3rem;
+  }
+  main {
+    padding: 0.6rem 0.75rem calc(6rem + env(safe-area-inset-bottom));
+  }
+  h1 {
+    font-size: 1.5rem;
+    margin-top: 0.5rem;
+  }
+  .phone-only {
+    display: block;
+  }
+  .desktop-only,
+  .phone-section-hidden {
+    display: none !important;
+  }
+  .hall-phone-picker {
+    margin-block: 0.75rem;
+  }
+  .hall-phone-picker label {
+    margin-bottom: 0.25rem;
+  }
+  .hall-layout.phone-detail-open {
+    display: block;
+  }
+  .stall-detail-heading h1 {
+    overflow-wrap: anywhere;
+  }
+  .stall-inspector {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .business-grid {
+    display: block;
+  }
+  .business-navigation {
+    margin-bottom: 1rem;
+  }
+  .business-navigation label {
+    margin-block: 0.5rem;
+  }
+  .success-notice {
+    z-index: 21;
+    inset-block-end: calc(5rem + env(safe-area-inset-bottom));
   }
 }

@@ -34,6 +34,16 @@ defmodule FeudHall.Domain.Hall.Admission do
 
   alias FeudHall.Domain.{Dietary, Inventory, Money, Offers, Substitution}
 
+  @doc "A principal can buy from other operators, including NPCs, but not their own restaurant's locations."
+  def customer_access(state, principal, stall_id) do
+    with %{restaurant: rid} <- state.stalls[stall_id],
+         %{owner_kind: :principal, owner: ^principal} <- state.restaurants[rid] do
+      {:error, :own_stall_order}
+    else
+      _ -> :ok
+    end
+  end
+
   @doc """
   Admits a visit and accepts its tray atomically.
 
@@ -45,6 +55,7 @@ defmodule FeudHall.Domain.Hall.Admission do
     %{source: source, principal: principal, budget: budget} = p
 
     with :ok <- ensure(id?(p[:stall_id]) and id?(p[:main]), :invalid_payload),
+         :ok <- if(source == :guest, do: customer_access(state, principal, p.stall_id), else: :ok),
          :ok <- ensure(entity_free?(state, entity_id), :visit_id_taken),
          :ok <- ensure(p[:drink] == nil or id?(p[:drink]), :invalid_payload),
          :ok <- ensure(not Map.has_key?(state.active_visits, principal), :visit_already_active),
@@ -103,7 +114,8 @@ defmodule FeudHall.Domain.Hall.Admission do
   service, with no offer, once its tray has been served.
   """
   def accept_dessert(state, visit, confirmed, entity_id) do
-    with :ok <- ensure(dessert_open?(state, visit), :no_dessert_offer),
+    with :ok <- if(visit.source == :guest, do: customer_access(state, visit.principal, visit.stall), else: :ok),
+         :ok <- ensure(dessert_open?(state, visit), :no_dessert_offer),
          :ok <- ensure(simulated_decision?(visit) or state.now < visit.dessert_offer_deadline, :dessert_offer_expired),
          {:ok, quote} <- Offers.quote_dessert(state, visit),
          {:ok, deadline} <- bind_deadline(visit.source, quote, confirmed),

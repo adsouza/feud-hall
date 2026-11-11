@@ -3,7 +3,17 @@ defmodule FeudHall.Application.Management do
   alias FeudHall.Application.DinerBrowse
   alias FeudHall.Domain.{Clock, Dietary, Identity, Kitchen, Money, Offers, PublicView}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
-  alias FeudHall.Domain.Hall.{CounterPlay, Equipment, OperatingPolicy, Population, Progression, Recognition, Staff}
+
+  alias FeudHall.Domain.Hall.{
+    Admission,
+    CounterPlay,
+    Equipment,
+    OperatingPolicy,
+    Population,
+    Progression,
+    Recognition,
+    Staff
+  }
 
   @guest_commands ~w(request_allowance admit_visit cancel_tray accept_dessert decline_dessert cancel_dessert
     accept_helper_shift leave_helper_shift select_handover report_helper_presence redeem_invitation apply_for_license
@@ -118,7 +128,7 @@ defmodule FeudHall.Application.Management do
 
     view = %{hall: hall, profile: account && private_view(identity, state, account, public.market)}
 
-    case DinerBrowse.checkout_menu(state, params["stall_id"], params["profile_id"]) do
+    case DinerBrowse.checkout_menu(state, params["stall_id"], params["profile_id"], principal) do
       nil -> {:ok, view}
       menu -> {:ok, Map.put(view, :checkout_menu, menu)}
     end
@@ -196,7 +206,7 @@ defmodule FeudHall.Application.Management do
       recovery_codes: recovery_codes,
       notices: Enum.take(Map.get(identity.notices, principal, []), 20),
       reviewer_queue: if(account.reviewer?, do: reviewer_queue(identity), else: []),
-      work: work_view(state, principal),
+      work: work_view(state, principal, account.owner?),
       restaurant: if(restaurant, do: restaurant_view(state, restaurant, market), else: nil),
       draft: if(HallManagement.enabled?(state), do: encode_lease(state.management.drafts[principal]), else: nil),
       waitlisted: HallManagement.enabled?(state) and Map.has_key?(state.management.waitlist, principal),
@@ -432,13 +442,13 @@ defmodule FeudHall.Application.Management do
     }
   end
 
-  defp work_view(state, principal) do
+  defp work_view(state, principal, owner?) do
     if HallManagement.enabled?(state) do
       m = state.management
-      shift = m.shifts[m.shift_by_principal[principal]]
+      shift = if not owner?, do: m.shifts[m.shift_by_principal[principal]]
 
       offers =
-        if shift,
+        if shift != nil or owner?,
           do: [],
           else:
             for(
@@ -539,17 +549,21 @@ defmodule FeudHall.Application.Management do
 
   def quote(runtime, device, %{visit_id: visit_id}) do
     with principal when is_binary(principal) <- Identity.principal_for_device(Identity.get(runtime.control), device),
-         %{principal: ^principal, dessert: :offered} = visit <- runtime.state.visits[visit_id] do
+         %{principal: ^principal, dessert: :offered} = visit <- runtime.state.visits[visit_id],
+         :ok <- Admission.customer_access(runtime.state, principal, visit.stall) do
       Offers.quote_dessert(runtime.state, visit) |> encode_quote()
     else
+      {:error, _} = error -> error
       _ -> {:error, :no_dessert_offer}
     end
   end
 
-  def quote(runtime, _device, %{stall_id: sid, main: main, profile_id: profile} = params) do
+  def quote(runtime, device, %{stall_id: sid, main: main, profile_id: profile} = params) do
     state = runtime.state
+    principal = Identity.principal_for_device(Identity.get(runtime.control), device)
 
-    with {:ok, requirement} <- Dietary.requirement(state.catalog, profile) do
+    with :ok <- Admission.customer_access(state, principal, sid),
+         {:ok, requirement} <- Dietary.requirement(state.catalog, profile) do
       visit = %{requirement: requirement, carbs_reserved: 0, carbs_served: 0}
       Offers.quote_tray(state, sid, main, params[:drink], visit) |> encode_quote()
     end

@@ -656,6 +656,19 @@ defmodule FeudHall.Domain.Hall.Management do
     }
   end
 
+  def end_principal_shift(%{management: m} = state, principal, reason) do
+    case m.shifts[m.shift_by_principal[principal]] do
+      %{status: :active, shift_id: shift, stall_id: sid} ->
+        selection = if Map.has_key?(m.selections, sid), do: [%{type: :helper_selection_closed, stall_id: sid}], else: []
+        selection ++ [end_shift(state, shift, reason)]
+
+      _ ->
+        []
+    end
+  end
+
+  def end_principal_shift(_state, _principal, _reason), do: []
+
   def shift_proof(state, %{type: :helper_shift_ended, qualified: true} = event) do
     work = state.management.shifts[event.shift_id]
 

@@ -55,7 +55,7 @@ defmodule FeudHall.Domain.Content.LaunchCatalog do
     %{
       slice
       | id: "launch",
-        version: 1,
+        version: 2,
         products: products,
         recipes: recipes,
         rules:

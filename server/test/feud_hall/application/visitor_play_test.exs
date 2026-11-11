@@ -13,6 +13,107 @@ defmodule FeudHall.Application.VisitorPlayTest do
   @recipe "falafel_wrap"
   @npc {:npc, "budget"}
 
+  for route <- [:seed, :invitation], phase <- [:staging, :selection] do
+    @route route
+    @phase phase
+    test "#{route} admission ends #{phase} helper work atomically and owners cannot resume it" do
+      {rt, helper} = helper_with_incoming(PostgresEventStore, FeudHall.PostgresCase.fresh_store())
+
+      rt =
+        if @phase == :staging,
+          do: rt |> staging() |> advance(rt.state.now + Clock.service_duration(500)),
+          else: advance(rt, ready_at(rt, "first"))
+
+      rt = client(rt, "sponsor", "sponsor-profile", :bootstrap_guest, %{name: "Sponsor"})
+      sponsor = Identity.principal_for_device(Identity.get(rt.control), "sponsor")
+      rt = run(rt, "seed-sponsor", {:system, :admin}, :seed_owner, %{principal: sponsor, reviewer?: true})
+      rt = client(rt, "sponsor", "invite", :issue_invitation, %{})
+
+      envelope =
+        if @route == :seed do
+          %{
+            actor: {:system, :admin},
+            command_id: "promote",
+            command: {:seed_owner, %{principal: helper, reviewer?: false}}
+          }
+        else
+          {:ok, envelope} =
+            Management.envelope(rt.control, "helper", %{
+              command_id: "promote",
+              command: {:redeem_invitation, %{invitation_id: "I:invite"}}
+            })
+
+          envelope
+        end
+
+      position = rt.position
+      snapshot = Snapshot.take(%{hall: rt.state, control: rt.control}, position)
+
+      expected =
+        div(
+          (rt.state.now - rt.state.management.shifts["H:shift"].at) * rt.state.management.shifts["H:shift"].rate,
+          Clock.hour()
+        )
+
+      assert {:accepted, receipt, rt} = CommandWorkflow.execute(rt, envelope)
+      assert Identity.owner?(Identity.get(rt.control), helper)
+
+      assert %{status: :ended, reason: :owner_ineligible, amount: ^expected, qualified: false} =
+               rt.state.management.shifts["H:shift"]
+
+      assert rt.state.management.shift_by_principal == %{}
+      assert rt.state.management.shift_by_stall == %{}
+      refute rt.state.management.selections[@stall]
+      refute CounterPlay.task(rt.state, @stall)
+      if expected > 0, do: assert(rt.state.wallets[helper].slices["W:H:shift"].amount == expected)
+
+      assert {:ok, %{profile: %{work: %{active: nil, offers: [], history: [%{reason: :owner_ineligible}]}}}} =
+               Management.view(rt, "helper")
+
+      assert {:ok, %{profile: %{work: %{active: nil, offers: []}}}} = Management.view(rt, "sponsor")
+      assert {:replayed, ^receipt, same} = CommandWorkflow.execute(rt, envelope)
+      assert same.state == rt.state
+      assert {:ok, offer} = HallManagement.shift_offer(rt.state, @stall, helper)
+
+      # Check the role guard before task/offer validity, including forged or stale calls.
+      rt =
+        Enum.reduce(
+          [
+            :accept_helper_shift,
+            :select_handover,
+            :report_helper_presence,
+            :start_counter_staging,
+            :yield_counter_staging
+          ],
+          rt,
+          fn kind, rt ->
+            before = rt.state
+
+            payload =
+              if kind == :accept_helper_shift,
+                do: Map.take(offer, [:stall_id, :rate, :quoted_at, :expires_at]),
+                else: %{shift_id: "H:shift", stall_id: @stall}
+
+            assert {:rejected, %{outcome: {:rejected, :owner_cannot_work}}, rejected} =
+                     command(rt, "deny-#{kind}", {:principal, helper}, kind, payload)
+
+            assert rejected.state == before
+            rejected
+          end
+        )
+
+      assert {:ok, batches} = PostgresEventStore.read_from(rt.store, position)
+      assert length(batches) == 1
+      assert Enum.any?(hd(batches).events, &(&1.type == :helper_shift_ended))
+      assert Enum.any?(hd(batches).control_events, &(&1.type == :owner_admitted))
+      assert {:ok, replay} = CommandWorkflow.open(PostgresEventStore, rt.store)
+      assert {replay.state, replay.control} == {rt.state, rt.control}
+      assert {:ok, %{hall: hall, control: control}} = Snapshot.restore(snapshot, batches)
+      assert {hall, control} == {rt.state, rt.control}
+      assert :ok = Invariants.check(rt.state)
+    end
+  end
+
   test "staging saves setup once, keeps ordinary payroll and replays through PostgreSQL" do
     {rt, helper} = helper_with_incoming(PostgresEventStore, FeudHall.PostgresCase.fresh_store())
     refute CounterPlay.task(rt.state, @stall)

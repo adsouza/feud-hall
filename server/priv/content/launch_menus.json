@@ -145,5 +145,6 @@
     ["halibut_seaweed_broth", "Halibut and seaweed broth", "オヒョウと海藻のスープ", "simmer", 1420, [["halibut", 130], ["kelp", 20], ["filtered_water", 175]]],
     ["huckleberry_compote", "Huckleberry compote", "ハックルベリーのコンポート", "simmer", 550, [["huckleberries", 95], ["maple_syrup", 19], ["filtered_water", 45]]],
     ["nettle_tea", "Nettle tea", "イラクサ茶", "brew", 300, [["nettles", 5], ["filtered_water", 205]]]
-  ]]
+  ]],
+  ["maori", "Māori", "マオリ", [["pork_puha_boil_up", "Pork-and-pūhā boil-up", "豚肉とプーハーのボイルアップ", "simmer", 990, [["pork", 85], ["puha", 45], ["sweet_potato", 80], ["wheat_flour", 22], ["filtered_water", 160]]], ["hangi_style_chicken", "Hāngī-style chicken with kūmara", "ハンギ風チキンとクマラ", "steam", 1390, [["chicken_thigh", 120], ["sweet_potato", 110], ["cabbage", 70]]], ["green_lipped_mussel_fritters", "Green-lipped mussel fritters", "ニュージーランドミドリイガイのフリッター", "griddle", 1210, [["green_lipped_mussels", 110], ["wheat_flour", 35], ["eggs", 25], ["milk_whole", 25], ["onion", 22], ["lemon_juice", 10], ["olive_oil", 9]]], ["maori_steamed_pudding", "Steamed golden-syrup pudding", "ゴールデンシロップの蒸しプディング", "steam", 520, [["wheat_flour", 38], ["butter", 12], ["golden_syrup", 22], ["milk_whole", 45], ["eggs", 15]]], ["kawakawa_tea", "Kawakawa tea", "カワカワ茶", "brew", 300, [["kawakawa_leaf", 4], ["filtered_water", 200]]]]]
 ]

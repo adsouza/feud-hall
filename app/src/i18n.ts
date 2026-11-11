@@ -4,6 +4,15 @@ import products from "../../server/priv/content/launch_products.json";
 export type Locale = "en" | "ja";
 
 const en = {
+  ownStallDining: "You cannot buy food or drinks from your own restaurant.",
+  noOtherStallsServing: "No other stalls are currently taking orders.",
+  ownerCannotWork: "Restaurant owners cannot take helper shifts.",
+  owner_ineligible: "Restaurant license granted; helper shift ended",
+  workHistory: "Work history",
+  mainNavigation: "Main navigation",
+  businessSection: "Business section",
+  backToHall: "Back to hall",
+  stallDetails: "Stall details",
   hall3d: "3D hall",
   hallList: "Stall list",
   sceneUnavailable: "The 3D view is unavailable. The stall list is open.",
@@ -362,6 +371,15 @@ const en = {
 export type Key = keyof typeof en;
 
 const ja: Record<Key, string> = {
+  ownStallDining: "自分のレストランでは料理や飲み物を購入できません。",
+  noOtherStallsServing: "現在、他に注文を受け付けている店舗はありません。",
+  ownerCannotWork: "レストランのオーナーは手伝いのシフトに参加できません。",
+  owner_ineligible: "営業許可の取得により手伝いのシフトが終了",
+  workHistory: "勤務履歴",
+  mainNavigation: "メインナビゲーション",
+  businessSection: "運営メニュー",
+  backToHall: "ホールに戻る",
+  stallDetails: "店舗の詳細",
   hall3d: "3Dホール",
   hallList: "店舗一覧",
   sceneUnavailable: "3D表示を利用できないため、店舗一覧を表示しています。",

@@ -73,14 +73,14 @@ export function createCuisineArt(
 
     const poster = geometry.clone();
     const uv = poster.attributes.uv;
-    const column = tile.index % 4;
-    const row = Math.floor(tile.index / 4);
+    const column = tile.index % tile.columns;
+    const row = Math.floor(tile.index / tile.columns);
     // Inset the sample inside each tile to keep its parchment margin clean.
     for (let i = 0; i < uv.count; i++) {
       uv.setXY(
         i,
-        (column + 0.01 + uv.getX(i) * 0.98) / 4,
-        (1 - row + 0.01 + uv.getY(i) * 0.98) / 2,
+        (column + 0.01 + uv.getX(i) * 0.98) / tile.columns,
+        (tile.rows - 1 - row + 0.01 + uv.getY(i) * 0.98) / tile.rows,
       );
     }
     const batch = addBatch(poster, materialFor(tile.url));

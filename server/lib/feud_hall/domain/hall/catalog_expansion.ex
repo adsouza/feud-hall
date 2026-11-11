@@ -1,8 +1,9 @@
 defmodule FeudHall.Domain.Hall.CatalogExpansion do
-  @moduledoc "Adds launch content to a managed slice hall without replacing its pinned definitions."
+  @moduledoc "Adds versioned launch content to a managed hall without replacing pinned definitions."
   alias FeudHall.Domain.{Content, Market}
 
-  def decide(%{catalog: %{id: "slice"} = previous, management: _}, %{id: "launch"} = launch) do
+  def decide(%{catalog: %{id: id, version: old} = previous, management: _}, %{id: "launch", version: new} = launch)
+      when id == "slice" or (id == "launch" and new > old) do
     products = Map.merge(launch.products, previous.products)
     recipes = Map.merge(launch.recipes, previous.recipes)
 
@@ -22,7 +23,20 @@ defmodule FeudHall.Domain.Hall.CatalogExpansion do
 
     demand = %{previous.rules.demand | segments: segments}
     profiles = Map.merge(launch.profiles, previous.profiles)
-    profiles = Map.update!(profiles, "keto_style", &%{&1 | enabled: true})
+    profiles = if id == "slice", do: Map.update!(profiles, "keto_style", &%{&1 | enabled: true}), else: profiles
+
+    progression =
+      case previous.rules[:progression] do
+        nil ->
+          launch.rules.progression
+
+        pinned ->
+          Map.merge(launch.rules.progression, pinned)
+          |> Map.put(
+            :starter_techniques,
+            Map.merge(launch.rules.progression.starter_techniques, pinned.starter_techniques)
+          )
+      end
 
     catalog = %{
       previous
@@ -31,7 +45,7 @@ defmodule FeudHall.Domain.Hall.CatalogExpansion do
         products: products,
         recipes: recipes,
         profiles: profiles,
-        rules: Map.merge(previous.rules, %{market: market, demand: demand, progression: launch.rules.progression})
+        rules: Map.merge(previous.rules, %{market: market, demand: demand, progression: progression})
     }
 
     with :ok <- Content.validate(catalog) do

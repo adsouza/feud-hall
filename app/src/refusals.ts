@@ -1,6 +1,14 @@
 import type { Locale } from "./i18n";
 
 const messages = {
+  own_stall_order: [
+    "You cannot buy food or drinks from your own restaurant. Choose another restaurant.",
+    "自分のレストランでは料理や飲み物を購入できません。他のレストランを選んでください。",
+  ],
+  owner_cannot_work: [
+    "Restaurant owners cannot take or work helper shifts.",
+    "レストランのオーナーは手伝いのシフトに参加したり、作業したりできません。",
+  ],
   staging_unavailable: [
     "That setup task is no longer available. Check the counter for the next tray.",
     "その準備作業はできなくなりました。次のトレーをカウンターで確認してください。",

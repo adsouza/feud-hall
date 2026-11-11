@@ -77,7 +77,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
     open_stall close_stall set_staff_schedule unlock_recipe set_menu_price remove_menu_item set_substitution_policy
     submit_purchase_request cancel_purchase_request
     staff_off_duty unpaid_rent owner_absent
-    invalid_schedule invalid_management_command management_unavailable
+    invalid_schedule invalid_management_command management_unavailable own_stall_order owner_cannot_work owner_ineligible
     unknown_stall unknown_restaurant forbidden unknown_recipe wrong_cuisine already_unlocked recipe_locked
     invalid_price not_on_menu unknown_line invalid_policy no_approved_substitute unknown_product
     invalid_quantity invalid_price_limit no_pending_request unauthorized_or_malformed malformed_command

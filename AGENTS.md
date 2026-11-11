@@ -7,7 +7,8 @@ contains the design, artwork, and the server under `server/`: the pure Elixir
 economic core (Milestone 1), durable PostgreSQL event storage, recovery, and
 projections (Milestone 2A), and the shared simulation (Milestone 2B: batched
 wholesale market, simulated diners, automatic kitchen, and basic NPC owners).
-New managed halls use the 24-cuisine launch catalog. The three-cuisine slice
+New managed halls use the 25-cuisine launch catalog. Managed launch halls receive
+additive catalog versions through a recorded expansion that preserves pinned terms. The three-cuisine slice
 remains available for replay and focused tests. Managed slice halls add launch
 content through a recorded upgrade that preserves existing recipes and stock.
 The local [Project C report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md)
@@ -126,6 +127,10 @@ Consult the full design for conditions and tuning; these are common failure poin
   closes trading unless unattended operation was explicitly enabled. NPCs use
   the same economic rules, funded resources, and normal command interfaces.
 - Visitors can dine and take authorized helper shifts without an owner invitation.
+  Owners cannot buy from any of their own restaurant locations or work helper
+  shifts anywhere, even without a current venture. License admission atomically
+  ends active helper work, settles earned wages, and releases remaining claims;
+  keep prior work history and already accepted meal terms.
   A successful shift enables a license application; permissioned seed/admin review
   or invitation redemption admits an owner on the same principal. Admission alone
   creates no lease, starter capital, or business.

@@ -8,6 +8,76 @@ defmodule FeudHall.Application.ProgressionTest do
   alias FeudHall.Domain.Hall.Invariants
   alias FeudHall.Infrastructure.{InMemoryEventStore, PostgresEventStore}
 
+  test "all owned locations reject purchases while owners may dine at competitors" do
+    alias FeudHall.Application.DinerBrowse
+    alias FeudHall.Domain.{Dietary, Offers}
+
+    rt = boot(PostgresEventStore, FeudHall.PostgresCase.fresh_store(), LaunchCatalog.catalog())
+    {rt, owner} = register(rt, "owner")
+    {rt, rival} = register(rt, "rival")
+    actor = {:principal, owner}
+    rt = accepted(rt, actor, :reserve_stall, %{stall_id: "s001"})
+    rt = accepted(rt, actor, :create_restaurant, location("kitchen", "s001", "levantine"))
+    rt = accepted(rt, actor, :lease_location, location("kitchen", "s002", "levantine"))
+    rt = accepted(rt, actor, :request_starter_stock, %{restaurant_id: "kitchen", budget: 20_000})
+    npc = {:npc, "budget"}
+    rt = accepted(rt, npc, :create_restaurant, location("competitor", "s003", "levantine"))
+    rt = accepted(rt, npc, :request_starter_stock, %{restaurant_id: "competitor", budget: 20_000})
+    rt = advance(rt, max(20 * Clock.minute(), rt.state.stalls["s002"].ready_at))
+    rt = accepted(rt, actor, :report_owner_presence, %{present: true})
+    rt = accepted(rt, actor, :open_stall, %{stall_id: "s001"})
+    rt = accepted(rt, actor, :open_stall, %{stall_id: "s002"})
+    rt = accepted(rt, npc, :open_stall, %{stall_id: "s003"})
+    rt = accepted(rt, actor, :request_allowance, %{})
+    rt = accepted(rt, {:principal, rival}, :request_allowance, %{})
+    {:ok, requirement} = Dietary.requirement(rt.state.catalog, "unrestricted")
+    diet = %{requirement: requirement, carbs_reserved: 0, carbs_served: 0}
+
+    rt =
+      Enum.reduce(~w(s001 s002), rt, fn sid, rt ->
+        params = %{stall_id: sid, main: "falafel_wrap", profile_id: "unrestricted"}
+        assert {:error, :own_stall_order} = Management.quote(rt, "owner", params)
+
+        assert {:ok, %{checkout_menu: %{mains: mains}}} =
+                 Management.view(rt, "owner", %{"stall_id" => sid, "profile_id" => "unrestricted"})
+
+        assert mains == %{}
+        assert {:ok, %{options: [], sold_out: []}} = DinerBrowse.compare(rt, "owner", %{"stall_id" => sid})
+        # A valid quote obtained before the policy change cannot bypass acceptance.
+        assert {:ok, quote} = Offers.quote_tray(rt.state, sid, "falafel_wrap", nil, diet)
+        before = rt.state
+
+        assert {:rejected, %{outcome: {:rejected, :own_stall_order}}, rt} =
+                 command(rt, actor, :admit_visit, Map.merge(params, %{source: :guest, confirmed: Offers.terms(quote)}))
+
+        assert rt.state == before
+        rt
+      end)
+
+    assert {:ok, %{options: options}} = DinerBrowse.compare(rt, "owner", %{})
+    assert Enum.map(options, & &1.stall_id) == ["s003"]
+    assert {:ok, %{options: options}} = DinerBrowse.compare(rt, "rival", %{})
+    assert Enum.sort(Enum.map(options, & &1.stall_id)) == ~w(s001 s002 s003)
+
+    rt =
+      Enum.reduce([{"owner", owner, "s003"}, {"rival", rival, "s001"}], rt, fn {device, principal, sid}, rt ->
+        params = %{stall_id: sid, main: "falafel_wrap", profile_id: "unrestricted"}
+        assert {:ok, _} = Management.quote(rt, device, params)
+        assert {:ok, quote} = Offers.quote_tray(rt.state, sid, "falafel_wrap", nil, diet)
+
+        accepted(
+          rt,
+          {:principal, principal},
+          :admit_visit,
+          Map.merge(params, %{source: :guest, confirmed: Offers.terms(quote)})
+        )
+      end)
+
+    assert :ok = Invariants.check(rt.state)
+    assert {:ok, replay} = CommandWorkflow.open(PostgresEventStore, rt.store)
+    assert replay.state == rt.state
+  end
+
   test "catalog expansion keeps existing terms and replays the launch content from PostgreSQL" do
     old = SliceCatalog.catalog()
     rt = boot(PostgresEventStore, FeudHall.PostgresCase.fresh_store(), old)
@@ -22,9 +92,100 @@ defmodule FeudHall.Application.ProgressionTest do
     assert rt.state.restaurants["old-kitchen"] == restaurant
     assert Map.take(rt.state.catalog.recipes, Map.keys(old.recipes)) == old.recipes
     assert Map.take(rt.state.market.stock, Map.keys(stock)) == stock
-    assert map_size(rt.state.catalog.recipes) == 120
+    assert map_size(rt.state.catalog.recipes) == 125
     assert {:ok, loaded} = CommandWorkflow.open(PostgresEventStore, rt.store)
     assert loaded.state == rt.state
+  end
+
+  test "a newer launch catalog adds Maori without changing pinned businesses, orders or economic pools" do
+    alias FeudHall.Domain.{Dietary, Offers}
+    alias FeudHall.Infrastructure.Snapshot
+
+    launch = LaunchCatalog.catalog()
+
+    added =
+      ~w(puha puha_frozen cabbage cabbage_frozen green_lipped_mussels green_lipped_mussels_frozen golden_syrup golden_syrup_value kawakawa_leaf)
+
+    old_recipes = Map.reject(launch.recipes, fn {_, recipe} -> recipe.cuisine == "maori" end)
+    old = %{launch | version: 1, recipes: old_recipes, products: Map.drop(launch.products, added)}
+
+    old =
+      put_in(
+        old.rules.market.target_stock_per_equivalent,
+        Map.drop(old.rules.market.target_stock_per_equivalent, added)
+      )
+
+    old = put_in(old.rules.market.replenish_cap, Map.drop(old.rules.market.replenish_cap, added))
+
+    old =
+      put_in(
+        old.rules.demand.segments,
+        Enum.map(old.rules.demand.segments, fn segment ->
+          %{segment | main_preference: Map.take(segment.main_preference, Map.keys(old_recipes))}
+        end)
+      )
+
+    old =
+      put_in(old.rules.progression.starter_techniques, Map.delete(old.rules.progression.starter_techniques, "maori"))
+
+    old = put_in(old.profiles["keto_style"].enabled, false)
+    old = put_in(old.rules.progression.equipment_cost, 12_345)
+    rt = boot(PostgresEventStore, FeudHall.PostgresCase.fresh_store(), old)
+    {rt, guest} = register(rt, "guest")
+    npc = {:npc, "budget"}
+    rt = accepted(rt, npc, :create_restaurant, location("pinned", "s001", "levantine"))
+    rt = accepted(rt, npc, :request_starter_stock, %{restaurant_id: "pinned", budget: 20_000})
+    rt = accepted(rt, npc, :open_stall, %{stall_id: "s001"})
+    rt = accepted(rt, {:system, :visitor_fund}, :grant_allowance, %{principal: guest, amount: 1_200})
+    rt = advance(rt, 4 * Clock.minute())
+    {:ok, requirement} = Dietary.requirement(rt.state.catalog, "unrestricted")
+
+    {:ok, quote} =
+      Offers.quote_tray(rt.state, "s001", "falafel_wrap", nil, %{
+        requirement: requirement,
+        carbs_reserved: 0,
+        carbs_served: 0
+      })
+
+    rt =
+      accepted(rt, {:principal, guest}, :admit_visit, %{
+        source: :guest,
+        stall_id: "s001",
+        main: "falafel_wrap",
+        profile_id: "unrestricted",
+        confirmed: Offers.terms(quote)
+      })
+
+    before = rt.state
+    snapshot_position = rt.position
+    snapshot = Snapshot.take(%{hall: rt.state, control: rt.control}, rt.position)
+    rt = accepted(rt, {:system, :admin}, :expand_catalog, %{catalog: launch})
+    assert rt.state.catalog.version == 2
+    assert Map.take(rt.state.catalog.recipes, Map.keys(old_recipes)) == before.catalog.recipes
+    assert Map.take(rt.state.catalog.products, Map.keys(old.products)) == before.catalog.products
+    assert rt.state.restaurants == before.restaurants
+    assert rt.state.orders == before.orders
+    assert rt.state.visits == before.visits
+    assert rt.state.wallets == before.wallets
+    assert rt.state.progression == before.progression
+    assert rt.state.visitor_fund == before.visitor_fund
+    assert Map.take(rt.state.market.stock, Map.keys(before.market.stock)) == before.market.stock
+    assert rt.state.market.stock["puha"] > 0
+    assert rt.state.catalog.rules.demand.arrivals_per_equivalent == before.catalog.rules.demand.arrivals_per_equivalent
+    assert rt.state.catalog.rules.progression.equipment_cost == 12_345
+    refute rt.state.catalog.profiles["keto_style"].enabled
+    assert rt.state.catalog.rules.progression.starter_techniques["maori"] == "simmer"
+    assert {:rejected, _, same} = command(rt, {:system, :admin}, :expand_catalog, %{catalog: launch})
+    assert same.state == rt.state
+    assert {:rejected, _, rt} = command(same, {:system, :admin}, :expand_catalog, %{catalog: old})
+    rt = advance(rt, quote.earliest_completion + 4 * Clock.minute())
+    assert rt.state.stats.served_mains == 1
+    assert :ok = Invariants.check(rt.state)
+    assert {:ok, loaded} = CommandWorkflow.open(PostgresEventStore, rt.store)
+    assert loaded.state == rt.state
+    assert {:ok, batches} = PostgresEventStore.read_from(rt.store, snapshot_position)
+    assert {:ok, restored} = Snapshot.restore(snapshot, batches)
+    assert restored.hall == rt.state
   end
 
   test "locations share the venture, keep their cuisine, and reopening a dormant venture issues no grant" do
@@ -409,6 +570,24 @@ defmodule FeudHall.Application.ProgressionTest do
     assert visit.dessert == :offered
     assert {:ok, %{receipts: []}} = DiningHistory.page(rt, "guest", nil)
     assert {:ok, quote} = Offers.quote_dessert(rt.state, visit)
+
+    # Model a pre-policy self-order: accepted main/drink terms remain untouched,
+    # but neither the quote endpoint nor the domain permits a new dessert purchase.
+    legacy =
+      rt
+      |> put_in([Access.key(:state), :restaurants, "kitchen", :owner_kind], :principal)
+      |> put_in([Access.key(:state), :restaurants, "kitchen", :owner], guest)
+
+    assert legacy.state.orders == rt.state.orders
+    assert {:error, :own_stall_order} = Management.quote(legacy, "guest", %{visit_id: visit.id})
+
+    assert {:error, :own_stall_order} =
+             FeudHall.Domain.Hall.decide(
+               legacy.state,
+               {:accept_dessert, %{visit_id: visit.id, confirmed: Offers.terms(quote)}},
+               %{actor: {:principal, guest}, command_id: "legacy-dessert"}
+             )
+
     rt = accepted(rt, {:principal, guest}, :accept_dessert, %{visit_id: visit.id, confirmed: Offers.terms(quote)})
     rt = advance(rt, quote.earliest_completion + 4 * Clock.minute())
 

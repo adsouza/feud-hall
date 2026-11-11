@@ -399,14 +399,16 @@ advance game time by itself.
 
 ## Commands, state synchronization, and authorization
 
+Use the same pure restaurant-ownership predicate for checkout availability, meal comparison, quotes, and main/drink or dessert acceptance. Public inspection stays available. At the command boundary, check the service-wide restaurant license before accepting helper work, presence, selection, or staging commands; holding no current venture does not restore eligibility. A successful owner-admission decision also emits hall helper termination/selection-release events in the same atomic hall/control batch. Pay only elapsed wages, release unused commitments and task claims, retain history, and preserve normal receipt retry and replay behavior. Private work projections hide offers/control for licensed owners; queries never perform the termination. Existing accepted meals retain their terms.
+
 ### Core command families
 
 | Command family | Examples | Required checks |
 | --- | --- | --- |
 | Account admission | Redeem invitation; submit/withdraw license application; approve/reject application | Device/principal authority, code/quota or server-owned shift eligibility, unique pending application/license/parent, current reviewer capability, no self-approval, terminal-state/version checks. |
 | Business lifecycle | Create restaurant, open/close, enable unattended trading | Owner license, identity, membership, business state, valid policy, hall cleaning gate; approval alone creates no venture or grant. |
-| Visitor dining | Join as customer, order main with optional drink, accept/decline dessert, inspect own tray/course/visit, cancel eligible unserved tray/course | Hall access for new service, canonical guest authority, served parent main at the same restaurant/stall, initial drink-slot decision, unused dessert slot and valid offer deadline, allowance/earned-credit slices, admission/capacity, unchanged confirmed terms, pre-preparation voluntary cancellation, stable visit/order/command IDs. |
-| Visitor staff | Offer/withdraw help, accept/end shift, claim/complete assigned task, settle wages | Owner opt-in, guest capability, hall access and accepted shift end capped at 03:00, unique shift/position/task control, controller generation, funded payroll, actual work and normal service constraints. |
+| Visitor dining | Join as customer, order main with optional drink, accept/decline dessert, inspect own tray/course/visit, cancel eligible unserved tray/course | Hall access for new service, canonical guest authority, no purchase from an owned restaurant location, served parent main at the same restaurant/stall, initial drink-slot decision, unused dessert slot and valid offer deadline, allowance/earned-credit slices, admission/capacity, unchanged confirmed terms, pre-preparation voluntary cancellation, stable visit/order/command IDs. |
+| Visitor staff | Offer/withdraw help, accept/end shift, claim/complete assigned task, settle wages | Owner opt-in, unlicensed guest capability for helper work, hall access and accepted shift end capped at 03:00, unique shift/position/task control, controller generation, funded payroll, actual work and normal service constraints. |
 | Market and inventory | Submit/cancel purchase, configure restock, discard stock | Quantity, cash/budget, price limit, storage, reservation integrity. |
 | Menu and development | Set price/substitution policy, enable recipe, buy equipment, learn recipe | Ownership, unlocks, recipe-approved alternatives, cost/quality preview, station compatibility, safe effective time; accepted bills stay pinned. |
 | Staff | Hire, schedule, break, assign, dismiss | Ownership, unique assignment, commitments, wage/cost validity. |
@@ -956,6 +958,16 @@ because both layouts exist. Reflow, orientation, browser Back, and virtual
 keyboard changes preserve composition/drafts and cannot submit a command.
 Revalidate any restored quote against current authority and content.
 
+Below 400 CSS px, keep business editors mounted while hiding inactive sections;
+use one shared draft model and location scope. Represent phone page, business
+section, selected public stall, detail state and scroll position in local
+history entries so Back/Forward restore presentation without sending commands.
+Stall details replace the phone scene; disposing it saves the camera for return.
+Use the same mounted inspector on wider screens. When resizing with an editor
+focused, expose its section/detail view without replacing the input or ending
+IME composition. Keep navigation clear of safe areas and leave bottom space for
+content and notices above it.
+
 The hall camera state may include an owner's inside-stall viewpoint and its
 previous public-hall pose. Resolve eligible locations from the current private
 restaurant projection, validate them on each scene update, and leave the booth
@@ -1036,13 +1048,22 @@ the picker or its list alternative.
 
 ## Implementation status
 
-The launch catalog adds 21 cuisines to the existing three. Fresh halls pin
-the launch catalog at initialization. A managed slice hall appends an
+The launch catalog adds 22 cuisines to the existing three. Fresh halls pin
+launch version 2 (25 cuisines and 125 recipes) at initialization. A managed slice hall appends an
 additive catalog event with its own content identity. The event preserves
 existing recipes, stock, demand inputs, orders, and leases. New products use
 the regular market; equipment purchases install a paid capability at one
 physical location, and recipe knowledge, cash, and stock belong to the
 venture. Stall-level menu overrides do not affect sibling stalls.
+
+Managed launch halls also accept strictly newer launch versions through the
+same recorded additive transition. Bootstrap uses a version-specific command
+ID. Keep pinned product/recipe definitions, profile settings, progression
+tuning, orders, leases, stock and finite demand pools; merge only the new
+definitions, starter techniques and demand choices. Opening stock is issued
+once for newly introduced products. The complete resulting catalog and its
+hash are stored in the event for genesis and snapshot-tail replay. Equal or
+older versions cannot repeat the expansion or replenish stock again.
 
 The dining receipt query pages committed guest admission and settlement
 events through the event-store read port. PostgreSQL indexes the scoped

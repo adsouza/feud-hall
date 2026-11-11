@@ -38,6 +38,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   alias FeudHall.Domain.Hall.{CounterPlay, Management, Progression}
 
   @management_commands Management.commands() ++ Progression.commands() ++ CounterPlay.commands()
+  @helper_commands [:accept_helper_shift, :select_handover, :report_helper_presence] ++ CounterPlay.commands()
   @commands ~w(initialize_hall upgrade_simulation expand_catalog enable_visitor_play advance_clock create_restaurant open_stall close_stall unlock_recipe
                set_menu_price remove_menu_item set_substitution_policy submit_purchase_request
                cancel_purchase_request grant_allowance admit_visit cancel_tray accept_dessert decline_dessert
@@ -430,12 +431,18 @@ defmodule FeudHall.Application.CommandWorkflow do
   defp decide(runtime, {kind, _} = command, ctx) when kind in @identity_commands do
     now = if runtime.state, do: runtime.state.now, else: 0
 
-    with {:ok, events} <- Identity.decide(Identity.get(runtime.control), now, command, ctx),
-         do: {:ok, [], events}
+    with {:ok, events} <- Identity.decide(Identity.get(runtime.control), now, command, ctx) do
+      # Admission revokes helper control in this hall in the same durable batch.
+      endings =
+        for %{type: :owner_admitted, principal: id} <- events,
+            event <- Management.end_principal_shift(runtime.state, id, :owner_ineligible),
+            do: event
+
+      {:ok, endings, events}
+    end
   end
 
-  # Control commands see the hall state (nil before initialisation) read-only;
-  # hall commands never touch the control stream.
+  # Availability/recovery commands explicitly coordinate the hall and control roots.
   defp decide(runtime, {kind, _} = command, ctx) when kind in @control_commands do
     with {:ok, %{control: control, hall: hall}} <- Control.decide(runtime.control, runtime.state, command, ctx) do
       {:ok, hall, control}
@@ -469,6 +476,17 @@ defmodule FeudHall.Application.CommandWorkflow do
     if Management.enabled?(runtime.state) and not Identity.owner?(Identity.get(runtime.control), id),
       do: {:error, :owner_required},
       else: :ok
+  end
+
+  defp authorize_management(runtime, {kind, _}, %{actor: {:principal, id}})
+       when kind in @helper_commands do
+    identity = Identity.get(runtime.control)
+
+    cond do
+      Identity.principal(identity, id) == nil -> {:error, :unknown_principal}
+      Identity.owner?(identity, id) -> {:error, :owner_cannot_work}
+      true -> :ok
+    end
   end
 
   defp authorize_management(runtime, {kind, _}, %{actor: {:principal, id}})

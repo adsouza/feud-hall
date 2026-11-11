@@ -1,6 +1,6 @@
 # Stall artwork
 
-ImageGen created these three texture atlases from dishes in the launch menus.
+ImageGen created these three texture atlases and the Māori illustration from dishes in the launch menus.
 Each sheet is a 4-by-2 grid. [The shared artwork map](../../cuisine-artwork.ts)
 maps the eight tiles in row order to stable cuisine IDs for both the 3D stalls
 and the wide-screen My visit illustration. The game uses 1280×640 WebP exports
@@ -32,4 +32,16 @@ Top row left to right: (1) Thai tofu pad Thai, stir-fried thin rice noodles, gol
 
 ```text
 Top row left to right: (1) European tomato pasta, a white plate of tomato-red spaghetti with basil leaves; (2) Brazilian moqueca de peixe, a black clay bowl of golden fish stew with red peppers and a small mound of white rice; (3) Yoruba ewa riro with plantain, bowl of orange-brown stewed cowpeas with a fan of golden fried plantain slices; (4) Colombian arepa con queso, two round griddled golden corn cakes, one split to show white cheese. Bottom row left to right: (1) Haudenosaunee Three Sisters soup, bowl of white corn kernels, red beans and orange squash in broth with those three ingredients shown beside it; (2) Diné blue-corn griddle cakes, a stack of round blue-purple corn cakes beside a few roasted orange squash wedges; (3) Lakota cedar-braised bison, dark sliced braised bison with wild onions; (4) Coast Salish roasted salmon, vivid orange char-roasted salmon fillet with dark skin on a simple plate. Represent these cuisines by the plated foods, with no cultural motifs or ceremonial objects.
+```
+
+### [maori.webp](maori.webp)
+
+The Māori boil-up is a standalone 512×512 tile. The shared map records each
+sheet's columns/rows, so the renderer and My visit can use both atlas tiles and
+standalone illustrations. Generated with the built-in imagegen tool; the PNG
+master remains in the local generated-image library, and this WebP is the game
+asset.
+
+```text
+Use case: stylized-concept. Asset type: square food illustration for the Māori cuisine stall in Feud Hall, matching hand-painted vintage market food signs. Create ONE square illustration of a generous Māori pork-and-pūhā boil-up: a simple deep ceramic bowl of warm clear golden broth with chunky tender pork, leafy green pūhā (sow thistle), a few orange kūmara sweet-potato pieces, and two pale flour dumplings. Three-quarter food view, recognizable ingredients, bright ink and gouache with clean dark contours, warm light, restrained earth tones with saturated greens and orange accents, minimal shadow. Composition centered within about 75% of the square, generous blank margin on all sides, flat warm parchment #f6e1b6 background filling every corner. No lettering, text, labels, people, flags, cultural motifs, carvings, ceremonial objects, watermarks, borders or mockups. Food art only, appetizing and readable at thumbnail size.
 ```

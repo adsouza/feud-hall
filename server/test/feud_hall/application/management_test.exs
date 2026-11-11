@@ -769,6 +769,18 @@ defmodule FeudHall.Application.ManagementTest do
       assert Identity.get(rt.control).applications["L:app"].status == :pending
       rt = run(rt, "review-restored", {:system, :admin}, :set_license_reviewer, %{principal: owner, enabled: true})
 
+      # Approval can arrive during a subsequent shift: revoke work in the same batch.
+      assert {:ok, next_offer} = HallManagement.shift_offer(rt.state, "s001", guest)
+
+      rt =
+        client(
+          rt,
+          "helper-device",
+          "next-shift",
+          :accept_helper_shift,
+          Map.take(next_offer, [:stall_id, :rate, :expires_at, :quoted_at])
+        )
+
       rt =
         client(rt, "owner-device", "approve", :review_license_application, %{
           application_id: "L:app",
@@ -777,6 +789,9 @@ defmodule FeudHall.Application.ManagementTest do
         })
 
       assert Identity.principal(Identity.get(rt.control), guest).parent == owner
+      assert rt.state.management.shifts["H:next-shift"].reason == :owner_ineligible
+      assert rt.state.management.shift_by_principal == %{}
+      assert {:ok, %{profile: %{work: %{active: nil, offers: []}}}} = Management.view(rt, "helper-device")
       assert rt.state.wallets[guest].slices["W:H:shift"].amount == amount
       assert {:ok, replayed} = CommandWorkflow.open(store_mod, rt.store)
       assert replayed.state == rt.state

@@ -318,7 +318,7 @@ procedures rather than treating these planned steps as evidence they ran.
 Use the existing PostgreSQL server and a dedicated database for the managed
 hall. New halls pin the launch catalog at genesis. After an upgrade, apply
 the database migrations and rebuild the web client before restarting the
-server. On startup, a managed slice hall records the launch catalog addition
+server. On startup, a managed slice hall or an older managed launch hall records the additive launch catalog update
 in its existing event stream. Keep its database and signing secret so current
 accounts, orders, and dining receipts remain available. An occupied
 Milestone 2 hall still needs an explicit transition to management.

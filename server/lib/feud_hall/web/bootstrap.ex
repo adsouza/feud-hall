@@ -18,7 +18,11 @@ defmodule FeudHall.Web.Bootstrap do
         execute(scope, "web-init", {:initialize_hall, %{hall_id: scope, catalog: catalog, managed: true}})
 
       %{management: _, catalog: %{id: "slice"}} when catalog.id == "launch" ->
-        execute(scope, "web-launch-catalog", {:expand_catalog, %{catalog: catalog}})
+        expand(scope, catalog)
+
+      %{management: _, catalog: %{id: "launch", version: version}}
+      when catalog.id == "launch" and catalog.version > version ->
+        expand(scope, catalog)
 
       %{management: _} ->
         {:ok, scope}
@@ -27,6 +31,9 @@ defmodule FeudHall.Web.Bootstrap do
         {:stop, :managed_hall_required}
     end
   end
+
+  defp expand(scope, catalog),
+    do: execute(scope, "web-launch-catalog:#{catalog.version}", {:expand_catalog, %{catalog: catalog}})
 
   defp enable_visitor_play(scope, %{id: "launch"}) do
     if Map.has_key?(HallAuthority.state(FeudHall.LiveAuthority).hall, :counter_play),

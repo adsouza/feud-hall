@@ -15,6 +15,7 @@
     title,
     reopeningTime,
     select,
+    inspect,
     saveCamera,
     onUnavailable,
   }: {
@@ -27,6 +28,7 @@
     title: (id: string) => string;
     reopeningTime: (stall: Stall) => string;
     select: (id: string) => void;
+    inspect: (id: string) => void;
     saveCamera: (state: CameraState) => void;
     onUnavailable: () => void;
   } = $props();
@@ -64,7 +66,7 @@
           hall = createHallScene(
             host,
             {
-              select: (id) => select(id),
+              select: (id) => inspect(id),
               hover: (id) => (hovered = id),
               fail: onUnavailable,
               inside: (id) => (inside = id),
@@ -264,6 +266,11 @@
   }
   .canvas {
     height: clamp(15rem, 53vh, 34rem);
+  }
+  @media (width < 400px) {
+    .canvas {
+      height: clamp(15rem, 38svh, 22rem);
+    }
   }
   .canvas:focus-visible {
     outline: 2px solid #ffcb67;

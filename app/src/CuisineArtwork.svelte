@@ -11,10 +11,12 @@
       <img
         src={tile.url}
         alt=""
-        width="1280"
-        height="640"
-        style:left={`${-(tile.index % 4) * 100}%`}
-        style:top={`${-Math.floor(tile.index / 4) * 100}%`}
+        width={tile.columns * 320}
+        height={tile.rows * 320}
+        style:width={`${tile.columns * 100}%`}
+        style:height={`${tile.rows * 100}%`}
+        style:left={`${-(tile.index % tile.columns) * 100}%`}
+        style:top={`${-Math.floor(tile.index / tile.columns) * 100}%`}
       />
     </div>
     <figcaption>{name}</figcaption>
@@ -38,8 +40,6 @@
   }
   img {
     position: absolute;
-    width: 400%;
-    height: 200%;
     max-width: none;
   }
   figcaption {
