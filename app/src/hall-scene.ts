@@ -10,8 +10,10 @@ type CameraPose = { position: Point; target: Point; fov?: number };
 export type CameraState = CameraPose & {
   inside?: { stall: string; hall: CameraPose };
 };
+export type HallTarget = "menu" | "counter" | "staff" | "supply";
 type Actions = {
   select: (id: string) => void;
+  interact: (id: string, target: HallTarget) => void;
   hover: (id: string | null) => void;
   fail: () => void;
   inside: (id: string) => void;
@@ -1327,6 +1329,21 @@ export function createHallScene(
   }
 
   function keyDown(event: KeyboardEvent) {
+    if (
+      event.key.toLowerCase() === "e" &&
+      !event.repeat &&
+      !event.isComposing &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey
+    ) {
+      const id = insideStall || appearance.selected;
+      if (id) {
+        event.preventDefault();
+        actions.interact(id, "counter");
+      }
+      return;
+    }
     shiftHeld = event.shiftKey;
     if (
       !ARROW_KEYS.has(event.key) ||

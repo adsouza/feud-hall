@@ -10,6 +10,37 @@ acceptance scenarios; [architecture](ARCHITECTURE.md#architecture-verification)
 owns implementation invariants. This document owns how to select, run, and report
 checks. Release execution belongs in [Deployment](DEPLOYMENT.md).
 
+## Offline single-player qualification (planned)
+
+These are requirements, not passing evidence: the current clients remain
+networked. Test the shared core through local and multiplayer execution adapters
+using the same catalog, seeds, commands, and active-time advances; compare
+committed events, receipts, resource accounting, and replay at equivalent heads.
+Use isolated local saves and disposable online halls, never a player's live data.
+
+- With all external networking blocked and no separately installed service or
+  PostgreSQL, start/load a local hall, manage against NPCs, and save/relaunch.
+  Assert that online transport, credential lookup, and version handshakes are not
+  invoked in this mode; unreachable-server error handling is not offline play.
+- Close or suspend with accepted food, reserved stock, payroll, cleaning, lease
+  charges, and other deadlines pending. Change wall time forward/backward and
+  resume: both gameplay clocks and all economic quantities stay at the saved
+  head until active time advances. No offline catch-up or extra demand/grants.
+- Inject failure before/during/after local append, interrupted acknowledgements,
+  concurrent opens of the same save, full/evicted storage, corrupt snapshots,
+  missing content versions, and failed upgrades/imports. Require atomic batches,
+  original-ID receipt resolution, single-writer ownership, compatible recovery,
+  and genesis/snapshot-tail equality without replay effects.
+- Prove that local identities, balances, proofs, exported saves, and owner
+  admission cannot mint online rights/progress, and that multiplayer disconnect
+  does not fork or pause the shared economy.
+- Qualify offline web/browser runtime and installed macOS/Flatpak/`.deb` delivery,
+  English/Japanese fonts/IME, and shutdown of native local workers. Browser-asset
+  caching, source review, or a localhost development server is insufficient.
+- Curated mutations should charge the closed interval, reset a resumed deadline,
+  reissue a grant, skip atomic receipt persistence, or accept offline progress
+  into an online scope. Keep property/action budgets and local suite restrictions.
+
 ## Frontend toolchain
 
 Use **Bun** for dependency management, TypeScript execution, scripts, and suitable
@@ -341,7 +372,16 @@ macOS bundle, installs both Linux packages, and attempts their launch.
 In each packaged client, check Cmd (macOS) or Ctrl (Linux) with `+`/`=`, `-`,
 and `0` for whole-page zoom and reset. Check reflow, focused input/draft
 continuity, English/Japanese text, and the hall canvas at enlarged zoom; the
-camera controls must remain separate from page zoom.
+camera controls must remain separate from page zoom. Quit/relaunch after zooming
+and after resetting to 100%; the next shortcut must start from the restored
+level. `bun run test:browser ui-zoom.spec.ts --workers=1` exercises the actual
+native initialization script with a mocked zoom bridge: macOS/Linux shortcuts,
+real browser-process restarts with a retained storage profile, rapid/delayed
+requests, native refusal, invalid/blocked storage, bounds, IME, and wheel/camera
+separation. It does not substitute for installed WKWebView/WebKitGTK checks.
+Local macOS verification on November 11, 2026 confirmed that 120% zoom
+survives an actual app quit/relaunch and that the next Cmd+- returns to 100%.
+The native Linux persistence path has not been exercised locally.
 Track real installed-client gameplay, native IME and GPU measurements,
 live Render evidence, and a representative 30-real-day archive separately.
 See the [local Milestone 6 evidence](superpowers/reports/2026-11-10-milestone-6-local.md).
@@ -441,6 +481,15 @@ staging across different readiness boundaries. The curated mutation
 `M5 staged setup credit can be reused` checks the one-use invariant.
 CI retains failure traces and hall logs. A separate Svelte template type-check
 and broader cross-browser coverage remain release qualification work.
+
+`hall-interactions.spec.ts` checks in-hall ordering and committed meal receipts,
+helper acceptance/staging/selection, owner stock/menu/opening controls, keyboard
+E/Escape and focus return, camera-node continuity, shared drafts, Japanese at
+320px, and preserving the actual input node/focus through WebGL fallback.
+Run this focused file with one browser worker alongside `visitor-play.spec.ts`,
+`phone-layout.spec.ts`, `owner-view.spec.ts`, and `participation.spec.ts` when
+changing the shared controls. These use the disposable browser hall, not the
+running local game, and do not qualify physical touch/GPU performance.
 
 `participation.spec.ts` exercises a visitor receiving a license during a shift,
 owner navigation/history, own-stall purchase exclusion, and competitor dining.

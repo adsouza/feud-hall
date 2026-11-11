@@ -269,6 +269,8 @@ textarea {
   border-color: var(--accent, #ffc96d);
 }
 .hall-layout {
+  position: relative;
+  grid-template-areas: "scene inspector" "bench inspector";
   display: grid;
   grid-template-columns: minmax(0, 2.5fr) minmax(14rem, 1fr);
   align-items: start;
@@ -277,6 +279,20 @@ textarea {
 }
 .hall-layout.list-mode {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "bench" "inspector";
+}
+.hall-scene-pane {
+  grid-area: scene;
+}
+.hall-workbench-slot {
+  grid-area: bench;
+  min-width: 0;
+}
+.hall-workbench-slot:empty {
+  display: none;
+}
+.stall-inspector {
+  grid-area: inspector;
 }
 .stall-inspector,
 .visit-tracker {
@@ -299,6 +315,7 @@ textarea {
 @media (max-width: 760px) {
   .hall-layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "scene" "bench" "inspector";
   }
 }
 
@@ -438,5 +455,80 @@ textarea {
   .success-notice {
     z-index: 21;
     inset-block-end: calc(5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* The workbench is non-modal: the scene remains available beside it. */
+.hall-scene-pane {
+  position: relative;
+  min-width: 0;
+}
+.hall-workbench {
+  position: relative;
+  max-width: 100%;
+  padding: 0.85rem;
+  margin-top: 0.65rem;
+  background: #171b2bee;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hall-workbench:focus-visible {
+  outline: 2px solid #ffcb67;
+}
+.hall-workbench-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: 0.35rem;
+  background: #171b2bf5;
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 0.7rem;
+}
+.hall-workbench-heading h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.hall-workbench-heading button {
+  flex-shrink: 0;
+}
+.hall-workbench .actions {
+  flex-wrap: wrap;
+}
+.hall-workbench select,
+.hall-workbench input {
+  max-width: 100%;
+}
+.hall-workbench .quote {
+  position: sticky;
+  bottom: 0;
+  background: #171b2b;
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+}
+.hall-layout.immersive-hall {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "scene" "bench";
+}
+.hall-layout.immersive-hall > .stall-inspector {
+  display: none;
+}
+@media (min-width: 850px) {
+  .immersive-hall .hall-workbench-slot {
+    position: absolute;
+    grid-area: auto;
+    z-index: 2;
+    right: 0.75rem;
+    top: 0.75rem;
+    width: min(24rem, 43%);
+    margin: 0;
+  }
+  .immersive-hall .hall-workbench {
+    max-height: min(70svh, 53rem);
+    overflow-y: auto;
+    margin: 0;
   }
 }

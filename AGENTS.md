@@ -2,7 +2,8 @@
 
 ## Start here
 
-Feud Hall is a persistent online restaurant-management game. This repository
+Feud Hall is a restaurant-management game designed for offline single-player
+and persistent online multiplayer. This repository
 contains the design, artwork, and the server under `server/`: the pure Elixir
 economic core (Milestone 1), durable PostgreSQL event storage, recovery, and
 projections (Milestone 2A), and the shared simulation (Milestone 2B: batched
@@ -22,6 +23,13 @@ the current tree before choosing commands. Update this guide with verified entry
 lands; do not describe planned features or checks as already working. Verified
 backend entry points (run from `server/`) are listed in
 [Testing](docs/TESTING.md#implemented-backend-entry-points).
+
+Single-player must need no game server/online account and pause while closed,
+without elapsed-time catch-up. This execution mode is planned, not implemented:
+current web/native clients still use the networked service. Reuse the economic
+core through local execution/storage adapters, keep local saves/identities out
+of the online economy, and never silently fork a disconnected multiplayer hall.
+See [execution modes](docs/ARCHITECTURE.md#local-and-multiplayer-execution).
 
 Read the relevant owning documents before changing behavior:
 
@@ -45,7 +53,9 @@ ADRs. Link to the owning document rather than copying large specifications here.
 ## Stack and boundaries
 
 - Use Elixir/Phoenix, Ecto/PostgreSQL, and Phoenix Channels for the authoritative
-  online service, deployed on Render. Use Svelte with TypeScript and Three.js
+  multiplayer service, deployed on Render. Single-player uses a local authority
+  and durable local storage with the same simulation rules. Use Svelte with
+  TypeScript and Three.js
   for the shared frontend; Tauri under `app/src-tauri/` packages it for Linux
   and macOS. See [local macOS launch](docs/DEPLOYMENT.md#build-and-open-the-macos-app).
 - Use Bun for frontend dependencies, scripts, TypeScript execution, and suitable
@@ -244,8 +254,10 @@ For implementation work, develop verification alongside the feature:
 
 ## Delivery and repository hygiene
 
-- Build the common online web experience first, then qualify native clients
-  against the same server. Linux release CI must generate **both Flatpak and
+- The implemented common web/native experience uses the multiplayer server.
+  Add and qualify server-free single-player execution, local saves, and pause/
+  resume separately; do not call development server setup an offline client.
+  Linux release CI must generate **both Flatpak and
   `.deb` packages**. Verify installation, launch, server connection, English/
   Japanese UI, fonts, and input for each supported package and macOS target.
 - Keep SVGs in `assets/branding/` as editable artwork masters. Export PNGs from

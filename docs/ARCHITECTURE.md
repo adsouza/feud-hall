@@ -21,7 +21,7 @@ Navigation: [system shape](#system-shape), [DDD](#domain-driven-design),
 
 ## System shape
 
-Use a modular monolith with one authoritative online simulation and PostgreSQL.
+Use a modular monolith with one authority per running hall: the multiplayer service uses PostgreSQL; a single-player runtime uses a durable local adapter.
 Start with one public hall containing at most 150 physical stalls. Keep identity
 service-wide and economies hall-scoped so future private halls do not require
 separate human accounts. Smaller domain boundaries do not require microservices,
@@ -29,9 +29,21 @@ a broker, or independently committed aggregate processes.
 
 Use an Elixir/Phoenix backend, PostgreSQL persistence through Ecto, and Phoenix Channels/PubSub for live delivery. Use Svelte with TypeScript for management UI and Three.js for WebGL presentation. Tauri wraps the shared frontend for Linux and macOS; its Rust code handles native integration rather than owning a second economy.
 
-All clients connect to the authoritative Render service. Solo means one human in that online hall with NPC competitors. It does not mean an offline local simulation. The earlier local Elixir sidecar discussion was superseded by the explicit centralized-server decision.
+Multiplayer clients connect to the authoritative Render service. Single-player runs the shared simulation locally and needs no remote game server. A lone human in the public online hall is distinct from a local single-player save. The owner confirmed offline single-player and pause-while-closed on November 11, 2026, superseding the earlier online-only execution plan.
 
 Phoenix Channels provide topic-based communication to browser and native clients; the game still needs its own authorization, persistence, and recovery protocol. See the official [Phoenix Channels guide](https://hexdocs.pm/phoenix/channels.html).
+
+### Local and multiplayer execution
+
+The economic core, content validation, deterministic decisions/evolution, NPC planning, exact arithmetic, and command/receipt semantics remain shared. Network/service/account operations in the remaining sections describe multiplayer unless explicitly marked local. Presentation calls application use cases through an execution/transport port: the multiplayer adapter uses the existing authenticated service; the local adapter calls the local authority. Do not build a separate Rust/TypeScript economy with drifting rules. The current native bridge is HTTP transport and the current durable adapter is PostgreSQL; neither is an implemented offline runtime.
+
+A native package can supervise an internal local runtime as an application component. No separately operated Phoenix service, PostgreSQL installation, Render access, online login, or external review is required for single-player. Starting/stopping the shell must own that runtime's lifetime; it must not remain an orphaned headless hall after quit. Browser single-player also requires a browser-executable form of the shared rules and durable browser storage, plus locally available UI/fonts/content for offline use. That runtime/build strategy is unresolved and must be qualified before offline browser/PWA support is advertised. A service worker caches delivery assets; it does not replace the simulation.
+
+Each local save owns its hall, local principal namespace, event/receipt history, pinned rules/content versions, deterministic random state, and simulation clocks. Local storage must provide atomic durable append of a complete batch/receipt/required projections, expected-version checks, a single-writer lock, uncertain-commit resolution by the same ID, and snapshot/genesis-tail equivalence. Select an embedded transactional storage adapter without requiring players to run PostgreSQL. Qualify versioned save migration, corruption handling, capacity/eviction, backups/export, import validation, and full storage before acknowledging progress. Snapshots remain derived and incompatible saves must not silently load using current content. Offline committed progress must already be durable; correctness cannot depend on a final shutdown callback. Diagnostic logs and investigation exports remain available locally without requiring hosted telemetry.
+
+Closing or suspending single-player freezes both gameplay clocks at the last committed local head. On resume, restore that head, reconcile transient controllers at the unchanged clock, establish a fresh monotonic anchor, and then accept commands/advance time. Never subtract the saved wall timestamp from the current wall clock or apply multiplayer outage/presence policy as elapsed offline economic work. Missing scheduling observation while suspended enters pause/recovery. Local absence cannot leave unattended trading running after quit.
+
+Mode and save scope are explicit before admission or execution. Select the mode before constructing the online hall client or opening its network/credential adapters; a local save cannot depend on an online cookie, server health, or multiplayer protocol handshake. Local identities, owner admission, wallets, invitations, proof, receipts, and backups are not credentials or entitlements in the online service. Multiplayer adapters derive actor/scope through existing authentication and must reject local save/proof/import material as a source of public balances or rights. Do not silently convert a disconnect into a local fork or merge an offline economy back into the public hall. Online account recovery and security wall-clock expiry continue to obey the existing service contracts.
 
 ### Frontend toolchain
 
@@ -399,6 +411,17 @@ advance game time by itself.
 
 ## Commands, state synchronization, and authorization
 
+The hall presentation routes stall-toolbar actions to the same dining, helper,
+and business controls used by the ordinary screens. `App.svelte` retains their
+shared drafts, quotes, pending IDs, and authorized projections; `HallScene`
+exposes controls below the scene and emits stall/target intents only. Camera changes,
+E, and opening/closing the non-modal workbench perform no economic command.
+Workbenches remain mounted across layout changes and WebGL fallback. World
+animation and pointer hit tests cannot choose another helper's task, reserve
+stock, award wages, serve a dish, or bypass price confirmation. Receipt refresh
+also observes wallet changes, covering a paid visit that finishes between
+snapshots without requiring an intermediate active-visit frame.
+
 Use the same pure restaurant-ownership predicate for checkout availability, meal comparison, quotes, and main/drink or dessert acceptance. Public inspection stays available. At the command boundary, check the service-wide restaurant license before accepting helper work, presence, selection, or staging commands; holding no current venture does not restore eligibility. A successful owner-admission decision also emits hall helper termination/selection-release events in the same atomic hall/control batch. Pay only elapsed wages, release unused commitments and task claims, retain history, and preserve normal receipt retry and replay behavior. Private work projections hide offers/control for licensed owners; queries never perform the termination. Existing accepted meals retain their terms.
 
 ### Core command families
@@ -495,8 +518,14 @@ adapters; framework defaults alone do not establish the application's contract.
 
 The bundled native webview restricts navigation to its own assets, denies
 popups, and exposes the hall transport plus the core webview page-zoom operation
-to the local main window. Tauri's built-in zoom shortcuts scale the entire
-native page; the web client keeps the browser's own zoom handling. The Rust client fixes the
+to the local main window. The native initialization script restores saved UI zoom during webview
+startup, handles Cmd/Ctrl zoom shortcuts and
+modified wheel input, and serializes calls to the core page-zoom operation.
+Persist only the last acknowledged integer percentage in local webview storage;
+invalid or missing values default to 100%, with the existing 20–1000% bounds.
+Ctrl-wheel is handled before hall-camera controls so it cannot zoom both views.
+Storage failure does not prevent live zoom. The web client keeps the browser's
+own zoom handling. The Rust client fixes the
 server origin at build time, restricts methods and paths, rejects redirects,
 and holds the signed device cookie in the OS credential store. It sends the
 same credential, origin and command guard to Phoenix. The bridge returns
@@ -510,7 +539,7 @@ Clients track connection state and the last projection version. After a gap they
 
 The UI may show pending edits and local visual feedback immediately. It must not present unconfirmed purchases, stock, cash, awards, or completed sales as committed facts. A rejected command removes its pending overlay and preserves unrelated server changes.
 
-When disconnected, show current cached information as stale and disable new economic submissions. Draft policy/menu edits may be retained locally, but they require revalidation after reconnect. Do not blindly replay stale purchases at changed market prices. An uncertain in-flight command is resolved by querying or retrying the same command ID, never by issuing a fresh purchase ID.
+In multiplayer, when disconnected, show current cached information as stale and disable new economic submissions. Draft policy/menu edits may be retained locally, but they require revalidation after reconnect. Do not blindly replay stale purchases at changed market prices. An uncertain in-flight command is resolved by querying or retrying the same command ID, never by issuing a fresh purchase ID.
 
 Short-lived access credentials require an authenticated refresh and revocation design. Web and desktop adapters may store credentials differently, but share authorization semantics. Credentials, private ledgers, and complete token payloads do not appear in logs.
 
@@ -882,7 +911,7 @@ Horizontal scaling later must route commands to the correct hall authority. Dist
 [Deployment](DEPLOYMENT.md#web-and-server-release-sequence) owns the planned
 release/handover procedure and evidence; this section defines its constraints.
 
-Host the canonical Phoenix service and web client on Render, with durable PostgreSQL storage. Desktop builds contain the frontend and native wrapper; they do not bundle a second canonical Elixir server. An always-running service configuration is required for a persistent hall even with no connected owners; select actual capacity from measurements rather than assuming a free plan will satisfy it.
+Host the canonical multiplayer Phoenix service and web client on Render, with durable PostgreSQL storage. Current desktop builds contain the frontend and native transport wrapper. Planned offline packages additionally deliver a supervised local simulation runtime and local storage, implementing the execution contract above without becoming another authority for an online hall. An always-running service configuration is required for a persistent multiplayer hall even with no connected owners; select actual capacity from measurements rather than assuming a free plan will satisfy it.
 
 Use an explicit migration phase, application readiness checks, and controlled authority handover. A failed migration or unavailable persistence layer leaves the economy unavailable rather than admitting mutations against incomplete state. Keep connection pools bounded across instances and background workers.
 

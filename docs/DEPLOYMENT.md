@@ -11,9 +11,34 @@ owns qualification and evidence. This document owns build/release sequencing and
 operational procedures; [the game design](GAME_DESIGN.md#20-first-release-scope-and-implementation-order)
 owns the required release scope.
 
+## Offline single-player delivery (planned)
+
+The server is required only for multiplayer. Current packages still contain a
+network client; the procedures below describe that implemented path, including
+when the development multiplayer service runs on localhost. They do not deliver
+offline play yet.
+
+Offline single-player must ship its runtime, validated content, fonts/UI assets,
+and transactional local-save adapter in the client. Players must be able to
+start/load without contacting Render, signing in online, obtaining an invitation,
+or installing/administering Phoenix or PostgreSQL. Native packages supervise
+their local runtime and stop it on quit. Browser/PWA delivery additionally needs
+an executable local simulation and offline assets/storage; an install manifest
+and service worker alone cannot deliver the game.
+
+A local hall pauses while closed or suspended, resumes from its durable head
+without charging elapsed wall time, and has no online economy/account imports.
+Provide scoped local save locations, compatible upgrades, full-storage/corrupt-
+save recovery, and validated export/import. Keep online credentials outside
+those exports. Qualify fresh install, network-disabled launch, quit/relaunch,
+crash recovery, and an app/content update on each supported target before
+advertising offline support. Keep the existing Flatpak, `.deb`, and macOS
+artifact requirements for both execution modes. See
+[the execution contract](ARCHITECTURE.md#local-and-multiplayer-execution).
+
 ## Deployment shape and inputs
 
-- Render hosts the canonical Phoenix service and web client, with durable
+- For multiplayer, Render hosts the canonical Phoenix service and web client, with durable
   PostgreSQL. The simulation remains available without connected players.
   Select actual always-running capacity from measurements.
 - Web and Tauri Linux/macOS clients use the same service and protocol. Desktop
@@ -179,7 +204,10 @@ through the game's device-recovery flow.
 The native client saves the main window's size, position, and maximized state
 locally on quit and restores them on launch. If the saved window is entirely
 outside the connected displays, the window uses the system's default placement.
-On Wayland, the compositor controls window placement.
+On Wayland, the compositor controls window placement. UI zoom is saved locally
+when changed and restored on launch. Cmd/Ctrl+0 saves 100% as the preference;
+subsequent +/- changes start from the restored scale. This preference is
+separate from saved window geometry, game accounts, and the hall camera.
 
 The hosted native workflow initially targets Apple silicon on macOS and
 x86-64 on Ubuntu 24.04. The macOS minimum is 13.0. Without a local signing override,

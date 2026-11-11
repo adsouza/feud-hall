@@ -1,12 +1,12 @@
 # Feud Hall Game Design
 
-Version 0.32 · Design baseline for implementation planning
+Version 0.33 · Design baseline for implementation planning
 
-Feud Hall is a persistent multiplayer business simulation about building a restaurant business inside a shared food hall. Players compete twice: first for wholesale ingredients, then for diners. They choose cuisines and menus, set prices, hire and schedule staff, improve equipment, and expand into additional stalls. Staff perform kitchen work automatically. A successful business balances demand, quality, capacity, and costs while rivals make their own decisions in the same economy.
+Feud Hall is a restaurant-management simulation with offline single-player and persistent online multiplayer halls. Players compete twice: first for wholesale ingredients, then for diners. They choose cuisines and menus, set prices, hire and schedule staff, improve equipment, and expand into additional stalls. Staff perform kitchen work automatically. A successful business balances demand, quality, capacity, and costs while rivals make their own decisions in the same economy.
 
-The first release has one public hall, space for 150 physical stalls, twenty-five cuisines, and NPC competitors so that the game is interesting with one human player. Visitors can play as customers or take optional short helper shifts without an owner invitation. The hall continues running while players are away, with a mandatory daily cleaning closure from 03:00 to 05:00 game time (five real minutes). Restaurants close by default when their owners leave; players can explicitly enable unattended operation with automation and safety limits.
+The first release supports local single-player halls and one public multiplayer hall, each with space for 150 physical stalls, twenty-five cuisines, and NPC competitors. Visitors can play as customers or take optional short helper shifts without an owner invitation. The multiplayer hall continues running while players are away; a single-player hall pauses while the game is closed. Both modes have a mandatory daily cleaning closure from 03:00 to 05:00 game time (five real minutes). In multiplayer, restaurants close by default when their owners leave; players can explicitly enable unattended operation with automation and safety limits.
 
-Navigation: [experience and ownership](#2-player-experience-and-design-pillars), [account invitations](#invitation-tree-and-account-access), [restaurant licenses](#restaurant-licenses-and-applications), [time and absence](#5-time-opening-hours-and-owner-absence), [customers and supplies](#7-competing-for-customers), [cuisines and staffing](#9-cuisines-recipes-and-equipment), [finance and progression](#11-finance-and-viable-businesses), [NPCs](#14-npc-competition-and-population-changes), [presentation](#15-interface-3d-presentation-and-audio), [technical design](#16-authoritative-simulation-and-domain-boundaries), [acceptance](#19-observability-balance-and-acceptance), [scope and tuning](#20-first-release-scope-and-implementation-order).
+Navigation: [play modes](#play-modes), [experience and ownership](#2-player-experience-and-design-pillars), [account invitations](#invitation-tree-and-account-access), [restaurant licenses](#restaurant-licenses-and-applications), [time and absence](#5-time-opening-hours-and-owner-absence), [customers and supplies](#7-competing-for-customers), [cuisines and staffing](#9-cuisines-recipes-and-equipment), [finance and progression](#11-finance-and-viable-businesses), [NPCs](#14-npc-competition-and-population-changes), [presentation](#15-interface-3d-presentation-and-audio), [technical design](#16-authoritative-simulation-and-domain-boundaries), [acceptance](#19-observability-balance-and-acceptance), [scope and tuning](#20-first-release-scope-and-implementation-order).
 
 ## 1. Status and design authority
 
@@ -16,15 +16,15 @@ The constraints in the following table are **owner-confirmed**. Other rules in t
 
 | Area | Confirmed requirement |
 | --- | --- |
-| World | An ongoing online hall that continues while players are away. |
+| World | Single-player runs locally without a server and pauses while closed. Multiplayer halls run on a server and continue while players are away. |
 | Player role | Business management; staff cook automatically. |
 | Visitor play | Visitors may play as customers without an owner invitation. Owners may buy from competitors, but cannot purchase from any of their own stalls. |
 | Visitor staff | Unlicensed visitors may take optional short staff shifts; licensed restaurant owners cannot work helper shifts at any stall. Owners opt in, NPC restaurants can offer work automatically, permissions are limited to assigned tasks, and automation takes over when a visitor leaves or becomes idle. Virtual wages can be spent on meals. Start with one helper role. |
 | Restaurant licenses | Completing a staff shift successfully gives a visitor the opportunity to apply for a restaurant license. Applications appear in a queue that seed/admin players can approve. |
 | Capacity | Up to 150 physical stalls per hall, counting every expansion location. This is a stall limit, not a promise of 150 owners with multiple stalls each. |
 | Location tradeoffs | Better stall locations attract more foot traffic and cost more in rent. Players see those tradeoffs before choosing a starting stall or expansion. |
-| Launch topology | One public hall initially; preserve the ability to add private halls later. |
-| Sparse population | NPC restaurants provide competition and at least a few operating restaurants initially, approximately three. Once more than twelve humans play simultaneously, NPC restaurants gradually shut down. |
+| Launch topology | One public multiplayer hall initially, plus separate local single-player saves; private multiplayer halls remain later scope. |
+| Sparse population | NPC restaurants provide competition and at least a few operating restaurants initially, approximately three. In multiplayer, once more than twelve humans play simultaneously, NPC restaurants gradually shut down. |
 | Goal | Open-ended profitable businesses with optional, nonlinear milestones. |
 | Failure | A bankrupt restaurant can be replaced by a brand-new restaurant owned by the same person. Their failed restaurants remain in their history. |
 | Cuisines | The twenty-five starter choices are Mughlai/Punjabi, Tamil, Japanese, Sichuan, Cantonese, Mexican, Levantine, Persian, Thai, Berber, Ethiopian, Peruvian, Turkish, Vietnamese, Javanese, Korean, European, Brazilian, Yoruba, Colombian, Haudenosaunee, Diné (Navajo), Lakota, Coast Salish, and Māori. Mughlai/Punjabi and European are each a single starter category. |
@@ -38,11 +38,11 @@ The constraints in the following table are **owner-confirmed**. Other rules in t
 | UI languages | Ship English and Japanese UI from the first playable release to prove localization works well. |
 | Time | One game day lasts one real hour; frequent active management should be useful. |
 | Opening hours | The entire hall closes every game day from 03:00 to 05:00 for cleaning: two game hours, or five real minutes while the service is available. No customers are allowed in. Players may review results and plan. Owners choose additional closures outside this mandatory window. |
-| Absence | Default to closing. Unattended trading is an explicit option, supported by automation and safety limits. |
+| Absence | Multiplayer defaults to closing; unattended trading is an explicit option with automation and safety limits. Single-player pauses while closed, regardless of unattended settings. |
 | Account invitations | Maintain a durable player-account invitation tree across restaurant failures and restarts. Earn one invitation per 7 cumulative game days of solvent trading. Detailed admission, quota, and expiry rules below are proposed defaults. |
 | Platforms | Web, including responsive smartphone browsers, plus Linux and macOS desktop clients. Windows and native iOS/Android apps are outside the initial target. |
 | Linux distribution | Hosted CI must generate both Flatpak and Debian `.deb` packages for the Linux client as release artifacts. Both formats are required. |
-| Architecture | Svelte frontend; authoritative Elixir/Phoenix server on Render; hosted web client and native clients connect to that server. Use Domain-Driven Design and Clean Architecture where they provide practical value, retain functional core / imperative shell, and borrow AOP and CQRS techniques where appropriate. |
+| Architecture | Shared simulation rules with a local authority for offline single-player and an authoritative Elixir/Phoenix service on Render for multiplayer. Svelte web/native UI connects to the selected mode. Use Domain-Driven Design and Clean Architecture where they provide practical value, retain functional core / imperative shell, and borrow AOP and CQRS techniques where appropriate. |
 | Frontend tooling | Use Bun and Oxlint for the TypeScript frontend, with `bun check` for local and hosted type checking instead of a separate `tsc` CLI step; use Oxlint rather than ESLint. |
 | Verification | Use property-based testing and mutation testing to discover flaws automatically. |
 | Persistence direction | Prefer full gameplay event sourcing from the start, subject to an early capacity, recovery, and compatibility proof. The design adopts this direction; the [ADR](decisions/0001-event-sourcing.md) records the choice and the [architecture document](ARCHITECTURE.md#event-persistence) defines its implementation contracts. |
@@ -52,6 +52,20 @@ The constraints in the following table are **owner-confirmed**. Other rules in t
 ### How to read the remaining sections
 
 Gameplay rules describe the proposed first release unless explicitly marked as later work. Technical sections specify correctness and architectural boundaries without prescribing every module or reproducing sample implementations. A working implementation must satisfy the acceptance criteria; copying code from the source conversation does not establish compliance.
+
+### Play modes
+
+**Single-player requires no game server or online account.** Start or load a local hall with NPC competition and durable local progress. The player must not need to install/manage Phoenix or PostgreSQL, obtain an online invitation, wait for a licensing reviewer, or contact Render to play. Native and browser delivery must provide a local simulation runtime and saves before claiming this mode is available; installing a PWA alone is insufficient. Current clients still use the networked service; offline execution is planned work.
+
+**Single-player pauses while closed.** Resume from the last committed local state and clock, with no elapsed-wall-time catch-up. Closed time adds no rent, wages, spoilage, cooking, cleaning progress, replenishment, demand, awards, or NPC decisions. Unattended-operation settings do not keep a closed local game running. Preserve pending work and deadlines relative to the paused simulation clocks; recovery may reconcile transient controllers at that unchanged clock without repeating payments. Runtime suspension follows the same no-catch-up rule. During play, the usual 24× hall clock, daily cleaning, finite pools, dietary rules, and automatic kitchen apply.
+
+**Multiplayer uses a shared server.** The public hall keeps running when an individual leaves. Its account/invitation tree, visitor licensing review, attendance/absence policies, security clocks, and server recovery rules below remain in force. One human playing against NPCs in this hall is still multiplayer-mode play and still needs the server.
+
+Local saves and public-hall progress are separate. Offline money, stock, unlocks, work proofs, awards, licenses, and ancestry cannot be imported into the public economy. Local save export/import is local recovery, not multiplayer admission. Proposed local onboarding offers an immediate owner role on a local-only principal when the player chooses to run a restaurant; admission alone still grants no lease, inventory, or extra business capital. Optional local visitor play can use NPC dining/work without requiring another human or a remote review queue. These onboarding details remain proposals; server-free play and pausing while closed are confirmed.
+
+Economic rules below apply in both modes; online accounts, invitations/review, remote security, and player absence policies describe multiplayer unless explicitly stated otherwise.
+
+NPCs remain competing businesses in a single-player save; the multiplayer human-population retirement trigger cannot remove them. A local hall is not a private multiplayer hall, and losing a multiplayer connection does not turn that shared hall into an offline save.
 
 ## 2. Player experience and design pillars
 
@@ -176,7 +190,7 @@ Setup is recoverable until the first opening: the original unused starter kit ca
 
 One game day is 24 game hours and lasts 60 real minutes. Therefore one game hour lasts 2.5 real minutes and one game minute lasts 2.5 real seconds. An eight-game-hour shift lasts 20 real minutes.
 
-The hall clock is authoritative and shared by all players. It drives opening hours, meal periods, staff schedules, spoilage, bills, award reviews, and research or refit durations. The UI shows both game time and real time until the next relevant event. The default daily demand curve includes quieter periods and distinct lunch and dinner peaks; players may choose their own opening windows.
+The hall clock is authoritative: shared by all multiplayer participants and owned by the local simulation in single-player. It drives opening hours, meal periods, staff schedules, spoilage, bills, award reviews, and research or refit durations. The UI shows both game time and real time until the next relevant event. The default daily demand curve includes quieter periods and distinct lunch and dinner peaks; players may choose their own opening windows.
 
 Use three explicit clocks; an unqualified duration in content must identify its clock before that content is enabled:
 
@@ -186,7 +200,7 @@ Use three explicit clocks; an unqualified duration in content must identify its 
 | Available-service time | 1× real time while the authoritative service is ready: invitation validity, distress recovery, dormant leases, setup reservations, absence grace, helper shift limits, and visitor transfer-limit windows. Pauses during platform downtime. |
 | Wall/monotonic time | Actual time: security credential expiry, network liveness detection, and operational monitoring. Credentials do not gain validity during an outage. Liveness detections produce explicit domain transitions at the current available-service time. |
 
-References to real-hour/day gameplay deadlines below mean available-service time unless explicitly labeled security wall time. Clients cannot accelerate these clocks through local timestamps or frame rates. Replay restores recorded clock facts; live time resumes only after recovery reconciliation.
+References to real-hour/day gameplay deadlines below mean available-service time unless explicitly labeled security wall time. In multiplayer, clients cannot accelerate these clocks through local timestamps or frame rates. A local single-player authority advances them only while running and never from time spent closed. Replay restores recorded clock facts; live time resumes only after recovery reconciliation.
 
 Proposed calendar boundaries are midnight game time: a calendar game day is
 `[00:00, 24:00)`, and day-indexed demand forecasts and purchasing budgets change
@@ -253,7 +267,7 @@ Initial pricing policies are fixed price or bounded cost-plus using current repl
 
 ### Service interruptions
 
-An individual player's network interruption does not pause the hall. A server or authoritative persistence failure does: uncommitted economic advancement stops for everyone. A prolonged unobserved scheduler gap also enters recovery rather than silently charging catch-up; the proposed threshold is five real seconds, to qualify under load. Recovery resumes from committed clocks without charging wages, spoilage, rent, or missed sales for unavailable time. Player-rights deadlines also pause, so an outage cannot exhaust a recovery window or unused invitation. A historical-report read or audio/rendering failure is local to that feature and does not stop an otherwise healthy economy. The interruption and recovery interval appear in the hall notice feed.
+The following availability and absence policies concern multiplayer. An individual player's network interruption does not pause that shared hall. A server or authoritative persistence failure does: uncommitted economic advancement stops for everyone. A prolonged unobserved scheduler gap also enters recovery rather than silently charging catch-up; the proposed threshold is five real seconds, to qualify under load. Recovery resumes from committed clocks without charging wages, spoilage, rent, or missed sales for unavailable time. Player-rights deadlines also pause, so an outage cannot exhaust a recovery window or unused invitation. A historical-report read or audio/rendering failure is local to that feature and does not stop an otherwise healthy economy. The interruption and recovery interval appear in the hall notice feed.
 
 ## 6. The shared hall and expansion space
 
@@ -1146,7 +1160,10 @@ Support browser-style whole-page zoom in the desktop client: Cmd on macOS or
 Ctrl on Linux with `+`/`=` to enlarge, `-` to shrink, and `0` to reset to 100%.
 These shortcuts scale the complete interface and trigger responsive reflow;
 they preserve drafts and focus and are separate from the 3D hall camera zoom.
-Web browsers retain their standard page-zoom shortcuts.
+Remember the native UI zoom level across restarts, including a saved reset to
+100%. This is a local presentation preference shared by this installation,
+independent of accounts and the 3D camera. Web browsers retain their standard
+page-zoom shortcuts and preference handling.
 
 Smartphone browser support is part of the core web game, not a reduced companion
 dashboard. Ownership/setup, map/list cuisine choice, menus, stock/market,
@@ -1280,6 +1297,10 @@ Use charcoal or deep navy backgrounds, bright cuisine accents, clear white or pa
 
 The hall is a stylized, readable 3D diorama, with cuisine-specific counters, staff activity, visible queues, signage, and award plaques. Clicking a stall or selecting it from a list focuses the camera. Orbit, pan, zoom, hover feedback, and a reset-view control support navigation. Camera movement can be reduced or disabled.
 
+The selected stall exposes **Menu**, **Counter**, and **Staff** controls in a toolbar below the 3D scene, with **Stock** available at owned locations. Do not float action buttons over the rendered stalls. **Focus on the hall** expands the scene and places its action panel alongside it; selecting a stall in this mode opens its counter without switching screens. E opens the selected counter while the scene has keyboard focus. The same actions have ordinary labelled button/list equivalents, and closing the panel restores focus without moving the camera.
+
+Diners can review and confirm a main/drink, follow committed service and its receipt, and accept an eligible dessert in the hall. Helpers can inspect a funded offer, accept/leave a shift, stage supplies, yield, and select ready trays at their assigned counter. Owners use the same menu, purchasing, opening/closing, scheduling and staff controls as Business at the selected owned location, including from behind the counter. Owner self-purchase and helper-work restrictions still apply. These actions are shortcuts to authorized controls, never immediate purchases or simulated physical handovers. One shared draft and pending-command state serves both surfaces. Keep the workbench mounted when switching scene size or losing WebGL so inputs, focus and composition survive; narrow screens can place it below the scene.
+
 The stalls sit inside a four-walled hall with street-facing windows and a ceiling. When the camera is outside, the nearby walls and ceiling cut away to keep the stalls visible. From inside, the windows look onto a tree-lined street with hills beyond.
 
 Stall fronts and side walls show an illustration of a dish from the stall's cuisine. The stripe below the counter carries the localized cuisine name. The artwork and label represent the cuisine across menu changes and trading hours.
@@ -1322,10 +1343,7 @@ If WebGL is unavailable or its context is lost, retain a functional management/l
 
 ## 16. Authoritative simulation and domain boundaries
 
-Use a central authoritative Elixir/Phoenix service on Render with PostgreSQL,
-Svelte/TypeScript management UI using Bun and Oxlint, Three.js presentation, and Tauri clients for
-Linux/macOS. Web and desktop share the same online economy; NPC competition
-makes solo play worthwhile. Rendering and client clocks cannot determine outcomes.
+Use one simulation ruleset behind two execution adapters: a local authority with durable saves for single-player, and an authoritative Elixir/Phoenix service on Render with PostgreSQL for multiplayer. Svelte/TypeScript management UI uses Bun and Oxlint, Three.js supplies presentation, and Tauri packages Linux/macOS clients. Multiplayer web/native clients share the public economy; local saves are separate economies. Rendering and UI clocks never determine economic outcomes in either mode.
 
 The [architecture document](ARCHITECTURE.md) owns implementation contracts for
 [DDD and aggregate ownership](ARCHITECTURE.md#domain-driven-design),
@@ -1511,7 +1529,7 @@ Mutation and property workloads have explicit case/action/shrink/time limits and
 
 ### Required first playable scope
 
-The first playable version includes the entire economic loop, all twenty-five cuisines with three savory recipes, one dessert, and one drink each, an equal-area world-map cuisine picker with highlighted regions and an accessible list, optional same-stall main/drink trays and later dessert ordering, hard dietary compatibility and profile-based demand, ingredient substitutes, automatic kitchen work, staff/shift management, shared supply and diner competition, default closure and optional unattended automation, mandatory daily hall cleaning/planning, NPC competitors, finite hall leases with visible location/traffic/rent tradeoffs, same-hall expansion, awards, optional nonlinear milestones, full gameplay event sourcing with saving/replay/recovery, bankruptcy with a persistent owner history, invitation-tree accounts with recovery, visitor customer play, optional counter-helper shifts with payroll-backed dining credit, successful-shift license applications with seed/admin review, and durable notices. English and Japanese UI, in-context onboarding, and responsive smartphone-to-desktop web layouts are required across the complete first-playable flow. Basic dark, brightly accented 3D presentation must reflect real state. Clean Architecture/DDD boundaries and property/mutation verification develop alongside these features.
+The first playable target includes offline single-player with pause/resume and persistent online multiplayer, alongside the entire economic loop, all twenty-five cuisines with three savory recipes, one dessert, and one drink each, an equal-area world-map cuisine picker with highlighted regions and an accessible list, optional same-stall main/drink trays and later dessert ordering, hard dietary compatibility and profile-based demand, ingredient substitutes, automatic kitchen work, staff/shift management, shared supply and diner competition, default closure and optional unattended automation, mandatory daily hall cleaning/planning, NPC competitors, finite hall leases with visible location/traffic/rent tradeoffs, same-hall expansion, awards, optional nonlinear milestones, full gameplay event sourcing with saving/replay/recovery, bankruptcy with a persistent owner history, invitation-tree accounts with recovery, visitor customer play, optional counter-helper shifts with payroll-backed dining credit, successful-shift license applications with seed/admin review, and durable notices. English and Japanese UI, in-context onboarding, and responsive smartphone-to-desktop web layouts are required across the complete first-playable flow. Basic dark, brightly accented 3D presentation must reflect real state. Clean Architecture/DDD boundaries and property/mutation verification develop alongside these features.
 
 Shipping just a 3D scene or just a collection of GenServers is not a playable version. A smaller initial internal slice is useful, but does not satisfy this scope.
 
@@ -1524,17 +1542,18 @@ Shipping just a 3D scene or just a collection of GenServers is not a playable ve
 | 3. Management game | Invitation tree, owner/guest recovery, dining and helper shifts, payroll wallets, license applications/reviewer queue, starter setup using the three-cuisine backend catalog, menus/prices, market, staff, query offers, notices/reports, closure/cleaning/planning, automation, and English/Japanese text/layout | One human can manage against NPCs; a visitor can work, eat, and apply for a license; handover/payroll, admission/review/recovery races, and suggested-action outcomes are tested. |
 | 4. Progression and population | Add the remaining twenty-two cuisines to complete the twenty-five-cuisine roster, qualify optional main/drink trays and later-dessert flow across it, add dining receipt history in **My visit**, unlocks, expansion, NPCs/retirement, milestones, awards, distress/history | The solo-to-populated loop and fresh-start lifecycle work end to end. Players can review their own completed visits, including earlier visits retained in the event log, and see what they ordered, what was served, and what they were charged. |
 | 5. Hall presentation and visitor play | Stateful 3D stalls/crowds, camera navigation, accessible list alternative, audio, reduced detail, [counter-helper decisions](#milestone-5-counter-helper-interactions), and [diner interactions](#milestone-5-diner-interactions) | Visual state matches the economy. Diners can compare meals and follow pickup and dessert. Helpers can prioritize service and stage supplies with bounded effects. Management and both visitor flows work during rendering failure. |
-| 6. Release qualification | Full 150-stall workload, historical-event compatibility, archive/projection restore, security checks, property corpus, mutation evidence, Render operation, and Linux/macOS packaging, including CI-generated Flatpak and `.deb` artifacts | Recorded recovery/retention measurements, acceptance results, reviewed mutation survivors/selection, and verified English/Japanese web/native flows, font/input behavior, and installation for both Linux package formats and the macOS client. |
+| 6. Multiplayer release qualification | Full 150-stall workload, historical-event compatibility, archive/projection restore, security checks, property corpus, mutation evidence, Render operation, and Linux/macOS packaging, including CI-generated Flatpak and `.deb` artifacts | Recorded recovery/retention measurements, acceptance results, reviewed mutation survivors/selection, and verified English/Japanese web/native flows, font/input behavior, and installation for both Linux package formats and the macOS client. |
+| 7. Offline single-player (planned) | Local authority using the shared rules, transactional local event storage, local-only onboarding, pause/resume, save compatibility/export/recovery, and server-free native/browser runtime delivery | The game starts and resumes with networking unavailable and no separately installed server/database. Closing/suspending advances no simulation time; crash/retry/replay preserves the committed local head; offline data cannot enter a multiplayer hall. |
 
 The initial backend slice used Mexican. The follow-up after Milestone 2 replaces
 that internal catalog with Mughlai/Punjabi, Sichuan, and Levantine and spreads
 the three starter NPCs across them. Mexican remains part of the twenty-five-cuisine
 launch roster. Build the common online web experience first, then package and
-verify native clients against the same server.
+verify native multiplayer clients against the same server. This is the implemented path; the new offline slice extends delivery without retroactively claiming it already exists.
 
 ### Later scope
 
-Private halls; additional public halls; player-to-player trade or gifts; restaurant co-ownership/shared management; detailed cooking minigames and additional visitor staff specialties; tips; staff poaching; loans; standalone drinks, refills, and adding drinks after main acceptance; physical seating or crowd congestion as economic constraints; freeform kitchen construction; complex equipment failures; regional or offsite expansion; native iOS/Android and Windows clients; offline local play; campaigns; monetization; and automatic desktop updates are outside the first release.
+Private multiplayer halls; additional public halls; player-to-player trade or gifts; restaurant co-ownership/shared management; detailed cooking minigames and additional visitor staff specialties; tips; staff poaching; loans; standalone drinks, refills, and adding drinks after main acceptance; physical seating or crowd congestion as economic constraints; freeform kitchen construction; complex equipment failures; regional or offsite expansion; native iOS/Android and Windows clients; campaigns; monetization; and automatic desktop updates are outside the first release.
 
 Private-hall compatibility requires service-level accounts plus hall-scoped memberships, leases, economy, configuration, and authorization now. Account invitations ship in the first release; separate private-hall invitations, access administration, and billing remain later work.
 
@@ -1637,8 +1656,9 @@ Primary design source: the 174-page PDF supplied as `feud-hall-design-discussion
 | Owner restaurant-license decision | Successful staff shifts offer visitors the opportunity to apply for a restaurant license, with applications listed for seed/admin approval. Success criteria, sponsorship, application lifecycle, and race handling above are proposed defaults. |
 | Owner Indigenous cuisine addition, November 10, 2026 | Add Haudenosaunee, Diné (Navajo), Lakota, and Coast Salish to the launch roster. The existing five recipes per cuisine bring the total to 24 cuisines and 125 recipes. Specific menus, ingredients, and map footprints remain proposals. |
 | Owner Māori cuisine addition, November 10, 2026 | Add Māori as the twenty-fifth cuisine, retaining three savory recipes, one dessert and one drink per cuisine (125 recipes total). Dish choices are the game adaptations described in the menu notes. |
+| Owner execution-mode decision, November 11, 2026 | Servers are required only for multiplayer. Single-player runs locally/offline and pauses while closed; no wall-time catch-up is charged. Offline implementation and local storage/runtime qualification remain outstanding. |
 
-The PDF's final “complete specification” responses do not replace the earlier decisions or provide a complete working implementation. Several code blocks are visibly clipped. This document does not adopt their claims of guaranteed shutdown persistence, independently rounded customer allocations, repeated ingredient deductions, permanent prestige benefits, or superseded local sidecars. It supplies explicit contracts for those areas instead.
+The PDF's final “complete specification” responses do not replace the earlier decisions or provide a complete working implementation. Several code blocks are visibly clipped. This document does not adopt their claims of guaranteed shutdown persistence, independently rounded customer allocations, repeated ingredient deductions, permanent prestige benefits, or unqualified local-runtime claims. It supplies explicit contracts for those areas instead.
 
 Official technical references were checked on November 7, 2026: [Phoenix Channels](https://hexdocs.pm/phoenix/channels.html), [Elixir GenServer](https://hexdocs.pm/elixir/GenServer.html), [Render WebSockets](https://render.com/docs/websocket), and [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/). Exact dependency versions and deployment settings should be selected and verified during implementation.
 

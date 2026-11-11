@@ -4,6 +4,20 @@ import products from "../../server/priv/content/launch_products.json";
 export type Locale = "en" | "ja";
 
 const en = {
+  hallMenuAction: "Menu",
+  hallCounterAction: "Counter",
+  hallStaffAction: "Staff",
+  hallSupplyAction: "Stock",
+  hallActions: "Stall actions",
+  hallStation: "Stall station",
+  closeHallActions: "Close stall actions",
+  hallActionHint: "Manage this stall or play here without leaving the hall.",
+  enterImmersiveHall: "Focus on the hall",
+  leaveImmersiveHall: "Restore hall layout",
+  hallInteractHelp:
+    "Select a stall, then use the controls below the scene. Press E while the 3D view is focused to use the selected counter.",
+  shiftElsewhere: "Your current shift is at {stall}.",
+  goToShift: "Go to my counter",
   ownStallDining: "You cannot buy food or drinks from your own restaurant.",
   noOtherStallsServing: "No other stalls are currently taking orders.",
   ownerCannotWork: "Restaurant owners cannot take helper shifts.",
@@ -371,6 +385,20 @@ const en = {
 export type Key = keyof typeof en;
 
 const ja: Record<Key, string> = {
+  hallMenuAction: "メニュー",
+  hallCounterAction: "カウンター",
+  hallStaffAction: "スタッフ",
+  hallSupplyAction: "在庫",
+  hallActions: "店舗での操作",
+  hallStation: "操作する場所",
+  closeHallActions: "店舗での操作を閉じる",
+  hallActionHint: "ホールを離れずに、この店舗を管理したり遊んだりできます。",
+  enterImmersiveHall: "ホールを広く表示",
+  leaveImmersiveHall: "通常のホール表示に戻す",
+  hallInteractHelp:
+    "店舗を選び、3D表示の下にある操作ボタンを使ってください。3D表示にフォーカスがあるときにEキーを押すと、選択したカウンターを操作できます。",
+  shiftElsewhere: "現在のシフトは{stall}です。",
+  goToShift: "勤務中のカウンターへ",
   ownStallDining: "自分のレストランでは料理や飲み物を購入できません。",
   noOtherStallsServing: "現在、他に注文を受け付けている店舗はありません。",
   ownerCannotWork: "レストランのオーナーは手伝いのシフトに参加できません。",

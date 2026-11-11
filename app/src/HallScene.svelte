@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import type { Stall } from "./api";
   import type { Key } from "./i18n";
-  import type { CameraState, createHallScene } from "./hall-scene";
+  import type { CameraState, HallTarget, createHallScene } from "./hall-scene";
   import { createHallAudio } from "./hall-audio";
 
   let {
@@ -16,6 +16,9 @@
     reopeningTime,
     select,
     inspect,
+    interact,
+    immersive,
+    toggleImmersive,
     saveCamera,
     onUnavailable,
   }: {
@@ -29,11 +32,20 @@
     reopeningTime: (stall: Stall) => string;
     select: (id: string) => void;
     inspect: (id: string) => void;
+    interact: (id: string, target: HallTarget) => void;
+    immersive: boolean;
+    toggleImmersive: () => void;
     saveCamera: (state: CameraState) => void;
     onUnavailable: () => void;
   } = $props();
 
   let host: HTMLDivElement;
+  const targetLabels: Record<HallTarget, Key> = {
+    menu: "hallMenuAction",
+    counter: "hallCounterAction",
+    staff: "hallStaffAction",
+    supply: "hallSupplyAction",
+  };
   let hall = $state.raw<ReturnType<typeof createHallScene> | null>(null);
   let hovered = $state<string | null>(null);
   let reduced = $state(false);
@@ -67,6 +79,7 @@
             host,
             {
               select: (id) => inspect(id),
+              interact,
               hover: (id) => (hovered = id),
               fail: onUnavailable,
               inside: (id) => (inside = id),
@@ -129,7 +142,7 @@
   }
 </script>
 
-<div class="scene">
+<div class="scene" class:immersive>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (The 3D view handles keyboard navigation while focused.) -->
   <div
     bind:this={host}
@@ -148,6 +161,21 @@
     </p>
   {/if}
 </div>
+<div class="controls" role="group" aria-label={t("hallActions")}>
+  <button aria-pressed={immersive} onclick={toggleImmersive}
+    >{t(immersive ? "leaveImmersiveHall" : "enterImmersiveHall")}</button
+  >
+  {#if selected}
+    {#each ["menu", "counter", "staff", ...(ownedStalls.some((stall) => stall.stall_id === selected) ? ["supply"] : [])] as target}
+      <button
+        disabled={!hall}
+        onclick={() => interact(selected, target as HallTarget)}
+        >{t(targetLabels[target as HallTarget])}</button
+      >
+    {/each}
+  {/if}
+</div>
+<p class="keyboard-help">{t("hallInteractHelp")}</p>
 {#if ownerStall}
   <div class="controls" role="group" aria-label={t("ownerView")}>
     {#if ownedStalls.length > 1}
@@ -288,6 +316,10 @@
   }
   .canvas :global(canvas.hovering-stall) {
     cursor: pointer;
+  }
+  .scene.immersive .canvas {
+    height: min(78svh, 60rem);
+    min-height: 22rem;
   }
   .scene-label {
     position: absolute;

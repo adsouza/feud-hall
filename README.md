@@ -2,9 +2,12 @@
 
 ![Feud Hall — six colorful restaurant stalls in a shared food hall](assets/branding/feud-hall-social.svg)
 
-A persistent multiplayer business simulation about running restaurants in a food hall.
+A restaurant-management simulation with offline single-player and persistent online multiplayer halls.
 
-The playable web game runs on Phoenix and PostgreSQL with a Svelte client.
+The currently implemented game is networked: Phoenix and PostgreSQL with a
+Svelte client. Offline single-player, with local saves and time paused while
+closed, is now a design requirement and is not implemented yet. The existing
+desktop app still connects to a game server.
 Manage a restaurant, dine in the live 3D hall, or work a counter shift.
 The hall also has an HTML stall list with the same dining actions.
 [Server capacity report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md).

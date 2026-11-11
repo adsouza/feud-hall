@@ -6,7 +6,8 @@ Decision date: November 7, 2026. Documentation reorganized November 8, 2026.
 
 ## Context
 
-Feud Hall is a persistent shared economy with scarce resources, human and NPC
+Feud Hall has local single-player economies and persistent shared multiplayer
+economies with scarce resources, human and NPC
 operators, paid visitor work, account admission, explicit clocks, and permanent
 business histories. Lost replies, restarts, and concurrent actions must preserve
 fair outcomes without repeating purchases, wages, invitations, or grants.
@@ -19,8 +20,11 @@ migration that cannot reconstruct missing historical decisions.
 ## Decision
 
 Use full event sourcing for durable gameplay and account-entitlement state from
-the first economic-core milestone. Immutable domain events in PostgreSQL are the
-authority. Current state, ledgers, reports, and snapshots are derived; corrections
+the first economic-core milestone. Immutable domain events are the authority:
+PostgreSQL for multiplayer, and a transactional local event-store adapter for
+single-player. The owner confirmed server-free single-player and pause while
+closed on November 11, 2026; local runtime/storage qualification remains pending.
+Current state, ledgers, reports, and snapshots are derived; corrections
 append explicit facts rather than silently rewriting accepted history.
 
 Keep a modular monolith and shared atomic economic transactions. Selecting event
@@ -65,7 +69,9 @@ The internal slice has PostgreSQL event storage, crash recovery, and replay
 coverage. Project C records append, storage, and recovery measurements for the
 150-stall internal workload. [Project C capacity report](../superpowers/reports/2026-11-10-milestone-2c-capacity.md).
 Release qualification covers the 450-session workload, recovery on the selected
-server, and retained-history cost.
+server, and retained-history cost. Offline qualification additionally covers
+transactional local durability, compatible save/replay, single-writer ownership,
+and resume at unchanged gameplay clocks after closed time.
 [Architecture qualification plan](../ARCHITECTURE.md#early-qualification-and-ongoing-tests).
 
 If qualification fails, first measure and adjust event granularity, batching,

@@ -29,7 +29,10 @@ fn main() {
                 .title("Feud Hall")
                 .inner_size(1280.0, 850.0)
                 .min_inner_size(360.0, 500.0)
-                .zoom_hotkeys_enabled(true)
+                .zoom_hotkeys_enabled(false)
+                .initialization_script(
+                    include_str!("zoom.js").replace("__FEUD_OS__", std::env::consts::OS),
+                )
                 .on_navigation(|url| {
                     url.scheme() == "tauri"
                         && url.host_str() == Some("localhost")

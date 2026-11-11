@@ -6,7 +6,7 @@
   import CuisineArtwork from "./CuisineArtwork.svelte";
   import DinerCompare from "./DinerCompare.svelte";
   import HallScene from "./HallScene.svelte";
-  import type { CameraState } from "./hall-scene";
+  import type { CameraState, HallTarget } from "./hall-scene";
   import {
     ApiError,
     cash,
@@ -175,6 +175,60 @@
   let submitting = $state(false);
   let hallMode = $state<"3d" | "list">("3d");
   let hallSelection = $state("");
+  let immersiveHall = $state(false);
+  let hallInteraction = $state<{ stall: string; target: HallTarget } | null>(
+    null,
+  );
+  let hallWorkbench = $state<HTMLElement>();
+  let hallActionTrigger: HTMLElement | null = null;
+  const targetLabels: Record<HallTarget, Key> = {
+    menu: "hallMenuAction",
+    counter: "hallCounterAction",
+    staff: "hallStaffAction",
+    supply: "hallSupplyAction",
+  };
+
+  function openHallInteraction(id: string, target: HallTarget) {
+    hallActionTrigger =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    hallSelection = id;
+    hallInteraction = { stall: id, target };
+    const owned = restaurant?.stalls.find((stall) => stall.id === id);
+    if (owned) ownerStallId = id;
+    if (stallId !== id) {
+      stallId = id;
+      main = "";
+      drink = "";
+      clearQuote();
+    }
+    void tick().then(() => {
+      hallWorkbench?.focus({ preventScroll: true });
+      if (!immersiveHall || window.innerWidth < 850)
+        hallWorkbench?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function closeHallInteraction() {
+    hallInteraction = null;
+    void tick().then(() => {
+      if (
+        hallActionTrigger?.isConnected &&
+        hallActionTrigger.getClientRects().length
+      )
+        hallActionTrigger.focus({ preventScroll: true });
+      else
+        document
+          .querySelector<HTMLElement>("[data-hall-canvas]")
+          ?.focus({ preventScroll: true });
+      if (
+        window.innerWidth < 850 &&
+        document.activeElement instanceof HTMLElement
+      )
+        document.activeElement.scrollIntoView({ block: "nearest" });
+    });
+  }
   let sceneError = $state(false);
   let camera = $state.raw<CameraState>();
   let comparison = $state<DiningOptions | null>(null);
@@ -235,7 +289,12 @@
   let receiptScope = $derived(
     (page === "visit" || (page === "hall" && view?.hall.visitor_play)) &&
       profile
-      ? JSON.stringify([profile.account.id, profile.visit?.id])
+      ? JSON.stringify([
+          page,
+          profile.account.id,
+          profile.visit?.id,
+          profile.balance,
+        ])
       : "",
   );
   let hallStall = $derived(
@@ -383,7 +442,11 @@
     view?.hall.dietary_profiles ?? legacyDietaryProfiles,
   );
   let checkoutScope = $derived(
-    page === "visit" &&
+    (page === "visit" ||
+      (page === "hall" &&
+        hallInteraction?.stall === hallSelection &&
+        hallInteraction.target !== "staff" &&
+        hallInteraction.target !== "supply")) &&
       !profile?.visit &&
       orderLocation &&
       dietaryProfiles.includes(diet)
@@ -475,6 +538,19 @@
     const compositionEnd = () => {
       composing = false;
     };
+    const closeWorkbenchOnEscape = (event: KeyboardEvent) => {
+      if (
+        event.key === "Escape" &&
+        !event.isComposing &&
+        !event.defaultPrevented &&
+        event.target instanceof Node &&
+        hallWorkbench?.contains(event.target)
+      ) {
+        event.preventDefault();
+        closeHallInteraction();
+      }
+    };
+    window.addEventListener("keydown", closeWorkbenchOnEscape);
     window.addEventListener("compositionstart", compositionStart, true);
     window.addEventListener("compositionend", compositionEnd, true);
     return () => {
@@ -485,6 +561,7 @@
       window.clearInterval(presence);
       document.removeEventListener("visibilitychange", resume);
       window.removeEventListener("online", resume);
+      window.removeEventListener("keydown", closeWorkbenchOnEscape);
       window.removeEventListener("compositionstart", compositionStart, true);
       window.removeEventListener("compositionend", compositionEnd, true);
     };
@@ -543,7 +620,7 @@
   $effect(() => {
     if (
       !view?.hall.visitor_play ||
-      page !== "visit" ||
+      !(page === "visit" || (page === "hall" && hallInteraction)) ||
       !connected ||
       !dessertRequest
     )
@@ -795,6 +872,835 @@
   }
 </script>
 
+{#snippet diningControls(locationPicker = true)}
+  {#if view}
+    {#if !profile}<p>
+        {t("guestHint")}
+        <button
+          onclick={() => {
+            navigate("profile");
+          }}>{t("startGuest")}</button
+        >
+      </p>
+    {:else}
+      <p>
+        {t("balance")} <strong>{cash(profile.balance)}</strong>
+        {#if !profile.allowance_claimed}
+          <button {disabled} onclick={() => submit("request_allowance")}
+            >{t("allowance")}</button
+          >
+        {/if}
+      </p>
+      {#if profile.visit}
+        {@render visitProgress()}
+        {#if profile.visit.dessert === "offered"}
+          {#if view.hall.visitor_play && profile.visit.dessert_deadline != null}
+            <p>
+              {t("dessertOfferLeft")}
+              {serviceDuration(profile.visit.dessert_deadline - view.hall.now)}
+            </p>
+          {/if}
+          {#if dessertPreviewUnavailable}
+            <p role="status">{t("dessertPreviewUnavailable")}</p>
+          {/if}
+          {#if visitStall && ownStall(visitStall)}
+            <p>{t("ownStallDining")}</p>
+          {:else}
+            <button
+              disabled={disabled || !dessertRequest}
+              onclick={() => showQuote(dessertRequest)}
+              >{t("dessertQuote")}</button
+            >
+          {/if}
+          <button
+            {disabled}
+            onclick={() =>
+              submit("decline_dessert", { visit_id: profile?.visit?.id })}
+            >{t("skip")}</button
+          >
+        {:else if view.hall.visitor_play && profile.visit.can_cancel_dessert}
+          <button
+            {disabled}
+            onclick={() =>
+              submit("cancel_dessert", { visit_id: profile?.visit?.id })}
+            >{t("cancelDessert")}</button
+          >
+        {:else if view.hall.visitor_play ? profile.visit.can_cancel : profile.visit.tray_status === "accepted"}
+          <button
+            {disabled}
+            onclick={() =>
+              submit("cancel_tray", {
+                tray_id: profile?.visit?.id.replace(/^V:/, "T:"),
+              })}>{t("cancel")}</button
+          >
+        {/if}
+      {/if}
+    {/if}
+    {#if !profile?.visit}
+      {#if view.hall.access === "cleaning"}
+        <p role="status">{t("cleaning")}</p>
+      {:else if orderingStalls.length === 0}
+        <p role="status">
+          {t(servingStalls.length ? "noOtherStallsServing" : "noStallsServing")}
+        </p>
+      {:else}
+        {#if selectedStall && ownStall(selectedStall)}
+          <p role="status">{t("ownStallDining")}</p>
+        {:else if selectedStall && !orderLocation}
+          <p role="status">{t("selectedStallClosed")}</p>
+        {/if}
+        {#if locationPicker}
+          <label
+            >{t("location")}<select
+              value={orderLocation}
+              onchange={(event) => inspect(event.currentTarget.value)}
+              ><option value="">—</option
+              >{#each orderingStalls as stall (stall.stall_id)}<option
+                  value={stall.stall_id}>{stall.name}</option
+                >{/each}</select
+            ></label
+          >
+        {/if}
+      {/if}
+      {#if selectedStall && orderLocation}
+        {#if checkoutMenu && availableMains.length === 0}
+          <p role="status">{t("noMealsAvailable")}</p>
+        {/if}
+        <form
+          onsubmit={(e) => {
+            e.preventDefault();
+            void showQuote(trayRequest);
+          }}
+        >
+          <label
+            >{t("main")}<select
+              bind:value={main}
+              disabled={availableMains.length === 0}
+              required
+              onchange={clearQuote}
+              ><option value="">—</option
+              >{#each availableMains as id (id)}<option value={id}
+                  >{title(id)} · {cash(selectedStall.menu[id])}</option
+                >{/each}</select
+            ></label
+          >
+          <label
+            >{t("drink")}<select
+              bind:value={drink}
+              disabled={availableDrinks.length === 0}
+              onchange={clearQuote}
+              ><option value="">{t("noDrink")}</option
+              >{#each availableDrinks as id (id)}<option value={id}
+                  >{title(id)} · {cash(selectedStall.menu[id])}</option
+                >{/each}</select
+            ></label
+          >
+          <label
+            >{t("diet")}<select bind:value={diet} required onchange={clearQuote}
+              ><option value="" disabled>—</option
+              >{#each dietaryProfiles as id (id)}<option value={id}
+                  >{title(id)}</option
+                >{/each}</select
+            ></label
+          >
+          <button disabled={disabled || !trayRequest}>{t("quote")}</button>
+        </form>
+      {:else if !selectedStall && orderingStalls.length > 0}<p>
+          {t("chooseStall")}
+        </p>{/if}
+    {/if}
+    {#if currentQuote}
+      <section class="quote">
+        <p>
+          <strong>{cash(currentQuote.total)}</strong> ·
+          {#if quoteRequest?.kind === "dessert"}
+            {t("estimatedWait")}
+            {serviceDuration(currentQuote.earliest_completion - view.hall.now)}
+          {:else}
+            {clock(currentQuote.earliest_completion)}
+          {/if}
+        </p>
+        <button
+          disabled={disabled || !profile}
+          onclick={() => {
+            if (!profile || !currentQuote || !quoteRequest) return;
+            const { kind, fields } = quoteRequest;
+            const payload = { ...fields, confirmed: currentQuote.terms };
+            if (kind === "dessert") void submit("accept_dessert", payload);
+            else
+              void submit("admit_visit", {
+                ...payload,
+                drink: fields.drink ?? null,
+              });
+          }}
+          >{t(
+            quoteRequest?.kind === "dessert" ? "acceptDessert" : "acceptOrder",
+          )}</button
+        >
+      </section>
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet helperControls(atStall = "")}
+  {#if view}
+    {#if profile?.account["owner?"]}<p>{t("ownerCannotWork")}</p>
+    {:else if !profile}<button
+        onclick={() => {
+          navigate("profile");
+        }}>{t("startGuest")}</button
+      >
+    {:else if selectedShift}
+      <section>
+        <h2>{t("support")} · {selectedShift.stall_id}</h2>
+        <p>
+          {t("tasks")}
+          {selectedShift.tasks} ·
+          <span role="timer"
+            >{t("shiftTimeLeft").replace(
+              "{duration}",
+              serviceDuration(selectedShift.expires_at - view.hall.now),
+            )}</span
+          >
+        </p>
+        {#if view.hall.visitor_play}
+          {#if selectedShift.approaching?.length}
+            <details open>
+              <summary>{t("approachingTrays")}</summary>
+              <ul>
+                {#each selectedShift.approaching as item (item.id)}
+                  <li>
+                    {item.recipes.map(title).join(" + ")} ·
+                    {t("estimatedReadyIn")}
+                    {serviceDuration(
+                      (item.ready_at ?? view.hall.now) - view.hall.now,
+                    )}
+                  </li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
+          {#if selectedShift.prepared}<p>{t("preparedCounter")}</p>{/if}
+          {#if selectedShift.staged}<p>
+              {t("stagedTasks")}
+              {selectedShift.staged}
+            </p>{/if}
+          {#if selectedShift.tasks && !selectedShift.handover}<p>
+              {t("lastService")}
+            </p>{/if}
+        {/if}
+        {#if selectedShift.handover}
+          <p role="status">
+            {t("handoverInProgress").replace(
+              "{items}",
+              selectedShift.handover.recipes.map(title).join(" + "),
+            )}
+          </p>
+          <p role="timer">
+            {t("shiftTimeLeft").replace(
+              "{duration}",
+              serviceDuration(selectedShift.handover.done_at - view.hall.now),
+            )}
+          </p>
+        {:else if selectedHandover}
+          <p role="status">
+            {t("handoverSelected").replace(
+              "{items}",
+              selectedHandover.recipes.map(title).join(" + "),
+            )}
+          </p>
+        {:else if selectedShift.selection}
+          <h3>{t("selectTask")}</h3>
+          <p role="timer">
+            {t("shiftTimeLeft").replace(
+              "{duration}",
+              serviceDuration(selectedShift.selection.deadline - view.hall.now),
+            )}
+          </p>
+          <ul class="counter-options">
+            {#each selectedShift.selection.items as item (item.id)}
+              <li>
+                <button
+                  {disabled}
+                  onclick={() =>
+                    submit("select_handover", {
+                      shift_id: selectedShift?.shift_id,
+                      selection_id: selectedShift?.selection?.id,
+                      item_id: item.id,
+                      recipes: item.recipes,
+                    })}>{item.recipes.map(title).join(" + ")}</button
+                >
+                {#if view.hall.visitor_play && item.number != null}
+                  <small>
+                    {t("trayNumber").replace("{number}", String(item.number))} ·
+                    {t("waited")}
+                    {serviceDuration(
+                      view.hall.now - (item.queued_at ?? view.hall.now),
+                    )} ·
+                    {t("serveBy")}
+                    {serviceDuration(
+                      (item.serve_by ?? view.hall.now) - view.hall.now,
+                    )}
+                    {#if selectedShift.selection.auto_item === item.id}
+                      · {t("fifoChoice")}{/if}
+                  </small>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {:else if selectedShift.staging}
+          <p role="status">
+            {t("stagingInProgress")} · {serviceDuration(
+              selectedShift.staging.done_at - view.hall.now,
+            )}
+          </p>
+          {#if selectedShift.waiting?.length}
+            <ul>
+              {#each selectedShift.waiting as item (item.id)}
+                <li>
+                  {item.recipes.map(title).join(" + ")} · {t("serveBy")}
+                  {serviceDuration(
+                    (item.serve_by ?? view.hall.now) - view.hall.now,
+                  )}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          <button
+            {disabled}
+            onclick={() =>
+              submit("yield_counter_staging", {
+                shift_id: selectedShift?.shift_id,
+                task_id: selectedShift?.staging?.id,
+              })}>{t("yieldToService")}</button
+          >
+        {:else}
+          <p>{t("standby")}</p>
+          {#if selectedShift.staging_offer}
+            <button
+              {disabled}
+              onclick={() =>
+                submit("start_counter_staging", {
+                  shift_id: selectedShift?.shift_id,
+                })}
+            >
+              {t("stagingOffer")}
+            </button>
+            <p>
+              {t("stageWorkTime")}
+              {serviceDuration(selectedShift.staging_offer - view.hall.now)} ·
+              {t("setupSaving")}
+            </p>
+          {/if}
+        {/if}
+        <button
+          {disabled}
+          onclick={() =>
+            submit("leave_helper_shift", { shift_id: selectedShift?.shift_id })}
+          >{t("leaveShift")}</button
+        >
+      </section>
+    {:else}
+      <div class="cards">
+        {#each profile.work.offers.filter((offer) => !atStall || offer.stall_id === atStall) as offer (offer.stall_id)}
+          <article>
+            <h2>{offer.stall_id} · {t("support")}</h2>
+            <p>
+              {t("wage")}
+              {cash(offer.rate)} · {t("pay")}
+              {cash(offer.estimated_pay)} · {t("shiftLength").replace(
+                "{duration}",
+                serviceDuration(offer.expires_at - offer.quoted_at),
+              )}
+            </p>
+
+            <button
+              {disabled}
+              onclick={() =>
+                submit("accept_helper_shift", {
+                  stall_id: offer.stall_id,
+                  rate: offer.rate,
+                  expires_at: offer.expires_at,
+                  quoted_at: offer.quoted_at,
+                })}>{t("acceptShift")}</button
+            >
+          </article>
+        {:else}<p>{t("noShifts")}</p>{/each}
+      </div>
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet managementPanel(
+  section: "menu" | "supply" | "staff",
+  embedded = false,
+)}
+  {#if view && restaurant}
+    {#if section === "menu"}
+      <section
+        data-business-section="menu"
+        class:phone-section-hidden={!embedded &&
+          visibleBusinessSection !== "menu"}
+      >
+        <h2>{t("viewMenu")}</h2>
+        <p>
+          {t("availableCash")}
+          <strong>{cash(restaurant.available_cash)}</strong>
+        </p>
+        <ul>
+          {#each Object.values(view.hall.recipes).filter((r) => r.cuisine === (ownerStall?.cuisine ?? restaurant?.cuisine)) as recipe (recipe.id)}
+            {@const offer = ownerStall?.unlock_offers?.[recipe.id]}
+            <li>
+              {title(recipe.id)}
+              {#if ownerMenu[recipe.id]}
+                <strong>{cash(ownerMenu[recipe.id])}</strong>
+                <button
+                  {disabled}
+                  onclick={() =>
+                    submit("remove_menu_item", {
+                      restaurant_id: restaurant?.id,
+                      stall_id: ownerStall?.id,
+                      recipe_id: recipe.id,
+                    })}>{t("remove")}</button
+                >
+              {/if}
+              {#if offer}
+                <button
+                  {disabled}
+                  onclick={() =>
+                    submit("unlock_recipe", {
+                      restaurant_id: restaurant?.id,
+                      stall_id: ownerStall?.id,
+                      recipe_id: recipe.id,
+                      max_cost: offer.cost,
+                    })}
+                >
+                  {t(offer.known ? "installEquipment" : "learn")} · {cash(
+                    offer.cost,
+                  )}
+                </button>
+                {#if offer.technique && offer.equipment !== "0"}
+                  <small
+                    >{t("equipmentCost")}
+                    {title(offer.technique)} · {cash(offer.equipment)}</small
+                  >
+                {/if}
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        <form
+          onsubmit={(e) => {
+            e.preventDefault();
+            void submit("set_menu_price", {
+              restaurant_id: restaurant?.id,
+              stall_id: ownerStall?.id,
+              recipe_id: recipeId,
+              price,
+            });
+          }}
+        >
+          <label
+            >{t("viewMenu")}<select bind:value={recipeId} required
+              ><option value="">—</option
+              >{#each restaurant.unlocked as id}<option value={id}
+                  >{title(id)}</option
+                >{/each}</select
+            ></label
+          >
+          <label
+            >{t("price")}<input
+              required
+              pattern="[1-9][0-9]*"
+              inputmode="numeric"
+              bind:value={price}
+            /></label
+          >
+          <button {disabled}>{t("setPrice")}</button>
+        </form>
+      </section>
+    {/if}
+    {#if section === "supply"}
+      <section
+        data-business-section="supply"
+        class:phone-section-hidden={!embedded &&
+          visibleBusinessSection !== "supply"}
+      >
+        <h2>{t("supply")}</h2>
+        {#if starterStock && starterStock.items.length > 0}
+          <details>
+            <summary>{t("starterStock")} · {cash(starterStock.budget)}</summary>
+            <ul>
+              {#each starterStock.items as item (item.product)}<li>
+                  {title(item.product)} · {item.qty}
+                </li>{/each}
+            </ul>
+            <button
+              {disabled}
+              onclick={() =>
+                restaurant &&
+                submit("request_starter_stock", {
+                  restaurant_id: restaurant.id,
+                  stall_id: ownerStall?.id,
+                  budget: starterStock.budget,
+                })}>{t("buy")}</button
+            >
+          </details>
+        {/if}
+
+        <form
+          onsubmit={(e) => {
+            e.preventDefault();
+            void submit("submit_purchase_request", {
+              restaurant_id: restaurant?.id,
+              product,
+              qty: quantity,
+              max_price_per_kunit: maxPrice,
+            });
+          }}
+        >
+          <label
+            >{t("product")}<select bind:value={product} required
+              ><option value="">—</option
+              >{#each Object.entries(restaurant.market) as [id, item] (id)}<option
+                  value={id}
+                  >{title(id)} · {cash(item.price)} · {item.stock}</option
+                >{/each}</select
+            ></label
+          >
+          <label
+            >{t("quantity")}<input
+              type="number"
+              min="1"
+              max="1000000"
+              required
+              bind:value={quantity}
+            /></label
+          >
+          <label
+            >{t("maxPrice")}<input
+              inputmode="numeric"
+              required
+              pattern="[1-9][0-9]*"
+              bind:value={maxPrice}
+            /></label
+          >
+          <button {disabled}>{t("buy")}</button>
+        </form>
+        <details>
+          <summary>{t("automation")}</summary>
+          <form
+            onsubmit={(event) => {
+              event.preventDefault();
+              void submit("set_restock_policy", {
+                restaurant_id: restaurant?.id,
+                product,
+                target: targetStock,
+                max_price_per_kunit: maxPrice,
+                daily_budget: restockBudget,
+              });
+            }}
+          >
+            <p>{t("restockHint")}</p>
+            <label
+              >{t("targetStock")}<input
+                type="number"
+                min="0"
+                max="1000000"
+                bind:value={targetStock}
+                required
+              /></label
+            >
+            <label
+              >{t("dailyBudget")}<input
+                inputmode="numeric"
+                bind:value={restockBudget}
+                required
+              /></label
+            >
+            <button disabled={disabled || !product || !maxPrice}
+              >{t("restockPolicy")}</button
+            >
+          </form>
+          <form
+            onsubmit={(event) => {
+              event.preventDefault();
+              void submit("set_pricing_policy", {
+                restaurant_id: restaurant?.id,
+                recipe_id: recipeId,
+                min_price: minimumPrice,
+                max_price: maximumPrice,
+                markup_permille: markup,
+                interval_hours: 1,
+              });
+            }}
+          >
+            <p>{t("pricingHint")}</p>
+            <label
+              >{t("minPrice")}<input
+                inputmode="numeric"
+                bind:value={minimumPrice}
+                required
+              /></label
+            >
+            <label
+              >{t("maxMenuPrice")}<input
+                inputmode="numeric"
+                bind:value={maximumPrice}
+                required
+              /></label
+            >
+            <label
+              >{t("markup")}<input
+                type="number"
+                min="0"
+                max="10000"
+                bind:value={markup}
+                required
+              /></label
+            >
+            <button disabled={disabled || !recipeId}
+              >{t("pricingPolicy")}</button
+            >
+          </form>
+        </details>
+        <h3>{t("stock")}</h3>
+        <ul>
+          {#each Object.entries(restaurant.inventory) as [id, qty] (id)}<li>
+              {title(id)} · {qty}
+            </li>{/each}
+        </ul>
+      </section>
+    {/if}
+    {#if section === "staff" && ownerStall}
+      <section
+        data-business-section="staff"
+        class:phone-section-hidden={!embedded &&
+          visibleBusinessSection !== "staff"}
+      >
+        <h2>{t("staff")}</h2>
+        <p>
+          {ownerStall.id} · {ownerStall.lease.start_hour}:00–{ownerStall.lease
+            .end_hour}:00
+        </p>
+        <div class="actions">
+          <button
+            {disabled}
+            onclick={() =>
+              ownerStall &&
+              (ownerStall.mode === "open"
+                ? submit("close_stall", { stall_id: ownerStall.id })
+                : openStall(ownerStall.id))}
+            >{t(
+              ownerStall.mode === "open"
+                ? "stopTrading"
+                : view.hall.access === "cleaning"
+                  ? "queueOpening"
+                  : "startTrading",
+            )}</button
+          >
+          <button
+            {disabled}
+            onclick={() =>
+              ownerStall &&
+              submit("set_helper_offers", {
+                stall_id: ownerStall.id,
+                enabled: !ownerStall.lease.helper_offers,
+              })}
+            >{t(
+              ownerStall.lease.helper_offers ? "helperOff" : "helperOn",
+            )}</button
+          >
+        </div>
+        <form
+          onsubmit={(e) => {
+            e.preventDefault();
+            void submit("set_staff_schedule", {
+              stall_id: ownerStall?.id,
+              start_hour: startHour,
+              end_hour: endHour,
+            });
+          }}
+        >
+          <label
+            >{t("from")}<input
+              type="number"
+              min="0"
+              max="23"
+              required
+              bind:value={startHour}
+            /></label
+          >
+          <label
+            >{t("until")}<input
+              type="number"
+              min="0"
+              max="24"
+              required
+              bind:value={endHour}
+            /></label
+          >
+          <button {disabled}>{t("schedule")}</button>
+        </form>
+        <details>
+          <summary>{t("roster")}</summary>
+          <ul>
+            {#each Object.values(ownerStall.lease.workers) as worker (worker.id)}
+              <li>
+                {title(worker.role)} · {worker.start_hour}:00–{worker.end_hour}:00
+                {#if worker.break_until}
+                  · {t("protectiveBreak")}{:else if worker.tired}
+                  · {t("tired")}{/if}
+                <button
+                  {disabled}
+                  onclick={() =>
+                    ownerStall &&
+                    submit("dismiss_staff", {
+                      stall_id: ownerStall.id,
+                      worker_id: worker.id,
+                    })}>{t("dismiss")}</button
+                >
+                <button
+                  {disabled}
+                  onclick={() =>
+                    ownerStall &&
+                    submit("set_worker_schedule", {
+                      stall_id: ownerStall.id,
+                      worker_id: worker.id,
+                      start_hour: startHour,
+                      end_hour: endHour,
+                    })}>{t("schedule")}</button
+                >
+              </li>
+            {/each}
+          </ul>
+          <form
+            onsubmit={(event) => {
+              event.preventDefault();
+              if (ownerStall)
+                void submit("hire_staff", {
+                  stall_id: ownerStall.id,
+                  role: workerRole,
+                  start_hour: startHour,
+                  end_hour: endHour,
+                });
+            }}
+          >
+            <label
+              >{t("role")}<select bind:value={workerRole}
+                >{#each ["prep_cook", "finish_cook", "counter"] as role}<option
+                    value={role}>{title(role)}</option
+                  >{/each}</select
+              ></label
+            >
+            <p>{t("setupFee")} {cash("1000")}</p>
+            <button {disabled}>{t("hire")}</button>
+          </form>
+        </details>
+        <label
+          >{t("cashFloor")}<input
+            inputmode="numeric"
+            bind:value={cashFloor}
+          /></label
+        >
+        <button
+          {disabled}
+          onclick={() =>
+            ownerStall &&
+            submit("set_unattended_policy", {
+              stall_id: ownerStall.id,
+              enabled: !ownerStall.lease.unattended,
+              cash_floor: cashFloor,
+            })}
+          >{t(
+            ownerStall.lease.unattended ? "unattendedOff" : "unattendedOn",
+          )}</button
+        >
+      </section>
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet hallActions()}
+  {#if view && hallStall && hallInteraction?.stall === hallStall.stall_id}
+    <section
+      class="hall-workbench"
+      aria-label={t("hallActions")}
+      tabindex="-1"
+      bind:this={hallWorkbench}
+    >
+      <div class="hall-workbench-heading">
+        <h2>{hallStall.name} · {t(targetLabels[hallInteraction.target])}</h2>
+        <button
+          onclick={closeHallInteraction}
+          aria-label={t("closeHallActions")}>×</button
+        >
+      </div>
+      <p class="eyebrow">{t("hallActionHint")}</p>
+      <div class="actions" role="group" aria-label={t("hallStation")}>
+        {#each ["menu", "counter", "staff", ...(ownStall(hallStall) ? ["supply"] : [])] as target}
+          <button
+            aria-pressed={hallInteraction.target === target}
+            onclick={() =>
+              openHallInteraction(hallStall.stall_id, target as HallTarget)}
+            >{t(targetLabels[target as HallTarget])}</button
+          >
+        {/each}
+      </div>
+      {#if ownStall(hallStall) && ownerStall?.id === hallStall.stall_id}
+        {@render managementPanel(
+          hallInteraction.target === "menu"
+            ? "menu"
+            : hallInteraction.target === "supply"
+              ? "supply"
+              : "staff",
+          true,
+        )}
+      {:else if hallInteraction.target === "staff" || (hallInteraction.target === "counter" && selectedShift?.stall_id === hallStall.stall_id)}
+        {#if selectedShift && selectedShift.stall_id !== hallStall.stall_id}
+          <p>
+            {t("shiftElsewhere").replace("{stall}", selectedShift.stall_id)}
+          </p>
+          <button
+            onclick={() =>
+              openHallInteraction(selectedShift.stall_id, "counter")}
+            >{t("goToShift")}</button
+          >
+        {:else}
+          {@render helperControls(hallStall.stall_id)}
+        {/if}
+      {:else}
+        <p>
+          {title(hallStall.cuisine)} · {t(
+            hallStall["open?"] ? "open" : "closed",
+          )}
+        </p>
+        {#if !profile?.visit && recentPickup === hallStall.stall_id && receipts?.receipts[0]}
+          {@const receipt = receipts.receipts[0]}
+          <div class="hall-receipt">
+            <p role="status">
+              {t("pickupReady").replace("{stall}", hallStall.name)}
+            </p>
+            <p>{t("diningCharged")} {cash(receipt.total)}</p>
+            <ul>
+              {#each receipt.courses as course (course.kind)}
+                <li>
+                  {title(course.recipe_id)} · {t(
+                    course.outcome === "served"
+                      ? "courseServed"
+                      : "courseUnserved",
+                  )} · {cash(course.charged)}
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+        {@render diningControls(false)}
+      {/if}
+    </section>
+  {/if}
+{/snippet}
+
 {#snippet workHistory()}
   {#if profile && profile.work.history.length}
     <h2>{t("workHistory")}</h2>
@@ -1014,6 +1920,9 @@
         class="hall-layout"
         class:list-mode={hallMode === "list"}
         class:phone-detail-open={phoneDetail}
+        class:immersive-hall={immersiveHall &&
+          hallMode === "3d" &&
+          !(phone && phoneDetail)}
       >
         <div
           class="phone-only stall-detail-heading"
@@ -1036,7 +1945,13 @@
               {title}
               {reopeningTime}
               select={(id) => (hallSelection = id)}
-              inspect={openStallDetails}
+              inspect={(id) =>
+                immersiveHall
+                  ? openHallInteraction(id, "counter")
+                  : openStallDetails(id)}
+              interact={openHallInteraction}
+              immersive={immersiveHall}
+              toggleImmersive={() => (immersiveHall = !immersiveHall)}
               saveCamera={(state) => (camera = state)}
               onUnavailable={() => {
                 sceneError = true;
@@ -1045,6 +1960,7 @@
             />
           </div>
         {/if}
+        <div class="hall-workbench-slot">{@render hallActions()}</div>
         <section
           class="stall-inspector"
           class:phone-section-hidden={!phoneDetail}
@@ -1085,12 +2001,28 @@
               <button onclick={() => navigate("visit")}>{t("viewVisit")}</button
               >
             {:else if !profile?.visit && !ownStall(hallStall) && hallStall["open?"] && view.hall.access === "open"}
-              <button onclick={() => inspect(hallSelection)}
-                >{t("orderHere")}</button
+              <button
+                onclick={() =>
+                  hallMode === "3d" && !phoneDetail
+                    ? openHallInteraction(hallSelection, "menu")
+                    : inspect(hallSelection)}>{t("orderHere")}</button
               >
             {/if}
           {:else}
             <p>{t("chooseStallToInspect")}</p>
+          {/if}
+          {#if hallStall}
+            <div class="actions" role="group" aria-label={t("hallActions")}>
+              {#each ["menu", "counter", "staff", ...(ownStall(hallStall) ? ["supply"] : [])] as target}
+                <button
+                  onclick={() =>
+                    openHallInteraction(
+                      hallStall.stall_id,
+                      target as HallTarget,
+                    )}>{t(targetLabels[target as HallTarget])}</button
+                >
+              {/each}
+            </div>
           {/if}
           {#key profile?.account.id}
             <DinerCompare
@@ -1560,382 +2492,10 @@
         </section>
       {/if}
       <div class="business-grid">
-        <section
-          data-business-section="menu"
-          class:phone-section-hidden={visibleBusinessSection !== "menu"}
-        >
-          <h2>{t("viewMenu")}</h2>
-          <p>
-            {t("availableCash")}
-            <strong>{cash(restaurant.available_cash)}</strong>
-          </p>
-          <ul>
-            {#each Object.values(view.hall.recipes).filter((r) => r.cuisine === (ownerStall?.cuisine ?? restaurant?.cuisine)) as recipe (recipe.id)}
-              {@const offer = ownerStall?.unlock_offers?.[recipe.id]}
-              <li>
-                {title(recipe.id)}
-                {#if ownerMenu[recipe.id]}
-                  <strong>{cash(ownerMenu[recipe.id])}</strong>
-                  <button
-                    {disabled}
-                    onclick={() =>
-                      submit("remove_menu_item", {
-                        restaurant_id: restaurant?.id,
-                        stall_id: ownerStall?.id,
-                        recipe_id: recipe.id,
-                      })}>{t("remove")}</button
-                  >
-                {/if}
-                {#if offer}
-                  <button
-                    {disabled}
-                    onclick={() =>
-                      submit("unlock_recipe", {
-                        restaurant_id: restaurant?.id,
-                        stall_id: ownerStall?.id,
-                        recipe_id: recipe.id,
-                        max_cost: offer.cost,
-                      })}
-                  >
-                    {t(offer.known ? "installEquipment" : "learn")} · {cash(
-                      offer.cost,
-                    )}
-                  </button>
-                  {#if offer.technique && offer.equipment !== "0"}
-                    <small
-                      >{t("equipmentCost")}
-                      {title(offer.technique)} · {cash(offer.equipment)}</small
-                    >
-                  {/if}
-                {/if}
-              </li>
-            {/each}
-          </ul>
-          <form
-            onsubmit={(e) => {
-              e.preventDefault();
-              void submit("set_menu_price", {
-                restaurant_id: restaurant?.id,
-                stall_id: ownerStall?.id,
-                recipe_id: recipeId,
-                price,
-              });
-            }}
-          >
-            <label
-              >{t("viewMenu")}<select bind:value={recipeId} required
-                ><option value="">—</option
-                >{#each restaurant.unlocked as id}<option value={id}
-                    >{title(id)}</option
-                  >{/each}</select
-              ></label
-            >
-            <label
-              >{t("price")}<input
-                required
-                pattern="[1-9][0-9]*"
-                inputmode="numeric"
-                bind:value={price}
-              /></label
-            >
-            <button {disabled}>{t("setPrice")}</button>
-          </form>
-        </section>
-        <section
-          data-business-section="supply"
-          class:phone-section-hidden={visibleBusinessSection !== "supply"}
-        >
-          <h2>{t("supply")}</h2>
-          {#if starterStock && starterStock.items.length > 0}
-            <details>
-              <summary
-                >{t("starterStock")} · {cash(starterStock.budget)}</summary
-              >
-              <ul>
-                {#each starterStock.items as item (item.product)}<li>
-                    {title(item.product)} · {item.qty}
-                  </li>{/each}
-              </ul>
-              <button
-                {disabled}
-                onclick={() =>
-                  restaurant &&
-                  submit("request_starter_stock", {
-                    restaurant_id: restaurant.id,
-                    stall_id: ownerStall?.id,
-                    budget: starterStock.budget,
-                  })}>{t("buy")}</button
-              >
-            </details>
-          {/if}
-
-          <form
-            onsubmit={(e) => {
-              e.preventDefault();
-              void submit("submit_purchase_request", {
-                restaurant_id: restaurant?.id,
-                product,
-                qty: quantity,
-                max_price_per_kunit: maxPrice,
-              });
-            }}
-          >
-            <label
-              >{t("product")}<select bind:value={product} required
-                ><option value="">—</option
-                >{#each Object.entries(restaurant.market) as [id, item] (id)}<option
-                    value={id}
-                    >{title(id)} · {cash(item.price)} · {item.stock}</option
-                  >{/each}</select
-              ></label
-            >
-            <label
-              >{t("quantity")}<input
-                type="number"
-                min="1"
-                max="1000000"
-                required
-                bind:value={quantity}
-              /></label
-            >
-            <label
-              >{t("maxPrice")}<input
-                inputmode="numeric"
-                required
-                pattern="[1-9][0-9]*"
-                bind:value={maxPrice}
-              /></label
-            >
-            <button {disabled}>{t("buy")}</button>
-          </form>
-          <details>
-            <summary>{t("automation")}</summary>
-            <form
-              onsubmit={(event) => {
-                event.preventDefault();
-                void submit("set_restock_policy", {
-                  restaurant_id: restaurant?.id,
-                  product,
-                  target: targetStock,
-                  max_price_per_kunit: maxPrice,
-                  daily_budget: restockBudget,
-                });
-              }}
-            >
-              <p>{t("restockHint")}</p>
-              <label
-                >{t("targetStock")}<input
-                  type="number"
-                  min="0"
-                  max="1000000"
-                  bind:value={targetStock}
-                  required
-                /></label
-              >
-              <label
-                >{t("dailyBudget")}<input
-                  inputmode="numeric"
-                  bind:value={restockBudget}
-                  required
-                /></label
-              >
-              <button disabled={disabled || !product || !maxPrice}
-                >{t("restockPolicy")}</button
-              >
-            </form>
-            <form
-              onsubmit={(event) => {
-                event.preventDefault();
-                void submit("set_pricing_policy", {
-                  restaurant_id: restaurant?.id,
-                  recipe_id: recipeId,
-                  min_price: minimumPrice,
-                  max_price: maximumPrice,
-                  markup_permille: markup,
-                  interval_hours: 1,
-                });
-              }}
-            >
-              <p>{t("pricingHint")}</p>
-              <label
-                >{t("minPrice")}<input
-                  inputmode="numeric"
-                  bind:value={minimumPrice}
-                  required
-                /></label
-              >
-              <label
-                >{t("maxMenuPrice")}<input
-                  inputmode="numeric"
-                  bind:value={maximumPrice}
-                  required
-                /></label
-              >
-              <label
-                >{t("markup")}<input
-                  type="number"
-                  min="0"
-                  max="10000"
-                  bind:value={markup}
-                  required
-                /></label
-              >
-              <button disabled={disabled || !recipeId}
-                >{t("pricingPolicy")}</button
-              >
-            </form>
-          </details>
-          <h3>{t("stock")}</h3>
-          <ul>
-            {#each Object.entries(restaurant.inventory) as [id, qty] (id)}<li>
-                {title(id)} · {qty}
-              </li>{/each}
-          </ul>
-        </section>
+        {@render managementPanel("menu")}
+        {@render managementPanel("supply")}
         {#if ownerStall}
-          <section
-            data-business-section="staff"
-            class:phone-section-hidden={visibleBusinessSection !== "staff"}
-          >
-            <h2>{t("staff")}</h2>
-            <p>
-              {ownerStall.id} · {ownerStall.lease.start_hour}:00–{ownerStall
-                .lease.end_hour}:00
-            </p>
-            <div class="actions">
-              <button
-                {disabled}
-                onclick={() =>
-                  ownerStall &&
-                  (ownerStall.mode === "open"
-                    ? submit("close_stall", { stall_id: ownerStall.id })
-                    : openStall(ownerStall.id))}
-                >{t(
-                  ownerStall.mode === "open"
-                    ? "stopTrading"
-                    : view.hall.access === "cleaning"
-                      ? "queueOpening"
-                      : "startTrading",
-                )}</button
-              >
-              <button
-                {disabled}
-                onclick={() =>
-                  ownerStall &&
-                  submit("set_helper_offers", {
-                    stall_id: ownerStall.id,
-                    enabled: !ownerStall.lease.helper_offers,
-                  })}
-                >{t(
-                  ownerStall.lease.helper_offers ? "helperOff" : "helperOn",
-                )}</button
-              >
-            </div>
-            <form
-              onsubmit={(e) => {
-                e.preventDefault();
-                void submit("set_staff_schedule", {
-                  stall_id: ownerStall?.id,
-                  start_hour: startHour,
-                  end_hour: endHour,
-                });
-              }}
-            >
-              <label
-                >{t("from")}<input
-                  type="number"
-                  min="0"
-                  max="23"
-                  required
-                  bind:value={startHour}
-                /></label
-              >
-              <label
-                >{t("until")}<input
-                  type="number"
-                  min="0"
-                  max="24"
-                  required
-                  bind:value={endHour}
-                /></label
-              >
-              <button {disabled}>{t("schedule")}</button>
-            </form>
-            <details>
-              <summary>{t("roster")}</summary>
-              <ul>
-                {#each Object.values(ownerStall.lease.workers) as worker (worker.id)}
-                  <li>
-                    {title(worker.role)} · {worker.start_hour}:00–{worker.end_hour}:00
-                    {#if worker.break_until}
-                      · {t("protectiveBreak")}{:else if worker.tired}
-                      · {t("tired")}{/if}
-                    <button
-                      {disabled}
-                      onclick={() =>
-                        ownerStall &&
-                        submit("dismiss_staff", {
-                          stall_id: ownerStall.id,
-                          worker_id: worker.id,
-                        })}>{t("dismiss")}</button
-                    >
-                    <button
-                      {disabled}
-                      onclick={() =>
-                        ownerStall &&
-                        submit("set_worker_schedule", {
-                          stall_id: ownerStall.id,
-                          worker_id: worker.id,
-                          start_hour: startHour,
-                          end_hour: endHour,
-                        })}>{t("schedule")}</button
-                    >
-                  </li>
-                {/each}
-              </ul>
-              <form
-                onsubmit={(event) => {
-                  event.preventDefault();
-                  if (ownerStall)
-                    void submit("hire_staff", {
-                      stall_id: ownerStall.id,
-                      role: workerRole,
-                      start_hour: startHour,
-                      end_hour: endHour,
-                    });
-                }}
-              >
-                <label
-                  >{t("role")}<select bind:value={workerRole}
-                    >{#each ["prep_cook", "finish_cook", "counter"] as role}<option
-                        value={role}>{title(role)}</option
-                      >{/each}</select
-                  ></label
-                >
-                <p>{t("setupFee")} {cash("1000")}</p>
-                <button {disabled}>{t("hire")}</button>
-              </form>
-            </details>
-            <label
-              >{t("cashFloor")}<input
-                inputmode="numeric"
-                bind:value={cashFloor}
-              /></label
-            >
-            <button
-              {disabled}
-              onclick={() =>
-                ownerStall &&
-                submit("set_unattended_policy", {
-                  stall_id: ownerStall.id,
-                  enabled: !ownerStall.lease.unattended,
-                  cash_floor: cashFloor,
-                })}
-              >{t(
-                ownerStall.lease.unattended ? "unattendedOff" : "unattendedOn",
-              )}</button
-            >
-          </section>
+          {@render managementPanel("staff")}
         {/if}
         <section
           data-business-section="performance"
@@ -1974,184 +2534,7 @@
     <div class="visit-layout">
       <div class="visit-grid">
         <div class="visit-controls">
-          {#if !profile}<p>
-              {t("guestHint")}
-              <button
-                onclick={() => {
-                  navigate("profile");
-                }}>{t("startGuest")}</button
-              >
-            </p>
-          {:else}
-            <p>
-              {t("balance")} <strong>{cash(profile.balance)}</strong>
-              {#if !profile.allowance_claimed}
-                <button {disabled} onclick={() => submit("request_allowance")}
-                  >{t("allowance")}</button
-                >
-              {/if}
-            </p>
-            {#if profile.visit}
-              {@render visitProgress()}
-              {#if profile.visit.dessert === "offered"}
-                {#if view.hall.visitor_play && profile.visit.dessert_deadline != null}
-                  <p>
-                    {t("dessertOfferLeft")}
-                    {serviceDuration(
-                      profile.visit.dessert_deadline - view.hall.now,
-                    )}
-                  </p>
-                {/if}
-                {#if dessertPreviewUnavailable}
-                  <p role="status">{t("dessertPreviewUnavailable")}</p>
-                {/if}
-                {#if visitStall && ownStall(visitStall)}
-                  <p>{t("ownStallDining")}</p>
-                {:else}
-                  <button
-                    disabled={disabled || !dessertRequest}
-                    onclick={() => showQuote(dessertRequest)}
-                    >{t("dessertQuote")}</button
-                  >
-                {/if}
-                <button
-                  {disabled}
-                  onclick={() =>
-                    submit("decline_dessert", { visit_id: profile?.visit?.id })}
-                  >{t("skip")}</button
-                >
-              {:else if view.hall.visitor_play && profile.visit.can_cancel_dessert}
-                <button
-                  {disabled}
-                  onclick={() =>
-                    submit("cancel_dessert", { visit_id: profile?.visit?.id })}
-                  >{t("cancelDessert")}</button
-                >
-              {:else if view.hall.visitor_play ? profile.visit.can_cancel : profile.visit.tray_status === "accepted"}
-                <button
-                  {disabled}
-                  onclick={() =>
-                    submit("cancel_tray", {
-                      tray_id: profile?.visit?.id.replace(/^V:/, "T:"),
-                    })}>{t("cancel")}</button
-                >
-              {/if}
-            {/if}
-          {/if}
-          {#if !profile?.visit}
-            {#if view.hall.access === "cleaning"}
-              <p role="status">{t("cleaning")}</p>
-            {:else if orderingStalls.length === 0}
-              <p role="status">
-                {t(
-                  servingStalls.length
-                    ? "noOtherStallsServing"
-                    : "noStallsServing",
-                )}
-              </p>
-            {:else}
-              {#if selectedStall && ownStall(selectedStall)}
-                <p role="status">{t("ownStallDining")}</p>
-              {:else if selectedStall && !orderLocation}
-                <p role="status">{t("selectedStallClosed")}</p>
-              {/if}
-              <label
-                >{t("location")}<select
-                  value={orderLocation}
-                  onchange={(event) => inspect(event.currentTarget.value)}
-                  ><option value="">—</option
-                  >{#each orderingStalls as stall (stall.stall_id)}<option
-                      value={stall.stall_id}>{stall.name}</option
-                    >{/each}</select
-                ></label
-              >
-            {/if}
-            {#if selectedStall && orderLocation}
-              {#if checkoutMenu && availableMains.length === 0}
-                <p role="status">{t("noMealsAvailable")}</p>
-              {/if}
-              <form
-                onsubmit={(e) => {
-                  e.preventDefault();
-                  void showQuote(trayRequest);
-                }}
-              >
-                <label
-                  >{t("main")}<select
-                    bind:value={main}
-                    disabled={availableMains.length === 0}
-                    required
-                    onchange={clearQuote}
-                    ><option value="">—</option
-                    >{#each availableMains as id (id)}<option value={id}
-                        >{title(id)} · {cash(selectedStall.menu[id])}</option
-                      >{/each}</select
-                  ></label
-                >
-                <label
-                  >{t("drink")}<select
-                    bind:value={drink}
-                    disabled={availableDrinks.length === 0}
-                    onchange={clearQuote}
-                    ><option value="">{t("noDrink")}</option
-                    >{#each availableDrinks as id (id)}<option value={id}
-                        >{title(id)} · {cash(selectedStall.menu[id])}</option
-                      >{/each}</select
-                  ></label
-                >
-                <label
-                  >{t("diet")}<select
-                    bind:value={diet}
-                    required
-                    onchange={clearQuote}
-                    ><option value="" disabled>—</option
-                    >{#each dietaryProfiles as id (id)}<option value={id}
-                        >{title(id)}</option
-                      >{/each}</select
-                  ></label
-                >
-                <button disabled={disabled || !trayRequest}>{t("quote")}</button
-                >
-              </form>
-            {:else if !selectedStall && orderingStalls.length > 0}<p>
-                {t("chooseStall")}
-              </p>{/if}
-          {/if}
-          {#if currentQuote}
-            <section class="quote">
-              <p>
-                <strong>{cash(currentQuote.total)}</strong> ·
-                {#if quoteRequest?.kind === "dessert"}
-                  {t("estimatedWait")}
-                  {serviceDuration(
-                    currentQuote.earliest_completion - view.hall.now,
-                  )}
-                {:else}
-                  {clock(currentQuote.earliest_completion)}
-                {/if}
-              </p>
-              <button
-                disabled={disabled || !profile}
-                onclick={() => {
-                  if (!profile || !currentQuote || !quoteRequest) return;
-                  const { kind, fields } = quoteRequest;
-                  const payload = { ...fields, confirmed: currentQuote.terms };
-                  if (kind === "dessert")
-                    void submit("accept_dessert", payload);
-                  else
-                    void submit("admit_visit", {
-                      ...payload,
-                      drink: fields.drink ?? null,
-                    });
-                }}
-                >{t(
-                  quoteRequest?.kind === "dessert"
-                    ? "acceptDessert"
-                    : "acceptOrder",
-                )}</button
-              >
-            </section>
-          {/if}
+          {@render diningControls()}
           {#if profile}
             <section>
               <h2>{t("diningHistory")}</h2>
@@ -2213,190 +2596,7 @@
   {:else if page === "work"}
     <h1>{t("work")}</h1>
     <p>{t("workHint")}</p>
-    {#if profile?.account["owner?"]}<p>{t("ownerCannotWork")}</p>
-    {:else if !profile}<button
-        onclick={() => {
-          navigate("profile");
-        }}>{t("startGuest")}</button
-      >
-    {:else if selectedShift}
-      <section>
-        <h2>{t("support")} · {selectedShift.stall_id}</h2>
-        <p>
-          {t("tasks")}
-          {selectedShift.tasks} ·
-          <span role="timer"
-            >{t("shiftTimeLeft").replace(
-              "{duration}",
-              serviceDuration(selectedShift.expires_at - view.hall.now),
-            )}</span
-          >
-        </p>
-        {#if view.hall.visitor_play}
-          {#if selectedShift.approaching?.length}
-            <details open>
-              <summary>{t("approachingTrays")}</summary>
-              <ul>
-                {#each selectedShift.approaching as item (item.id)}
-                  <li>
-                    {item.recipes.map(title).join(" + ")} ·
-                    {t("estimatedReadyIn")}
-                    {serviceDuration(
-                      (item.ready_at ?? view.hall.now) - view.hall.now,
-                    )}
-                  </li>
-                {/each}
-              </ul>
-            </details>
-          {/if}
-          {#if selectedShift.prepared}<p>{t("preparedCounter")}</p>{/if}
-          {#if selectedShift.staged}<p>
-              {t("stagedTasks")}
-              {selectedShift.staged}
-            </p>{/if}
-          {#if selectedShift.tasks && !selectedShift.handover}<p>
-              {t("lastService")}
-            </p>{/if}
-        {/if}
-        {#if selectedShift.handover}
-          <p role="status">
-            {t("handoverInProgress").replace(
-              "{items}",
-              selectedShift.handover.recipes.map(title).join(" + "),
-            )}
-          </p>
-          <p role="timer">
-            {t("shiftTimeLeft").replace(
-              "{duration}",
-              serviceDuration(selectedShift.handover.done_at - view.hall.now),
-            )}
-          </p>
-        {:else if selectedHandover}
-          <p role="status">
-            {t("handoverSelected").replace(
-              "{items}",
-              selectedHandover.recipes.map(title).join(" + "),
-            )}
-          </p>
-        {:else if selectedShift.selection}
-          <h3>{t("selectTask")}</h3>
-          <p role="timer">
-            {t("shiftTimeLeft").replace(
-              "{duration}",
-              serviceDuration(selectedShift.selection.deadline - view.hall.now),
-            )}
-          </p>
-          <ul class="counter-options">
-            {#each selectedShift.selection.items as item (item.id)}
-              <li>
-                <button
-                  {disabled}
-                  onclick={() =>
-                    submit("select_handover", {
-                      shift_id: selectedShift?.shift_id,
-                      selection_id: selectedShift?.selection?.id,
-                      item_id: item.id,
-                      recipes: item.recipes,
-                    })}>{item.recipes.map(title).join(" + ")}</button
-                >
-                {#if view.hall.visitor_play && item.number != null}
-                  <small>
-                    {t("trayNumber").replace("{number}", String(item.number))} ·
-                    {t("waited")}
-                    {serviceDuration(
-                      view.hall.now - (item.queued_at ?? view.hall.now),
-                    )} ·
-                    {t("serveBy")}
-                    {serviceDuration(
-                      (item.serve_by ?? view.hall.now) - view.hall.now,
-                    )}
-                    {#if selectedShift.selection.auto_item === item.id}
-                      · {t("fifoChoice")}{/if}
-                  </small>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        {:else if selectedShift.staging}
-          <p role="status">
-            {t("stagingInProgress")} · {serviceDuration(
-              selectedShift.staging.done_at - view.hall.now,
-            )}
-          </p>
-          {#if selectedShift.waiting?.length}
-            <ul>
-              {#each selectedShift.waiting as item (item.id)}
-                <li>
-                  {item.recipes.map(title).join(" + ")} · {t("serveBy")}
-                  {serviceDuration(
-                    (item.serve_by ?? view.hall.now) - view.hall.now,
-                  )}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          <button
-            {disabled}
-            onclick={() =>
-              submit("yield_counter_staging", {
-                shift_id: selectedShift?.shift_id,
-                task_id: selectedShift?.staging?.id,
-              })}>{t("yieldToService")}</button
-          >
-        {:else}
-          <p>{t("standby")}</p>
-          {#if selectedShift.staging_offer}
-            <button
-              {disabled}
-              onclick={() =>
-                submit("start_counter_staging", {
-                  shift_id: selectedShift?.shift_id,
-                })}
-            >
-              {t("stagingOffer")}
-            </button>
-            <p>
-              {t("stageWorkTime")}
-              {serviceDuration(selectedShift.staging_offer - view.hall.now)} ·
-              {t("setupSaving")}
-            </p>
-          {/if}
-        {/if}
-        <button
-          {disabled}
-          onclick={() =>
-            submit("leave_helper_shift", { shift_id: selectedShift?.shift_id })}
-          >{t("leaveShift")}</button
-        >
-      </section>
-    {:else}
-      <div class="cards">
-        {#each profile.work.offers as offer (offer.stall_id)}
-          <article>
-            <h2>{offer.stall_id} · {t("support")}</h2>
-            <p>
-              {t("wage")}
-              {cash(offer.rate)} · {t("pay")}
-              {cash(offer.estimated_pay)} · {t("shiftLength").replace(
-                "{duration}",
-                serviceDuration(offer.expires_at - offer.quoted_at),
-              )}
-            </p>
-
-            <button
-              {disabled}
-              onclick={() =>
-                submit("accept_helper_shift", {
-                  stall_id: offer.stall_id,
-                  rate: offer.rate,
-                  expires_at: offer.expires_at,
-                  quoted_at: offer.quoted_at,
-                })}>{t("acceptShift")}</button
-            >
-          </article>
-        {:else}<p>{t("noShifts")}</p>{/each}
-      </div>
-    {/if}
+    {@render helperControls()}
     {@render workHistory()}
   {:else if page === "profile"}
     <h1>{t("profile")}</h1>
