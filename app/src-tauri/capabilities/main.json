@@ -1,0 +1,7 @@
+{
+  "identifier": "main",
+  "description": "The packaged main window can use the bounded hall transport and page zoom.",
+  "windows": ["main"],
+  "local": true,
+  "permissions": ["allow-hall-request", "core:webview:allow-set-webview-zoom"]
+}

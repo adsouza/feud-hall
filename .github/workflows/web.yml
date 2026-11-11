@@ -3,16 +3,16 @@ name: web
 on:
   push:
     branches: [main]
-    paths: ["web/**", "server/**", "assets/branding/**", ".github/workflows/web.yml"]
+    paths: ["app/**", "server/**", "assets/branding/**", ".github/workflows/web.yml"]
   pull_request:
-    paths: ["web/**", "server/**", "assets/branding/**", ".github/workflows/web.yml"]
+    paths: ["app/**", "server/**", "assets/branding/**", ".github/workflows/web.yml"]
 
 permissions:
   contents: read
 
 defaults:
   run:
-    working-directory: web
+    working-directory: app
 
 jobs:
   check:
@@ -62,5 +62,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: browser-failures
-          path: web/test-results/
+          path: app/test-results/
           if-no-files-found: ignore

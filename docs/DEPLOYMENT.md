@@ -1,10 +1,9 @@
 # Feud Hall Deployment
 
-Status: deployment and release plan. No Render services, database environments,
-credentials, migration commands, native build jobs, or release workflows are
-established in this repository yet. This is not a record of an existing rollout.
-Replace planned steps with verified entry points and environment identifiers as
-implementation lands, without storing secrets here.
+The repository has a Render Blueprint, a container build with an explicit
+migration command, and hosted native package jobs. These define release
+entry points. Record live environment identifiers and qualification results
+separately from the templates, without storing credentials here.
 
 The [architecture](ARCHITECTURE.md#deployment-and-clients) owns system topology,
 authority, storage/recovery, and compatibility contracts. [Testing](TESTING.md)
@@ -107,6 +106,28 @@ orders retain their pinned terms. Routine restarts/redeploys must not rerun seed
 grants or NPC bootstrap, reparent accounts, issue replacement credentials, or
 replay external notifications.
 
+### Render Blueprint
+
+Import `render.yaml` into the intended Render workspace for an isolated
+release-test service. The Blueprint uses an always-running web service and
+private PostgreSQL 18. Its service and database sizes are starting values for
+qualification. Set `FEUD_HALL_ADMIN_KEY` through Render and retain the generated
+signing secret across deploys. Render supplies the canonical external origin
+and the internal database URL. Set `FEUD_HALL_ORIGIN` explicitly for a custom
+domain.
+
+The pre-deploy command runs `/app/bin/feud_hall eval 'FeudHall.Release.migrate()'`.
+It starts the repository for migration without starting the hall.
+`/healthz` checks that the local authority has initialized, is keeping up
+with the clock, and holds the current database fencing epoch. Auto-deploy is
+disabled. Schedule incompatible migrations and the first handover from a
+pre-M6 writer as maintenance. Stop the old writer before starting the new
+one. A fenced M6 authority exits its supervisor child.
+
+Rehearse the sequence in the release-test service before public provisioning.
+Select production capacity from the measured workload and verify that the
+service advances, retains existing receipts, and restores from backup.
+
 ## Native release artifacts
 
 Build the common web frontend first. Package the same versioned client source for
@@ -132,6 +153,86 @@ checksums, installation notes, and server compatibility information. Generate
 icons from the [SVG masters](../assets/branding/README.md) at the required sizes.
 Desktop update automation remains later scope; a backend deployment does not
 replace an installed client's assets or remove protocol compatibility obligations.
+
+### Build and open the macOS app
+
+Install the Xcode command-line tools, Bun 1.4.4, and the Rust toolchain pinned in
+`app/src-tauri/rust-toolchain.toml`. Start a current local hall at
+`http://localhost:4000`, then run these commands from `app/`.
+
+```sh
+bun install --frozen-lockfile
+CARGO_BUILD_JOBS=1 bun run desktop:build --bundles app -- --locked
+open 'src-tauri/target/release/bundle/macos/Feud Hall.app'
+```
+
+For development, `bun run desktop:dev` builds the local assets and opens the
+unbundled native window. That Cargo-run executable does not receive the bundle's
+signing identity. For playtesting with a remembered Keychain session, use the
+signed development bundle described below. For a build targeting another server, set
+`FEUD_HALL_NATIVE_ORIGIN` at build time to the hall's HTTPS origin.
+The packaged client embeds the shared UI and Noto Sans JP fonts. The credential
+store is macOS Keychain or Linux Secret Service. Device credentials are
+separated by server origin. A new install can restore an existing profile
+through the game's device-recovery flow.
+
+The native client saves the main window's size, position, and maximized state
+locally on quit and restores them on launch. If the saved window is entirely
+outside the connected displays, the window uses the system's default placement.
+On Wayland, the compositor controls window placement.
+
+The hosted native workflow initially targets Apple silicon on macOS and
+x86-64 on Ubuntu 24.04. The macOS minimum is 13.0. Without a local signing override,
+macOS bundles are ad-hoc signed.
+Public macOS installation still requires qualification for the chosen signing
+and distribution path.
+
+#### Stable local macOS signing
+
+Use an existing Apple Development signing identity in the login Keychain:
+
+```sh
+security find-identity -v -p codesigning
+cp src-tauri/tauri.macos.conf.example.json src-tauri/tauri.macos.conf.json
+```
+
+Set `bundle.macOS.signingIdentity` in the copied file to the exact identity
+name from that command. Tauri automatically merges this macOS override into
+its shared configuration. The override is ignored by Git; certificates and
+private keys stay in Keychain. Other checkouts and CI keep their own signing
+configuration. An explicit `APPLE_SIGNING_IDENTITY` environment variable takes
+precedence, so unset it if it conflicts with the local override.
+
+Build a signed debug app from `app/` with:
+
+```sh
+CARGO_BUILD_JOBS=1 bun run desktop:build --debug --bundles app -- --locked
+open 'src-tauri/target/debug/bundle/macos/Feud Hall.app'
+```
+
+Moving from ad-hoc signing to this identity may require one final Keychain
+approval for the game's existing session. Choose **Always Allow** for Feud Hall
+when macOS asks. Subsequent bundles signed with the same compatible designated
+requirement can retain that authorization. The macOS password stays in the
+system dialog. Do not broaden the item's access to all applications.
+
+Check the result with `codesign -d -r- --verbose=2` and
+`codesign --verify --deep --strict` against the `.app` path. The designated
+requirement must identify the bundle and signing identity, rather than only
+the build's `cdhash`. To qualify updates, compare two different signed builds,
+then launch, quit, and relaunch using the existing profile without another
+session-access prompt. Renew an expired identity and requalify its requirement;
+stable development signing does not provide public notarization.
+
+### Linux packages and release artifacts
+
+The hosted native workflow packages the Debian client and repackages its
+executable as a GNOME 50 Flatpak. Both packages use the same pinned Rust
+dependencies and common frontend build. The Flatpak grants network, display
+and GPU access, and access to the Secret Service D-Bus name for credentials.
+The release artifacts include the intended server, protocol, source revision,
+and SHA-256 checksums. Supply the release-test or canonical HTTPS origin when
+dispatching the workflow for that environment.
 
 ## Rollback, interruption, and restore
 
@@ -222,7 +323,7 @@ in its existing event stream. Keep its database and signing secret so current
 accounts, orders, and dining receipts remain available. An occupied
 Milestone 2 hall still needs an explicit transition to management.
 
-From `web/`, run `bun install --frozen-lockfile` and `bun run build`. The
+From `app/`, run `bun install --frozen-lockfile` and `bun run build`. The
 build writes the client into `server/priv/static`. From `server/`, set these
 variables for the local process:
 

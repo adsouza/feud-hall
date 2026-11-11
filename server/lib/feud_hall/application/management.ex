@@ -1,5 +1,6 @@
 defmodule FeudHall.Application.Management do
   @moduledoc "Authenticated management commands and scoped read models."
+  alias FeudHall.Application.DinerBrowse
   alias FeudHall.Domain.{Clock, Dietary, Identity, Kitchen, Money, Offers, PublicView}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
   alias FeudHall.Domain.Hall.{CounterPlay, Equipment, OperatingPolicy, Population, Progression, Recognition, Staff}
@@ -65,9 +66,11 @@ defmodule FeudHall.Application.Management do
 
   defp authorize(_identity, _principal, _kind, _device), do: {:error, :forbidden}
 
-  def view(%{state: nil}, _device), do: {:error, :hall_not_initialized}
+  def view(runtime, device, params \\ %{})
 
-  def view(runtime, device) do
+  def view(%{state: nil}, _device, _params), do: {:error, :hall_not_initialized}
+
+  def view(runtime, device, params) do
     state = runtime.state
     identity = Identity.get(runtime.control)
     principal = Identity.principal_for_device(identity, device)
@@ -78,15 +81,18 @@ defmodule FeudHall.Application.Management do
     stalls =
       Enum.map(public.stalls, fn stall ->
         restaurant = state.restaurants[stall.restaurant_id]
+        open? = stall.open? and state.access == :open
 
         Map.merge(stall, %{
           name: restaurant.name,
           cuisine: Progression.cuisine(state.stalls[stall.stall_id], restaurant),
           npc: restaurant.owner_kind == :npc,
-          open?: stall.open? and state.access == :open,
+          open?: open?,
+          reopens_at: HallManagement.estimated_reopening(state, stall.stall_id),
           retiring: Population.closing?(state, restaurant.id),
           awards: Recognition.active_awards(state, restaurant.id),
-          activity: stall_activity(state, stall.stall_id, activity),
+          activity: stall_activity(state, stall.stall_id, activity, open?),
+          last_service: Map.get(Map.get(runtime, :counter_services, %{}), stall.stall_id),
           menu: Map.new(stall.menu, fn {id, price} -> {id, cents(price)} end)
         })
       end)
@@ -110,7 +116,12 @@ defmodule FeudHall.Application.Management do
         Map.new(state.catalog.recipes, fn {id, recipe} -> {id, Map.take(recipe, [:id, :kind, :cuisine, :starter])} end)
     }
 
-    {:ok, %{hall: hall, profile: account && private_view(identity, state, account, public.market)}}
+    view = %{hall: hall, profile: account && private_view(identity, state, account, public.market)}
+
+    case DinerBrowse.checkout_menu(state, params["stall_id"], params["profile_id"]) do
+      nil -> {:ok, view}
+      menu -> {:ok, Map.put(view, :checkout_menu, menu)}
+    end
   end
 
   defp public_activity(state) do
@@ -129,14 +140,23 @@ defmodule FeudHall.Application.Management do
     end)
   end
 
-  defp stall_activity(state, sid, activity) do
+  defp stall_activity(state, sid, activity, open?) do
     {items, cooking} = Map.get(activity, sid, {MapSet.new(), 0})
+
+    workers =
+      if open? do
+        roster = get_in(state, [:management, :leases, sid, :workers]) || %{}
+        length(Staff.active(roster, state.now))
+      else
+        0
+      end
 
     %{
       waiting: MapSet.size(items),
       cooking: cooking,
       handover: state.stalls[sid].counter != nil,
       staffed: state.access == :open and HallManagement.staffed?(state, sid, state.now),
+      workers: workers,
       paused:
         state.access == :open and state.stalls[sid].mode == :closed and
           get_in(state, [:management, :leases, sid, :opening_requested]) == true,
@@ -169,6 +189,7 @@ defmodule FeudHall.Application.Management do
       account:
         Map.take(account, [:id, :name, :owner?, :reviewer?, :parent, :admission_route, :quota, :progress, :proof]),
       balance: cents(available),
+      allowance_claimed: HallManagement.allowance_claimed?(state, principal),
       visit: visit_view(state, visit),
       applications: applications,
       invitations: invitations,

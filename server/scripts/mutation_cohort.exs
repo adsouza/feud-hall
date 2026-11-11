@@ -50,6 +50,8 @@ defmodule MutationCohort do
 
   def mutants do
     [
+      {"M6 event pages ignore the captured head", @store, "and ($3::bigint is null or b.position <= $3)",
+       "and ($3::bigint is null or b.position > 0)", [@pg_store]},
       {"M4 a fourth location can be leased", "lib/feud_hall/domain/hall/progression.ex",
        "length(leased) >= state.catalog.rules.progression.stall_limit",
        "length(leased) > state.catalog.rules.progression.stall_limit", [@progression]},

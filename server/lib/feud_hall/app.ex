@@ -32,16 +32,18 @@ defmodule FeudHall.App do
          timeout_ms: 2_000,
          export: &FeudHall.Web.Diagnostics.export/1
        ]},
-      {HallAuthority,
-       [
-         name: FeudHall.LiveAuthority,
-         owner: "web",
-         diagnostics: {Exporter, FeudHall.LiveDiagnostics},
-         scope: scope,
-         store_mod: PostgresEventStore,
-         store: PostgresEventStore.new(Repo, scope),
-         clock: {SystemClock, nil}
-       ]},
+      Supervisor.child_spec(
+        {HallAuthority,
+         [
+           name: FeudHall.LiveAuthority,
+           diagnostics: {Exporter, FeudHall.LiveDiagnostics},
+           scope: scope,
+           store_mod: PostgresEventStore,
+           store: PostgresEventStore.new(Repo, scope),
+           clock: {SystemClock, nil}
+         ]},
+        restart: :transient
+      ),
       {FeudHall.Web.Bootstrap, scope},
       FeudHall.Web.Endpoint
     ]

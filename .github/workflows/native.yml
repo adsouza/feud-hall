@@ -1,0 +1,113 @@
+name: native packages
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", "server/priv/content/**", "assets/branding/**", "packaging/**", ".github/workflows/native.yml"]
+  pull_request:
+    paths: ["app/**", "server/priv/content/**", "assets/branding/**", "packaging/**", ".github/workflows/native.yml"]
+  workflow_dispatch:
+    inputs:
+      hall_origin:
+        description: "HTTPS origin for these artifacts. Omit for a local hall."
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_PROFILE_RELEASE_DEBUG: '0'
+  FEUD_HALL_NATIVE_ORIGIN: ${{ inputs.hall_origin || 'http://localhost:4000' }}
+
+jobs:
+  packages:
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            bundle: app
+          - os: ubuntu-24.04
+            bundle: deb
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Install Linux build and packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libdbus-1-dev libxdo-dev librsvg2-dev flatpak flatpak-builder xvfb dbus-x11 gnome-keyring
+      - name: Install Rust from the pinned manifest
+        working-directory: app/src-tauri
+        run: rustup show
+      - run: bun install --frozen-lockfile
+        working-directory: app
+      - run: bun run desktop:assets
+        working-directory: app
+      - name: Check native trust boundary
+        working-directory: app/src-tauri
+        run: cargo fmt --check && cargo test --locked --bin feud-hall
+      - run: bun run desktop:build --ci --bundles ${{ matrix.bundle }} -- --locked
+        working-directory: app
+      - name: Verify and collect macOS bundle
+        if: runner.os == 'macOS'
+        run: |
+          app='app/src-tauri/target/release/bundle/macos/Feud Hall.app'
+          test -x "$app/Contents/MacOS/feud-hall"
+          codesign --verify --strict --deep "$app"
+          mkdir -p release
+          ditto -c -k --keepParent "$app" "release/feud-hall-macos-${RUNNER_ARCH}.zip"
+      - name: Build and install both Linux formats
+        if: runner.os == 'Linux'
+        run: |
+          shopt -s nullglob
+          packages=(app/src-tauri/target/release/bundle/deb/*.deb)
+          test "${#packages[@]}" -eq 1
+          mkdir -p release
+          install -m644 "${packages[0]}" release/feud-hall-amd64.deb
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
+          packaging/flatpak/build.sh release/feud-hall-amd64.deb release/feud-hall-x86_64.flatpak
+          sudo apt-get install -y "$PWD/release/feud-hall-amd64.deb"
+          test -x /usr/bin/feud-hall
+          flatpak install --user --noninteractive -y release/feud-hall-x86_64.flatpak
+          flatpak info --user --show-permissions io.github.adsouza.FeudHall
+          for package in deb flatpak; do
+            if [ "$package" = deb ]; then
+              launch=(/usr/bin/feud-hall)
+            else
+              launch=(flatpak run --user io.github.adsouza.FeudHall)
+            fi
+            rc=0
+            timeout 12s dbus-run-session -- xvfb-run -a "${launch[@]}" || rc=$?
+            test "$rc" -eq 124
+          done
+      - name: Record provenance and checksums
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, platform
+          from pathlib import Path
+
+          locks = [Path(path) for path in ("app/bun.lock", "app/src-tauri/Cargo.lock")]
+          files = sorted(p for p in Path("release").iterdir() if p.is_file())
+          checksum = lambda path: hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
+          manifest = {
+              "revision": os.environ["GITHUB_SHA"],
+              "hall_origin": os.environ["FEUD_HALL_NATIVE_ORIGIN"],
+              "client_protocol": 1,
+              "runner": platform.platform(),
+              "lockfiles": {str(p): checksum(p) for p in locks},
+              "artifacts": {p.name: checksum(p) for p in files},
+          }
+          Path("release/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feud-hall-${{ runner.os }}-${{ runner.arch }}
+          path: release/
+          if-no-files-found: error

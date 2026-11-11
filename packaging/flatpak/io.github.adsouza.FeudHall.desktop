@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Feud Hall
+Comment=Manage a restaurant in an online food hall
+Comment[ja]=オンラインのフードホールでレストランを経営
+Exec=feud-hall
+Icon=io.github.adsouza.FeudHall
+Terminal=false
+Categories=Game;Simulation;

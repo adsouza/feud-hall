@@ -344,7 +344,10 @@ defmodule FeudHall.Application.ManagementTest do
 
           for {device, actor} <- devices do
             balance = Integer.to_string(expected.balances[actor])
-            assert {:ok, %{profile: %{balance: ^balance}}} = Management.view(next, device)
+            claimed = MapSet.member?(expected.issued, {actor, div(expected.now, day_ms)})
+
+            assert {:ok, %{profile: %{balance: ^balance, allowance_claimed: ^claimed}}} =
+                     Management.view(next, device)
           end
 
           {next, expected}

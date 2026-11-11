@@ -48,7 +48,7 @@ def fingerprint():
         cwd=SERVER.parent,
     ).decode().split("\0")
     paths = [SERVER.parent / path for path in paths if path]
-    paths += [SERVER / "scripts" / name for name in ("capacity_bench.py", "capacity_bench.exs")]
+    paths += [SERVER / "scripts" / name for name in ("capacity_bench.py", "capacity_bench.exs", "capacity_restore.exs")]
     digest = hashlib.sha256()
     for path in sorted(paths):
         digest.update(str(path.relative_to(SERVER)).encode() + b"\0")
@@ -60,8 +60,8 @@ def interrupt(_signum, _frame):
     raise KeyboardInterrupt
 
 
-def measure(days, report, env):
-    command = ["mix", "run", "--no-start", "scripts/capacity_bench.exs", str(days), str(report)]
+def measure(days, report, env, mode):
+    command = ["mix", "run", "--no-start", "scripts/capacity_bench.exs", str(days), str(report), mode]
     peak = {}
     peak_engine = 0
     maximum = 0
@@ -93,9 +93,45 @@ def measure(days, report, env):
             "limit_kib": RSS_LIMIT_KIB, "interval_seconds": 1}
 
 
+def restore_archive(bin_dir, common, env, scratch):
+    clone = DATABASE + "_restore"
+    backup = scratch / "capacity.dump"
+    connection = ["--host=localhost", "--port=5432", "--no-password"]
+
+    def inspect(database, mode):
+        output = subprocess.check_output(
+            ["mix", "run", "--no-start", "scripts/capacity_restore.exs", database, mode],
+            cwd=SERVER, env=env, text=True, timeout=300,
+        )
+        return json.loads(next(line.removeprefix("ARCHIVE_REPORT ") for line in output.splitlines()
+                               if line.startswith("ARCHIVE_REPORT ")))
+
+    source = inspect(DATABASE, "observe")
+    started = time.monotonic()
+    subprocess.run([bin_dir / "pg_dump", *connection, "--format=custom", "--file", backup, DATABASE],
+                   check=True, env=env, timeout=300)
+    dump_ms = round((time.monotonic() - started) * 1000)
+    subprocess.run([bin_dir / "createdb", *common, "--template=template0", clone],
+                   check=True, env=env, timeout=30)
+    try:
+        started = time.monotonic()
+        subprocess.run([bin_dir / "pg_restore", *connection, "--exit-on-error", "--dbname", clone, backup],
+                       check=True, env=env, timeout=300)
+        restore_ms = round((time.monotonic() - started) * 1000)
+        restored = inspect(clone, "rebuild")
+        for key in ("head", "stream_versions", "tables", "state_sha256", "projections_sha256"):
+            if source[key] != restored[key]:
+                raise RuntimeError(f"Restored archive differs in {key}")
+        return {"backup_bytes": backup.stat().st_size, "dump_ms": dump_ms, "restore_ms": restore_ms,
+                "restored": restored}
+    finally:
+        subprocess.run([bin_dir / "dropdb", *common, clone], check=True, env=env, timeout=30)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, choices=range(1, 8), default=3)
+    parser.add_argument("--mode", choices=("slice", "launch"), default="slice")
+    parser.add_argument("--restore", action="store_true", help="Restore the disposable database and rebuild its projections")
     parser.add_argument("--output", type=Path, required=True, help="New JSON report path")
     args = parser.parse_args()
     output = args.output.resolve()
@@ -103,8 +139,9 @@ def main():
         parser.error("Output must be a new file in an existing directory.")
 
     bin_dir = postgres_cli()
-    env = {**os.environ, "PGHOST": "localhost", "PGPORT": "5432", "MIX_ENV": "dev",
+    env = {**os.environ, "PGHOST": "localhost", "PGPORT": "5432", "MIX_ENV": "dev", "FEUD_HALL_SERVE": "0",
            "FEUD_HALL_CAPACITY_DATABASE": DATABASE}
+    env.pop("DATABASE_URL", None)
     common = ["--host=localhost", "--port=5432", "--maintenance-db=postgres", "--no-password"]
     source = fingerprint()
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=SERVER, text=True).strip()
@@ -116,8 +153,10 @@ def main():
         subprocess.run([bin_dir / "createdb", *common, "--template=template0", DATABASE],
                        check=True, env=env)
         try:
-            memory = measure(args.days, report, env)
+            memory = measure(args.days, report, env, args.mode)
             result = json.loads(report.read_text())
+            if args.restore:
+                result["archive_restore"] = restore_archive(bin_dir, common, env, Path(scratch))
             if fingerprint() != source:
                 raise RuntimeError("Benchmark source changed during the run.")
         finally:

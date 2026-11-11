@@ -39,6 +39,9 @@ defmodule FeudHall.Domain.Hall.Management do
 
   def enabled?(state), do: is_map(state) and Map.has_key?(state, :management)
 
+  def allowance_claimed?(state, principal),
+    do: get_in(state, [:management, :allowance_days, principal]) == Clock.day_of(state.now)
+
   def decide(state, {:enable_management, %{}}, %{actor: {:system, :admin}}) do
     if enabled?(state) or map_size(state.stalls) != 0,
       do: {:error, :management_requires_empty_hall},
@@ -97,7 +100,7 @@ defmodule FeudHall.Domain.Hall.Management do
     amount = min(1_200, state.catalog.rules.max_allowance_grant)
 
     cond do
-      state.management.allowance_days[id] == day ->
+      allowance_claimed?(state, id) ->
         {:error, :allowance_already_claimed}
 
       state.visitor_fund < amount ->
@@ -430,6 +433,61 @@ defmodule FeudHall.Domain.Hall.Management do
       nil -> true
       lease -> Staff.covered?(lease.workers, at)
     end
+  end
+
+  @doc "Estimate the next eligible opening from the current request, roster and known clock boundaries."
+  def estimated_reopening(state, sid) do
+    stall = state.stalls[sid]
+
+    if stall.mode == :closed or state.access == :cleaning do
+      case get_in(state, [:management, :leases, sid]) do
+        %{opening_requested: true} = lease -> next_eligible_opening(state, stall, lease)
+        nil when stall.mode == :open -> Clock.next_cleaning_end(state.now)
+        _ -> nil
+      end
+    end
+  end
+
+  defp next_eligible_opening(state, stall, lease) do
+    day = Clock.day_of(state.now)
+    hour = Clock.hour()
+    roster = Map.values(lease.workers)
+    starts = for d <- day..(day + 1), worker <- roster, do: d * Clock.day() + worker.start_hour * hour
+    breaks = for %{break_until: at} <- roster, is_integer(at), do: at
+    ready = Map.get(stall, :ready_at, 0)
+    refit_boundary = div(ready + hour - 1, hour) * hour
+
+    boundaries = [
+      state.management.next_hour,
+      refit_boundary,
+      Clock.cleaning_end_of(day),
+      Clock.cleaning_end_of(day + 1)
+    ]
+
+    (boundaries ++ starts ++ breaks)
+    |> Enum.filter(&(&1 > state.now and not Clock.cleaning?(&1)))
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.find(fn at ->
+      future = %{state | now: at}
+
+      future =
+        if Enum.any?(breaks, &(&1 <= at)) do
+          update_in(future.management.leases[stall.id].workers, fn workers ->
+            Map.new(workers, fn
+              {id, %{break_until: until} = worker} when is_integer(until) and until <= at ->
+                {id, Staff.transition(worker, :recovered, at)}
+
+              entry ->
+                entry
+            end)
+          end)
+        else
+          future
+        end
+
+      allow_open(future, stall.id) == :ok
+    end)
   end
 
   def capacity(state, sid) do

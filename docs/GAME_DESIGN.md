@@ -325,6 +325,12 @@ These are genuine orders: they reserve ingredients, occupy staff/stations and qu
 
 Proposed funding combines a small server-issued virtual dining allowance with earned helper wages in a visitor's hall-specific dining wallet. Allowance grants draw from the bounded hall visitor fund; wages transfer value from restaurant payroll and do not mint another allowance. There is no real-money payment, cash-out, or discretionary gifting. Reserve each course's cost on acceptance, debit it on service, and release it on cancellation; this is a spending reservation, not advance restaurant revenue. A disconnect does not duplicate or automatically cancel an accepted order, and reconnecting retrieves the same order.
 
+Hide **Claim daily allowance** once the principal has claimed it for the current
+game day. Use the server's per-principal claim status, independent of the dining
+wallet balance; spending the credit, reconnecting, or changing devices does not
+reveal another claim. Show the action again on the next game day. Concurrent or
+stale submissions still obey the authoritative once-per-day guard.
+
 Allowance grants consume a bounded hall-wide issuance budget when issued, plus profile/session limits. Issuing a new credential, leaving credit unspent, or canceling a meal does not replenish that budget. Earned wages are funded by the employer and do not consume the allowance issuance budget; exhausting promotional grants cannot confiscate or invalidate previously earned credit. Both funding sources remain subject to normal order capacity, admission rate limits, and competitive-metric eligibility. Anonymous profile limits alone cannot establish unique humans; aggregate hall and employer limits are required.
 
 Track wallet credit by source grant or payroll-settlement ID. Reserve exact funding slices with the order, using allowance credit before earned credit by default. Cancellation releases those same slices without issuing a new grant; service debits them exactly once. Earned credit remains on the principal through session changes and has no inactivity expiry in the first release. Report allowance-funded and wage-funded purchases separately from simulated demand. Only the server assigns demand/funding origin. Guest participation supplies no owner privileges or invitation issuance; an already authenticated owner's ordinary presence is still counted once under the owner rules.
@@ -1040,7 +1046,10 @@ the scene behind the form. Browsing requires no owner invitation or avatar
 travel, and never exposes private business controls.
 
 My visit contains main/optional-drink checkout, accepted-order tracking,
-dining receipts, and the later same-stall dessert offer. The
+dining receipts, and the later same-stall dessert offer. Where space allows,
+show the selected stall's cuisine artwork alongside checkout; during a visit,
+keep it tied to the stall fulfilling that order. Hide the illustration on narrow
+layouts so it does not crowd the controls. The
 [diner interactions](#milestone-5-diner-interactions) link browsing and tray
 tracking across Hall and My visit. Work contains available offers, disclosed
 pay/duration and success criteria, and a focused
@@ -1116,6 +1125,12 @@ admission. Validate English/Japanese context and input without introducing a
 fluent-speaker review gate.
 
 ### Responsive layout and input
+
+Support browser-style whole-page zoom in the desktop client: Cmd on macOS or
+Ctrl on Linux with `+`/`=` to enlarge, `-` to shrink, and `0` to reset to 100%.
+These shortcuts scale the complete interface and trigger responsive reflow;
+they preserve drafts and focus and are separate from the 3D hall camera zoom.
+Web browsers retain their standard page-zoom shortcuts.
 
 Smartphone browser support is part of the core web game, not a reduced companion
 dashboard. Ownership/setup, map/list cuisine choice, menus, stock/market,
@@ -1247,7 +1262,25 @@ Use charcoal or deep navy backgrounds, bright cuisine accents, clear white or pa
 
 The hall is a stylized, readable 3D diorama, with cuisine-specific counters, staff activity, visible queues, signage, and award plaques. Clicking a stall or selecting it from a list focuses the camera. Orbit, pan, zoom, hover feedback, and a reset-view control support navigation. Camera movement can be reduced or disabled.
 
-Visual states correspond to server state: cooking emits heat/steam; an unstaffed station looks inactive; a sold-out item is marked; a closed stall lowers its signage; a safety stop has an inspectable indicator. Smoke and steam are feedback, not an independent physics simulation.
+The stalls sit inside a four-walled hall with street-facing windows and a ceiling. When the camera is outside, the nearby walls and ceiling cut away to keep the stalls visible. From inside, the windows look onto a tree-lined street with hills beyond.
+
+Stall fronts and side walls show an illustration of a dish from the stall's cuisine. The stripe below the counter carries the localized cuisine name. The artwork and label represent the cuisine across menu changes and trading hours.
+
+With the 3D view focused, Up and Down walk forward and backward at aisle height. Left and Right turn in place. Holding Shift with Up or Down tilts the view, and holding Shift with Left or Right steps sideways. Walking stays on the hall floor and around stalls.
+
+Owners can choose **Inside my stall** in Hall to look outward from behind their
+own counter, selecting a location when their restaurant has expanded. Drag or
+use the look controls to turn; keyboard movement stays within the booth. Hide
+the proprietor figure at that viewpoint, while staff and customers remain
+visible. Closed shutters stay closed. **Return to hall** restores the previous
+hall camera, and Reset camera returns to the overview. Preserve the viewpoint
+across page changes; losing the location or owner access returns to the hall.
+This is a presentation option and performs no gameplay command or attendance
+change. Visitors retain the public hall and stall-list views.
+
+Cooking emits heat and steam, an unstaffed station looks inactive, a sold-out item is marked, and a safety stop has an inspectable indicator. Closed stalls lower a corrugated metal shutter with a spray-painted closure label in the selected language. Open stalls show a proprietor figure and, in the detailed view, one figure per on-duty staff position. A visitor helper represents their assigned counter position. The proprietor figure represents the business even during unattended service. Smoke and steam are feedback, not an independent physics simulation.
+
+Closed stalls display a counter placard with the next expected reopening in hall time when an opening is queued and current conditions support a forecast. A stall with an unset reopening time displays that status. The stall inspector and list show the same information.
 
 ### Performance and truthful animation
 
@@ -1256,6 +1289,10 @@ Use instancing and level of detail for crowds and repeated objects. Render the s
 Server events describe order and station state, work remaining, effective speed, and hall time. Clients animate between updates. A completed visual progress bar does not award money before the server confirms service. On reconnection, animation rebuilds from current authoritative state rather than replaying hours of effects.
 
 The first release may render representative crowd density at overview distances. Counts and detailed inspection must remain accurate; representative figures must not masquerade as extra paying customers. Physical customer pathfinding and collisions are cosmetic. A walking animation finishing never authorizes an economic transition.
+
+Waiting diner figures vary in clothing color, skin tone, and height. New figures fade in as they walk from the aisle to the stall. Figures leaving the queue walk into the aisle and fade out. Reduced motion skips both animations.
+
+After a committed handover, a departing customer carries the food tray from the counter. The counter tray represents current handover work, and a customer's tray fades with that customer. A cancellation produces no food-carrying departure.
 
 ### Audio and accessibility
 

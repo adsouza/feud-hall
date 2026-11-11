@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.adsouza.FeudHall</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>Feud Hall</name>
+  <summary>Manage a restaurant in an online food hall</summary>
+  <summary xml:lang="ja">オンラインのフードホールでレストランを経営</summary>
+  <description>
+    <p>Run a stall, visit the hall for a meal, or take a shift helping at the counter.</p>
+  </description>
+  <launchable type="desktop-id">io.github.adsouza.FeudHall.desktop</launchable>
+  <url type="homepage">https://github.com/adsouza/feud-hall</url>
+  <releases>
+    <release version="0.1.0" date="2026-11-10"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

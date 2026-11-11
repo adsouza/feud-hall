@@ -10,7 +10,8 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   a new availability epoch) for `opts[:owner]` and `opts[:scope]`, then sets the
   monotonic anchor to the clock's current reading. Options:
 
-    * `:store_mod`, `:store`, `:owner`, `:scope` (required);
+    * `:store_mod`, `:store`, `:scope` (required). An omitted `:owner` receives
+      a fresh incarnation ID each time the process starts;
     * `:clock` — `{module, ref}` implementing `FeudHall.Application.MonotonicClock`
       (default the system monotonic clock);
     * `:diagnostics` — a `FeudHall.Application.Diagnostics` configuration;
@@ -166,7 +167,8 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   def management_execute(pid, device, request),
     do: GenServer.call(pid, {:management_execute, device, request}, @call_timeout)
 
-  def management_view(pid, device), do: GenServer.call(pid, {:management_view, device}, @call_timeout)
+  def management_view(pid, device, params \\ %{}),
+    do: GenServer.call(pid, {:management_view, device, params}, @call_timeout)
 
   def dining_options(pid, device, params), do: GenServer.call(pid, {:dining_options, device, params}, @call_timeout)
 
@@ -186,6 +188,9 @@ defmodule FeudHall.Infrastructure.HallAuthority do
           recovery: Recovery.report()
         }
   def state(pid), do: GenServer.call(pid, :state, @call_timeout)
+
+  @doc "A bounded readiness query that returns no game or player data."
+  def readiness(pid), do: GenServer.call(pid, :readiness, 1_000)
 
   @doc "`{store_mod, store}` as held now; lets tests hand a value-typed store to another authority."
   def store(pid), do: GenServer.call(pid, :store, @call_timeout)
@@ -244,7 +249,10 @@ defmodule FeudHall.Infrastructure.HallAuthority do
   def init(opts) do
     s = %__MODULE__{
       store_mod: Keyword.fetch!(opts, :store_mod),
-      owner: Keyword.fetch!(opts, :owner),
+      owner:
+        Keyword.get_lazy(opts, :owner, fn ->
+          "web:" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+        end),
       scope: Keyword.fetch!(opts, :scope),
       clock: Keyword.get(opts, :clock, {SystemClock, nil}),
       diagnostics: Keyword.get(opts, :diagnostics),
@@ -280,8 +288,8 @@ defmodule FeudHall.Infrastructure.HallAuthority do
     end
   end
 
-  def handle_call({:management_view, device}, _from, s),
-    do: {:reply, FeudHall.Application.Management.view(s.runtime, device), s}
+  def handle_call({:management_view, device, params}, _from, s),
+    do: {:reply, FeudHall.Application.Management.view(s.runtime, device, params), s}
 
   def handle_call({:dining_options, device, params}, _from, s),
     do: {:reply, FeudHall.Application.DinerBrowse.compare(s.runtime, device, params), s}
@@ -291,6 +299,20 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
   def handle_call({:management_quote, device, params}, _from, s),
     do: {:reply, FeudHall.Application.Management.quote(s.runtime, device, params), s}
+
+  def handle_call(:readiness, _from, s) do
+    {clock, clock_ref} = s.clock
+
+    ready =
+      if s.runtime.mode == :ready and s.runtime.state != nil and
+           clock.now_ms(clock_ref) - s.anchor < s.max_gap_ms do
+        {:ready, s.scope, s.owner, s.held_epoch}
+      else
+        :unavailable
+      end
+
+    {:reply, ready, s}
+  end
 
   def handle_call(:state, _from, %{runtime: rt} = s) do
     {:reply,

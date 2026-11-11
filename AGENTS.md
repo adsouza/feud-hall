@@ -13,7 +13,7 @@ content through a recorded upgrade that preserves existing recipes and stock.
 The local [Project C report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md)
 records the original single-cuisine 150-stall measurement. Tests and the
 benchmark start authorities. The management game runs on Phoenix with a
-Bun/Svelte client under `web/`. Launch halls enable Milestone 5 diner
+Bun/Svelte client under `app/`. Launch halls enable Milestone 5 diner
 comparison, the 3D hall with its HTML alternative, and counter staging through
 a recorded activation. Use a dedicated database for a managed hall.
 See [local setup](docs/DEPLOYMENT.md#local-management-game). Inspect
@@ -45,7 +45,8 @@ ADRs. Link to the owning document rather than copying large specifications here.
 
 - Use Elixir/Phoenix, Ecto/PostgreSQL, and Phoenix Channels for the authoritative
   online service, deployed on Render. Use Svelte with TypeScript and Three.js
-  for the shared frontend; Tauri packages it for Linux and macOS.
+  for the shared frontend; Tauri under `app/src-tauri/` packages it for Linux
+  and macOS. See [local macOS launch](docs/DEPLOYMENT.md#build-and-open-the-macos-app).
 - Use Bun for frontend dependencies, scripts, TypeScript execution, and suitable
   tests, with a committed `bun.lock`. Use Oxlint for linting and native `bun check`
   for local and hosted TypeScript checks. Do not add ESLint or `tsc` CLI steps. Qualify Svelte
@@ -209,7 +210,7 @@ Consult the full design for conditions and tuning; these are common failure poin
   and leave the full suite and mutation cohort to hosted CI unless the owner
   approves otherwise. Inspect the frontend manifest before running any script.
 - For browser regressions, use `bun run test:browser --grep '<scenario>'` from
-  `web/` after building the client. The harness starts its own Phoenix endpoint
+  `app/` after building the client. The harness starts its own Phoenix endpoint
   and disposable PostgreSQL database. See
   [Management and web checks](docs/TESTING.md#management-and-web-checks).
 - Verify meaningful behavior at the layer changed. Documentation/artwork changes

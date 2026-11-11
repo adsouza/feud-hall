@@ -2,6 +2,7 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
   use FeudHall.PostgresCase
 
   alias FeudHall.Application.CommandWorkflow
+  alias FeudHall.Application.Replay
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.Hall
   alias FeudHall.Infrastructure.PostgresEventStore
@@ -62,6 +63,23 @@ defmodule FeudHall.Infrastructure.PostgresEventStoreTest do
       })
 
     event
+  end
+
+  test "paged replay folds a full cut and refuses corruption across a page boundary" do
+    store = fresh_store()
+    assert {:ok, store, 1} = PostgresEventStore.append(store, request(events: [initialized_event("h1")]))
+
+    store =
+      Enum.reduce(2..133, store, fn position, store ->
+        attrs = [command_id: "page-#{position}", events: [%{type: :clock_advanced, to: position * 24}]]
+        assert {:ok, store, ^position} = PostgresEventStore.append(store, next_request(store, attrs))
+        store
+      end)
+
+    assert {:ok, [%{position: 128}, %{position: 129}]} = PostgresEventStore.read_page(store, 127, 129, 5)
+    assert {:ok, %{position: 133, tail_batches: 133, hall: %{now: 3192}}} = Replay.load(PostgresEventStore, store)
+    Repo.query!("update events set payload = '{}' where position = 129")
+    assert {:error, {:undecodable, 129, _}} = Replay.load(PostgresEventStore, store)
   end
 
   describe "failure injection" do

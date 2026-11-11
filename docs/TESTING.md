@@ -303,6 +303,49 @@ redaction, report success before commit, or retry an economic command on exporte
 failure; require a named behavioral assertion to detect each fault. Use the
 existing local/hosted resource budgets rather than adding an unrestricted suite.
 
+## Release qualification commands
+
+The `release qualification` workflow builds the assembled server container,
+runs its explicit migrations, then probes health, protocol and restart against
+disposable PostgreSQL. Its optional capacity job runs both peak distributions
+and the launch catalog's archive and restore drill.
+
+Run the following from `server/` with matching PostgreSQL utilities on the
+path. Use a local PostgreSQL role that can create and drop disposable databases.
+The commands write JSON evidence to new paths.
+
+```sh
+python3 scripts/peak_sessions.py --scenario owners --output /tmp/feud-owners.json
+python3 scripts/peak_sessions.py --scenario expanded --output /tmp/feud-expanded.json
+python3 scripts/capacity_bench.py --mode launch --days 1 --restore --output /tmp/feud-capacity.json
+```
+
+The HTTP probe provisions 150 occupied stalls, 150 paid helper shifts and 150
+funded dining visits through normal commands. Three bursts each use 450 open
+HTTP connections, with 30 owner heartbeat commands in the first burst. The
+expanded case uses 50 owners with three stalls each and three sessions per
+owner. The probe validates the principal and private scope in each response.
+It measures burst latency, with the hall at a fixed game instant. The separate
+launch benchmark advances the economy at one service-second intervals,
+checks contested wholesale, paired trays and dessert service, and compares
+genesis and snapshot-tail recovery. Its archive drill verifies the logical
+backup against the restored committed head, hall/control state and rebuilt
+projections. A one-game-day run gives short-window evidence.
+
+Run `bun run test:browser --grep 'release boundary'` from `app/` to exercise
+the protocol, origin protection and a replayed revoked cookie against a
+disposable hall. From `app/src-tauri/`, run `cargo fmt --check` and
+`cargo test --locked --bin feud-hall` after `bun run desktop:assets` in
+`app/`. Keep Cargo to one local build job. The native workflow builds the
+macOS bundle, installs both Linux packages, and attempts their launch.
+In each packaged client, check Cmd (macOS) or Ctrl (Linux) with `+`/`=`, `-`,
+and `0` for whole-page zoom and reset. Check reflow, focused input/draft
+continuity, English/Japanese text, and the hall canvas at enlarged zoom; the
+camera controls must remain separate from page zoom.
+Track real installed-client gameplay, native IME and GPU measurements,
+live Render evidence, and a representative 30-real-day archive separately.
+See the [local Milestone 6 evidence](superpowers/reports/2026-11-10-milestone-6-local.md).
+
 ## Hosted CI and release evidence
 
 Build checks alongside each implementation slice; do not defer event/replay or
@@ -394,7 +437,7 @@ CI retains failure traces and hall logs. A separate Svelte template type-check
 and broader cross-browser coverage remain release qualification work.
 
 For a focused local browser run, fetch the locked Mix dependencies from
-`server/`. From `web/`, run `bun install --frozen-lockfile`, `bun run playwright
+`server/`. From `app/`, run `bun install --frozen-lockfile`, `bun run playwright
 install chromium`, `bun run --bun build`, and `bun run test:browser --grep
 '<scenario>'`. Use local PostgreSQL with a role that can create and drop test
 databases. Each scenario uses its own loopback port and creates and drops a
@@ -403,7 +446,7 @@ starts the test endpoint without the live hall environment file. Respect the
 local worker and memory limits above.
 
 To regenerate the launch cuisine map after changing its
-source footprints, run `bun scripts/build-map.js` from `web/`. The equal-area
+source footprints, run `bun scripts/build-map.js` from `app/`. The equal-area
 view uses D3's Equal Earth projection and [Natural Earth public-domain land
 geometry](https://www.naturalearthdata.com/about/terms-of-use/) distributed by
 [World Atlas](https://github.com/topojson/world-atlas). The highlighted areas are

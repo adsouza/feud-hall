@@ -6,6 +6,32 @@ defmodule FeudHall.Application.DinerBrowse do
 
   @limit 12
 
+  @doc "Available mains and their compatible drinks for one stall and dietary profile."
+  def checkout_menu(state, stall_id, profile_id) when is_binary(stall_id) and is_binary(profile_id) do
+    mains =
+      with {:ok, requirement} <- Dietary.requirement(state.catalog, profile_id),
+           {:ok, _stall, restaurant} <- Offers.open_stall_for_main(state, stall_id) do
+        terms = %{requirement: requirement, carbs_reserved: 0, carbs_served: 0}
+        recipes = state.catalog.recipes
+        menu = Enum.sort(Map.keys(restaurant.menu))
+        drinks = Enum.filter(menu, &match?(%{kind: :drink}, recipes[&1]))
+
+        for main <- menu,
+            match?(%{kind: :main}, recipes[main]),
+            match?({:ok, _}, Offers.quote_tray(state, stall_id, main, nil, terms)),
+            into: %{} do
+          available = Enum.filter(drinks, &match?({:ok, _}, Offers.quote_tray(state, stall_id, main, &1, terms)))
+          {main, available}
+        end
+      else
+        {:error, _} -> %{}
+      end
+
+    %{stall_id: stall_id, profile_id: profile_id, mains: mains}
+  end
+
+  def checkout_menu(_state, _stall_id, _profile_id), do: nil
+
   def compare(%{state: nil}, _device, _params), do: {:error, :hall_not_initialized}
 
   def compare(runtime, device, params) do

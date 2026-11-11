@@ -4,12 +4,21 @@ defmodule FeudHall.Web.Router do
   alias FeudHall.Web.{Protocol, RateLimit, Token}
 
   @cookie "_feud_device"
+  @protocol "1"
   plug(:secure_headers)
+  plug(:client_protocol)
   plug(:match)
   plug(:dispatch)
 
+  get "/healthz" do
+    if FeudHall.Web.Readiness.ready?(authority()),
+      do: respond(conn, 200, %{ready: true}),
+      else: respond(conn, 503, %{ready: false})
+  end
+
   get "/api/state" do
-    run(conn, fn -> HallAuthority.management_view(authority(), device(conn)) end)
+    params = fetch_query_params(conn).query_params
+    run(conn, fn -> HallAuthority.management_view(authority(), device(conn), params) end)
   end
 
   get "/api/dining-options" do
@@ -100,6 +109,18 @@ defmodule FeudHall.Web.Router do
     |> put_resp_header("x-content-type-options", "nosniff")
     |> put_resp_header("content-security-policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'")
   end
+
+  defp client_protocol(%{path_info: ["api" | _]} = conn, _opts) do
+    conn = put_resp_header(conn, "x-feud-protocol", @protocol)
+
+    case get_req_header(conn, "x-feud-protocol") do
+      [] -> conn
+      [@protocol] -> conn
+      _ -> conn |> respond(426, %{error: :client_update_required}) |> halt()
+    end
+  end
+
+  defp client_protocol(conn, _opts), do: conn
 
   defp device(conn) do
     case Token.verify(:device, fetch_cookies(conn).req_cookies[@cookie]) do

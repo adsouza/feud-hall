@@ -61,6 +61,8 @@ defmodule FeudHall.CapacityBench.Store do
   @impl true
   defdelegate read_from(store, position), to: Store
   @impl true
+  defdelegate read_page(store, position, head, limit), to: Store
+  @impl true
   defdelegate receipt(store, command_id), to: Store
   @impl true
   defdelegate acquire_authority(store, scope, owner), to: Store
@@ -115,8 +117,8 @@ defmodule FeudHall.CapacityBench do
   alias FeudHall.Application.CommandWorkflow
   alias FeudHall.CapacityBench.{Samples, Store}
   alias FeudHall.CapacityBench.Clock, as: InjectedClock
-  alias FeudHall.Domain.{Clock, Control, Hall}
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.Domain.{Clock, Control, Hall, Market}
+  alias FeudHall.Domain.Content.{LaunchCatalog, SliceCatalog}
   alias FeudHall.Infrastructure.{HallAuthority, PostgresEventStore, Repo}
   alias FeudHall.Infrastructure.Postgres.DailyActivityProjector
 
@@ -127,7 +129,7 @@ defmodule FeudHall.CapacityBench do
   @projector_interval 10
   @recovery_extra_ticks 299
 
-  def run(days, report) when days in 1..7 do
+  def run(days, report, mode) when days in 1..7 and mode in ["slice", "launch"] do
     start_database!()
     Samples.open()
     clock = :atomics.new(1, [])
@@ -148,8 +150,19 @@ defmodule FeudHall.CapacityBench do
       HallAuthority.execute(authority, %{
         command_id: "capacity-initialize",
         actor: {:system, :admin},
-        command: {:initialize_hall, %{hall_id: "capacity", catalog: catalog()}}
+        command: {:initialize_hall, %{hall_id: "capacity", catalog: catalog(mode), managed: mode == "launch"}}
       })
+
+    if mode == "launch" do
+      {:accepted, _} =
+        HallAuthority.execute(authority, %{
+          command_id: "capacity-enable-visitor-play",
+          actor: {:system, :admin},
+          command: {:enable_visitor_play, %{}}
+        })
+
+      seed_competing_purchases(authority)
+    end
 
     %{hall: hall, position: start_position, service_ms: 0} = HallAuthority.state(authority)
     @stall_count = map_size(hall.restaurants)
@@ -282,6 +295,7 @@ defmodule FeudHall.CapacityBench do
       workload: workload,
       recovery: recovery,
       stalls: @stall_count,
+      mode: mode,
       game_days: days,
       clock_step_service_ms: 1_000,
       equivalent_floor_millis: @equivalent_floor_millis,
@@ -312,8 +326,8 @@ defmodule FeudHall.CapacityBench do
     _versions = Ecto.Migrator.run(Repo, :up, all: true, log: false)
   end
 
-  defp catalog do
-    catalog = SliceCatalog.catalog()
+  defp catalog(mode) do
+    catalog = if mode == "launch", do: LaunchCatalog.catalog(), else: SliceCatalog.catalog()
     profiles = catalog.npc_profiles
 
     npcs =
@@ -332,9 +346,31 @@ defmodule FeudHall.CapacityBench do
         {product, div(cap * @equivalent_floor_millis, old_floor)}
       end)
 
+    mint_floor = catalog.rules.market.target_stock_per_equivalent["mint"] * 3
+    caps = if mode == "launch", do: Map.put(caps, "mint", mint_floor), else: caps
+
     %{catalog | npc_profiles: npcs}
     |> put_in([:rules, :demand, :equivalent_floor_millis], @equivalent_floor_millis)
     |> put_in([:rules, :market, :replenish_cap], caps)
+  end
+
+  defp seed_competing_purchases(authority) do
+    hall = HallAuthority.state(authority).hall
+    stock = Map.fetch!(hall.market.stock, "mint")
+    qty = div(stock * 3, 4)
+    true = qty * 2 > stock
+    price = Market.price(hall.catalog, hall.market, "mint")
+
+    for {operator, npc} <- hall.npcs |> Enum.sort() |> Enum.take(2) do
+      {:accepted, _} =
+        HallAuthority.execute(authority, %{
+          command_id: "capacity-mint:#{operator}",
+          actor: {:npc, operator},
+          command:
+            {:submit_purchase_request,
+             %{restaurant_id: npc.restaurant_id, product: "mint", qty: qty, max_price_per_kunit: price}}
+        })
+    end
   end
 
   defp drive(authority, clock, first, last, projector, sample) do
@@ -436,5 +472,5 @@ defmodule FeudHall.CapacityBench do
   end
 end
 
-[days, report] = System.argv()
-FeudHall.CapacityBench.run(String.to_integer(days), report)
+[days, report, mode] = System.argv()
+FeudHall.CapacityBench.run(String.to_integer(days), report, mode)

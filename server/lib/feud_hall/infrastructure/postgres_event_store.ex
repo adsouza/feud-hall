@@ -443,6 +443,11 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   end
 
   @impl true
+  def read_page(store, after_position, head, limit) do
+    with {:ok, result} <- attempt(fn -> read_after(store.repo, after_position, limit, head) end), do: result
+  end
+
+  @impl true
   def guest_visit_events(store, stream, principal, head, before, limit) do
     with {:ok, %{rows: rows}} <-
            attempt(fn ->
@@ -539,15 +544,18 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
   like `read_from/2`. Lets an asynchronous consumer page through the log without loading it whole.
   """
   @spec read_after(module(), non_neg_integer(), pos_integer() | nil) :: {:ok, [map()]} | {:error, term()}
-  def read_after(repo, after_position, limit) do
+  def read_after(repo, after_position, limit), do: read_after(repo, after_position, limit, nil)
+
+  defp read_after(repo, after_position, limit, head) do
     %{rows: batches} =
       repo.query!(
         """
         select b.position, b.command_id, b.hall_ms, b.event_count, previous.hall_ms
         from batches b left join batches previous on previous.position = b.position - 1
-        where b.position > $1 order by b.position limit $2
+        where b.position > $1 and ($3::bigint is null or b.position <= $3)
+        order by b.position limit $2
         """,
-        [after_position, limit]
+        [after_position, limit, head]
       )
 
     upper = batches |> List.last() |> then(&(&1 && hd(&1)))

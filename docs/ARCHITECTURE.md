@@ -491,6 +491,17 @@ and stale-session cases. Use the official
 [Tauri trust boundaries](https://v2.tauri.app/security/) when implementing these
 adapters; framework defaults alone do not establish the application's contract.
 
+The bundled native webview restricts navigation to its own assets, denies
+popups, and exposes the hall transport plus the core webview page-zoom operation
+to the local main window. Tauri's built-in zoom shortcuts scale the entire
+native page; the web client keeps the browser's own zoom handling. The Rust client fixes the
+server origin at build time, restricts methods and paths, rejects redirects,
+and holds the signed device cookie in the OS credential store. It sends the
+same credential, origin and command guard to Phoenix. The bridge returns
+response status and JSON to JavaScript. Native protocol version 1 is explicit.
+Phoenix refuses unsupported versions before handling the request. Existing
+same-origin web clients can omit the version header.
+
 ### Reconnection and optimistic UI
 
 Clients track connection state and the last projection version. After a gap they request an authoritative snapshot, or a contiguous delta range if still available. Missing or out-of-order versions trigger resynchronization. Business connection presence is advisory; persisted ownership and operating policy determine economic authority.
@@ -641,6 +652,13 @@ money, or a queue place. A rendered pickup, notification, or receipt click
 is a presentation action. Committed events drive service and the dessert
 offer clock. Both the HTML and 3D views invoke the same authorized use cases
 and share active visit and pending command identities.
+
+The public hall carries a bounded runtime projection of completed counter service,
+with one latest batch-position/event-offset marker per occupied stall. It updates
+after a successful append and contains no order or customer identifiers. Recovery
+establishes a fresh animation baseline. The 3D view uses new markers to move a tray
+from the counter into a departing figure's hands, including when another customer
+has already replaced that figure in the queue.
 
 Successful shift completion and its server-owned task/end-time evidence grant
 service-level licensing eligibility in the same cross-stream batch as the hall's
@@ -909,6 +927,14 @@ deliverables; the packaging jobs remain implementation work.
 
 The lack of a paid Apple Developer account is a distribution constraint. Initial macOS builds may require ad-hoc signing and explicit user approval in system security settings; seamless notarized distribution is not promised. Verify the actual install flow before publishing. See [Tauri macOS code signing](https://v2.tauri.app/distribute/sign/macos/). Tauri updater artifact signatures are a separate concern from Apple signing/notarization; automatic updates are a later release task.
 
+Local packaged development builds can reuse an Apple Development identity
+through a Git-ignored macOS configuration override. A stable designated
+requirement lets Keychain recognize updated builds as the same application;
+ad-hoc signing identifies each specific build. Keep signing keys in Keychain
+and qualify session continuity across rebuilds. See
+[stable local signing](DEPLOYMENT.md#stable-local-macos-signing) for setup and
+the distinction between bundled playtesting and the unbundled Cargo runner.
+
 ## Localization and presentation boundaries
 
 English and Japanese are launch locales under the [game-design contract](GAME_DESIGN.md#ui-languages-and-localization). Implement shared internationalization in the Svelte client used by web and Tauri, with application/presentation adapters for server-rendered player messages. Keep locale out of economic decisions, identifiers, random state, prices, clock rules, and authorization. Per-installation/browser language preference is presentation state; changing it performs no economic command or clock advance.
@@ -929,6 +955,12 @@ create two independently submitting forms or duplicate socket subscriptions
 because both layouts exist. Reflow, orientation, browser Back, and virtual
 keyboard changes preserve composition/drafts and cannot submit a command.
 Revalidate any restored quote against current authority and content.
+
+The hall camera state may include an owner's inside-stall viewpoint and its
+previous public-hall pose. Resolve eligible locations from the current private
+restaurant projection, validate them on each scene update, and leave the booth
+when ownership or the location disappears. Restore the public pose on exit;
+viewpoint changes do not issue gameplay commands or grant private capabilities.
 
 Use content-driven CSS layout and available container/viewport width, with input
 capability and text zoom considered independently of device names or physical
@@ -1199,8 +1231,10 @@ Implementation decisions within the contracts above:
   snapshots, skips one beyond the store head, and falls back to older ones or
   genesis. New verified snapshots pin stream versions for exact comparison
   after folding the tail. Older compatible snapshots still provide a checked
-  state and batch position. Snapshots never justify skipping history that
-  fails to replay.
+  state and batch position. PostgreSQL replay reads bounded pages up to a
+  captured head, verifies contiguous batch positions and stream versions,
+  and checks the head again before adopting the folded state. Snapshots never
+  justify skipping history that fails to replay.
 - **Checked replay and Project A transition.** Startup recovery,
   uncertain-commit resolution, and balance/stock rebuild share the
   complete-batch checks at a fixed committed head. A gap, inconsistent

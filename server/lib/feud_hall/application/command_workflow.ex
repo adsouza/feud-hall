@@ -55,6 +55,7 @@ defmodule FeudHall.Application.CommandWorkflow do
             epoch: nil,
             mode: :ready,
             pending: nil,
+            counter_services: %{},
             diagnostics: nil
 
   @type t :: %__MODULE__{}
@@ -382,7 +383,14 @@ defmodule FeudHall.Application.CommandWorkflow do
           {[], [], Map.merge(receipt, %{outcome: {:rejected, reason}, event_count: 0})}
       end
 
-    candidate = Hall.replay(events, runtime.state)
+    {candidate, counter_services} =
+      FeudHall.Application.Projections.CounterService.fold(
+        events,
+        runtime.state,
+        runtime.counter_services,
+        runtime.position + 1
+      )
+
     candidate_control = Control.replay(control_events, runtime.control)
     request = append_request(runtime, envelope, events, control_events, receipt, candidate)
 
@@ -393,6 +401,7 @@ defmodule FeudHall.Application.CommandWorkflow do
           | store: store,
             position: position,
             state: candidate,
+            counter_services: counter_services,
             control: candidate_control,
             versions: %{
               hall: runtime.versions.hall + length(events),

@@ -164,6 +164,103 @@ defmodule FeudHall.Application.VisitorPlayTest do
     end
   end
 
+  test "checkout menu hides reserved stock while leaving the advertised menu intact" do
+    rt = boot(InMemoryEventStore, InMemoryEventStore.new(), with_drink: true)
+    params = %{"stall_id" => @stall, "profile_id" => "vegan"}
+
+    assert {:ok, %{checkout_menu: %{stall_id: @stall, profile_id: "vegan", mains: %{@recipe => ["mint_lemonade"]}}}} =
+             Management.view(rt, nil, params)
+
+    reserved = fn products ->
+      update_in(rt.state.restaurants["npc-budget"].batches, fn batches ->
+        Map.new(batches, fn {id, batch} ->
+          {id, if(batch.product in products, do: %{batch | reserved: batch.qty}, else: batch)}
+        end)
+      end)
+    end
+
+    assert {:ok, %{checkout_menu: %{mains: %{@recipe => []}}}} =
+             Management.view(reserved.(["mint"]), nil, params)
+
+    assert {:ok, %{checkout_menu: %{mains: mains}, hall: %{stalls: stalls}}} =
+             Management.view(reserved.(["chickpeas_dried"]), nil, params)
+
+    assert mains == %{}
+    assert Map.has_key?(Enum.find(stalls, &(&1.stall_id == @stall)).menu, @recipe)
+  end
+
+  test "public stall activity counts staffed positions only while open" do
+    {rt, _helper} = helper_with_incoming(InMemoryEventStore, InMemoryEventStore.new())
+    assert {:ok, %{hall: %{stalls: [%{open?: true, activity: %{workers: 3}}]}}} = Management.view(rt, nil)
+
+    rt =
+      rt
+      |> run("hire-on-duty", @npc, :hire_staff, %{stall_id: @stall, role: :counter, start_hour: 0, end_hour: 1})
+      |> run("hire-off-duty", @npc, :hire_staff, %{stall_id: @stall, role: :counter, start_hour: 1, end_hour: 2})
+
+    assert {:ok, %{hall: %{stalls: [%{open?: true, activity: %{workers: 4}}]}}} = Management.view(rt, nil)
+
+    rt = run(rt, "close", @npc, :close_stall, %{stall_id: @stall})
+    assert {:ok, %{hall: %{stalls: [%{open?: false, activity: %{workers: 0}}]}}} = Management.view(rt, nil)
+  end
+
+  test "reopening estimates follow the hall gate and queued staff coverage" do
+    rt = boot(InMemoryEventStore, InMemoryEventStore.new())
+    hour = Clock.hour()
+    six = 6 * hour
+    next_six = Clock.day() + six
+    assert {:ok, %{hall: %{stalls: [%{open?: true, reopens_at: nil}]}}} = Management.view(rt, nil)
+
+    rt = advance(rt, Clock.cleaning_start_of(0))
+    five = Clock.cleaning_end_of(0)
+    assert {:ok, %{hall: %{stalls: [%{open?: false, reopens_at: ^five}]}}} = Management.view(rt, nil)
+
+    rt = run(rt, "manual-close", @npc, :close_stall, %{stall_id: @stall})
+    assert {:ok, %{hall: %{stalls: [%{open?: false, reopens_at: nil}]}}} = Management.view(rt, nil)
+
+    rt =
+      rt
+      |> run("shift-hours", @npc, :set_staff_schedule, %{stall_id: @stall, start_hour: 6, end_hour: 10})
+      |> run("opening", @npc, :open_stall, %{stall_id: @stall})
+
+    assert {:ok, %{hall: %{stalls: [%{open?: false, reopens_at: ^six}]}}} = Management.view(rt, nil)
+    rt = advance(rt, five)
+    assert {:ok, %{hall: %{stalls: [%{open?: false, reopens_at: ^six}]}}} = Management.view(rt, nil)
+    rt = advance(rt, six)
+    assert {:ok, %{hall: %{stalls: [%{open?: true, reopens_at: nil}]}}} = Management.view(rt, nil)
+    rt = advance(rt, 10 * hour)
+    assert {:ok, %{hall: %{stalls: [%{open?: false, reopens_at: ^next_six}]}}} = Management.view(rt, nil)
+  end
+
+  test "public handover markers publish only committed service and exclude cancellations" do
+    rt = boot(InMemoryEventStore, InMemoryEventStore.new()) |> simulated("first")
+    %{service_at: finish} = FeudHall.Domain.Kitchen.counter_forecast(rt.state, @stall)[{:tray, "T:first"}]
+    payload = %{to_service_ms: Clock.service_ms(finish + Clock.ratio() - 1)}
+    failing = %{rt | store: InMemoryEventStore.fail_next(rt.store, :before_commit)}
+
+    assert {:error, :unavailable, failed} =
+             command(failing, "serve", {:system, :scheduler}, :advance_clock, payload)
+
+    assert failed.counter_services == %{}
+    assert {:accepted, _, rt} = command(failed, "serve", {:system, :scheduler}, :advance_clock, payload)
+    marker = rt.counter_services[@stall]
+    assert is_binary(marker)
+    assert rt.state.trays == %{}
+    assert {:ok, %{hall: %{stalls: [%{last_service: ^marker}]}}} = Management.view(rt, nil)
+
+    next = simulated(rt, "cancelled")
+    events = FeudHall.Domain.Hall.Settlement.cancel_tray(next.state, next.state.trays["T:cancelled"], :cleaning)
+
+    {candidate, markers} =
+      FeudHall.Application.Projections.CounterService.fold(events, next.state, next.counter_services, next.position + 1)
+
+    assert candidate == FeudHall.Domain.Hall.replay(events, next.state)
+    assert markers[@stall] == marker
+    assert {:ok, reopened} = CommandWorkflow.open(InMemoryEventStore, rt.store)
+    assert reopened.state == rt.state
+    assert reopened.counter_services == %{}
+  end
+
   defp boot(adapter, store, options \\ []) do
     {:ok, rt, _} = Recovery.recover(adapter, store, "test", scope: "hall:test")
     catalog = FeudHall.Fixtures.quiet_catalog(SliceCatalog.catalog())

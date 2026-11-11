@@ -1,0 +1,105 @@
+name: release qualification
+
+on:
+  push:
+    branches: [main]
+    paths: ["Dockerfile", ".dockerignore", "render.yaml", "app/**", "server/**", "assets/branding/**", ".github/workflows/release.yml"]
+  pull_request:
+    paths: ["Dockerfile", ".dockerignore", "render.yaml", "app/**", "server/**", "assets/branding/**", ".github/workflows/release.yml"]
+  workflow_dispatch:
+    inputs:
+      capacity:
+        description: "Run the 150-stall and 450-session qualification probes"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: feud_hall_release
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      FEUD_HALL_SERVE: '1'
+      FEUD_HALL_SECRET: 'disposable-ci-release-signing-key-00000'
+      FEUD_HALL_ORIGIN: 'http://localhost:4000'
+      DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:5432/feud_hall_release'
+      ERL_FLAGS: '+S 2:2 +SDio 1 +SDcpu 1'
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag feud-hall-ci .
+      - name: Migrate and boot the assembled release
+        run: |
+          envs=(-e FEUD_HALL_SERVE -e FEUD_HALL_SECRET -e FEUD_HALL_ORIGIN -e DATABASE_URL -e ERL_FLAGS)
+          docker run --rm --network host "${envs[@]}" --entrypoint /app/bin/feud_hall feud-hall-ci eval 'FeudHall.Release.migrate()'
+          docker run -d --name feud-hall-ci --network host "${envs[@]}" feud-hall-ci
+          curl --fail --retry 30 --retry-all-errors --retry-delay 1 http://localhost:4000/healthz
+          curl --fail -H 'x-feud-protocol: 1' http://localhost:4000/api/state | jq -e '.hall.visitor_play'
+          curl --fail http://localhost:4000/ | grep -q 'Feud Hall'
+      - name: Restart at the existing durable head
+        run: |
+          docker restart feud-hall-ci
+          curl --fail --retry 30 --retry-all-errors --retry-delay 1 http://localhost:4000/healthz
+          curl --fail -H 'x-feud-protocol: 1' http://localhost:4000/api/state | jq -e '.hall.visitor_play'
+      - if: failure()
+        run: docker logs feud-hall-ci
+
+  capacity:
+    if: inputs.capacity == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: server
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      ERL_FLAGS: '+S 2:2 +SDio 1 +SDcpu 1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: server/.tool-versions
+          version-type: strict
+      - name: Install matching PostgreSQL utilities
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' |
+            sudo tee /etc/apt/sources.list.d/feud-hall-postgresql.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+          echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+      - run: mix deps.get --check-locked
+      - name: Measure authenticated session peaks and durable recovery
+        run: |
+          ulimit -n 4096
+          python3 scripts/peak_sessions.py --scenario owners --output "$RUNNER_TEMP/owners.json"
+          python3 scripts/peak_sessions.py --scenario expanded --output "$RUNNER_TEMP/expanded.json"
+          python3 scripts/capacity_bench.py --mode launch --days 1 --restore --output "$RUNNER_TEMP/capacity.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-capacity
+          path: |
+            ${{ runner.temp }}/owners.json
+            ${{ runner.temp }}/expanded.json
+            ${{ runner.temp }}/capacity.json
+          if-no-files-found: error

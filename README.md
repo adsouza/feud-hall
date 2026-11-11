@@ -26,3 +26,7 @@ Coding agents should start with [AGENTS.md](AGENTS.md) for repository convention
 Build the Svelte client, then start the Phoenix server against a dedicated local
 PostgreSQL database. See [local setup](docs/DEPLOYMENT.md#local-management-game)
 for configuration and initial owner seeding.
+
+The macOS desktop app uses the same local hall. Build and open the app from
+`app/` with the [macOS instructions](docs/DEPLOYMENT.md#build-and-open-the-macos-app).
+Hosted jobs build the macOS bundle, Debian package, and Flatpak.
