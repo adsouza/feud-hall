@@ -4,6 +4,7 @@
   import type { Key } from "./i18n";
   import type { CameraState, HallTarget, createHallScene } from "./hall-scene";
   import type { TabletView, TabletAction } from "./hall-tablet";
+  import type { PersonalTray } from "./diner-pickup";
   import { createHallAudio } from "./hall-audio";
 
   let {
@@ -11,6 +12,8 @@
     ownedStalls,
     selected,
     pickup,
+    pickups,
+    onTakePickup,
     tablet,
     onTabletAction,
     saved,
@@ -29,6 +32,8 @@
     ownedStalls: Stall[];
     selected: string;
     pickup: string;
+    pickups: PersonalTray[];
+    onTakePickup: (id: string) => boolean;
     tablet: TabletView | null;
     onTabletAction: (id: string, action: TabletAction) => void;
     saved: CameraState | undefined;
@@ -62,6 +67,7 @@
   let ambience = $state(0.55);
   let effects = $state(0.5);
   let lastSelection = "";
+  let pickupStatus = $state<"" | "taking" | "taken">("");
   let inside = $state(saved?.inside?.stall ?? "");
   let ownerLocation = $state(saved?.inside?.stall ?? "");
   let ownerStall = $derived(
@@ -86,9 +92,19 @@
               select: (id) => inspect(id),
               interact,
               tablet: onTabletAction,
+              collect: (id) => {
+                if (!onTakePickup(id)) return false;
+                pickupStatus = "taking";
+                return true;
+              },
+              collected: () => (pickupStatus = "taken"),
               hover: (id) => (hovered = id),
               fail: onUnavailable,
               inside: (id) => (inside = id),
+              walk: (id) => {
+                lastSelection = id;
+                select(id);
+              },
             },
             saved,
           );
@@ -115,6 +131,7 @@
       ownedStalls: ownedStalls.map((stall) => stall.stall_id),
       selected,
       pickup,
+      pickups,
       closedLabel: t("closed").toUpperCase(),
       cuisineLabel: title,
       reopeningHeading: t("reopeningExpected"),
@@ -176,6 +193,16 @@
   <button aria-pressed={immersive} onclick={toggleImmersive}
     >{t(immersive ? "leaveImmersiveHall" : "enterImmersiveHall")}</button
   >
+  {#if pickups.some((tray) => tray.stall === selected)}
+    <button
+      aria-keyshortcuts="F"
+      disabled={!hall || pickupStatus === "taking"}
+      onclick={() => {
+        const tray = pickups.find((tray) => tray.stall === selected);
+        if (tray) hall?.takePickup(tray.id);
+      }}>{t("takeTray")}</button
+    >
+  {/if}
   {#if selected}
     {#each ["menu", "counter", "staff", ...(ownedStalls.some((stall) => stall.stall_id === selected) ? ["supply"] : [])] as target}
       <button
@@ -186,16 +213,23 @@
     {/each}
   {/if}
 </div>
+<span class="sr-only" role="status"
+  >{pickupStatus === "taking"
+    ? t("takingTray")
+    : pickupStatus === "taken"
+      ? t("trayTaken")
+      : ""}</span
+>
 <p class="keyboard-help">{t("hallInteractHelp")}</p>
 {#if tablet}
   <p role="status" class="keyboard-help">{t("tabletKeyboardHelp")}</p>
   <details class="tablet-text-controls">
     <summary>{t("tabletAccessible")}</summary>
     <h2>{tablet.title} · {tablet.subtitle}</h2>
-    <p>{tablet.notice}</p>
+    <p class:tablet-error={tablet.noticeError}>{tablet.notice}</p>
     <ol>
       {#each tablet.rows as row, index}
-        <li>
+        <li class:tablet-error={row.error}>
           {#if row.action}<button
               data-tablet-kind={row.action.kind}
               data-tablet-id={"id" in row.action ? row.action.id : undefined}
@@ -326,6 +360,9 @@
 {#if soundFailed}<p role="status">{t("soundUnavailable")}</p>{/if}
 
 <style>
+  .tablet-error {
+    color: #ff8f93;
+  }
   .scene {
     position: relative;
     border: 1px solid var(--line);

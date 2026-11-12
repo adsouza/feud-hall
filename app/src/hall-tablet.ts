@@ -22,6 +22,7 @@ export type TabletAction =
     };
 export type TabletRow = {
   text: string;
+  error?: boolean;
   detail?: string;
   action?: TabletAction;
   disabled?: boolean;
@@ -33,6 +34,7 @@ export type TabletView = {
   title: string;
   subtitle: string;
   notice: string;
+  noticeError?: boolean;
   rows: TabletRow[];
   previous: string;
   next: string;
@@ -105,7 +107,7 @@ export function createTabletScreen(redraw: () => void) {
     text(view.title, 30, 22, 660, 42, 1);
     context.fillStyle = "#e8efef";
     text(view.subtitle, 30, 76, 660, 32, 1);
-    context.fillStyle = "#9be5d0";
+    context.fillStyle = view.noticeError ? "#ff8f93" : "#9be5d0";
     text(view.notice, 30, 120, 660, 28, 2);
     const rows = view.rows.slice(page * PER_PAGE, (page + 1) * PER_PAGE);
     targets = [];
@@ -118,11 +120,13 @@ export function createTabletScreen(redraw: () => void) {
         height: ROW_HEIGHT - 8,
         action: row.disabled ? undefined : row.action,
       };
-      context.fillStyle = row.selected
-        ? "#234941"
-        : row.action
-          ? "#253145"
-          : "#172232";
+      context.fillStyle = row.error
+        ? "#351e29"
+        : row.selected
+          ? "#234941"
+          : row.action
+            ? "#253145"
+            : "#172232";
       context.fillRect(target.x, target.y, target.width, target.height);
       if (target.action) {
         targets.push(target);
@@ -140,7 +144,11 @@ export function createTabletScreen(redraw: () => void) {
           );
         }
       }
-      context.fillStyle = row.disabled ? "#9ca9b9" : "#ffffff";
+      context.fillStyle = row.error
+        ? "#ff8f93"
+        : row.disabled
+          ? "#9ca9b9"
+          : "#ffffff";
       text(row.text, 36, y + 12, 648, 36, row.detail ? 1 : 2);
       if (row.detail) {
         context.fillStyle = "#b9d4d7";
@@ -200,8 +208,20 @@ export function createTabletScreen(redraw: () => void) {
     update(next: TabletView) {
       const key = JSON.stringify(next);
       if (key === fingerprint) return;
-      if (next.stall !== view?.stall || next.subtitle !== view?.subtitle) {
-        page = 0;
+      const errorIndex = next.rows.findIndex((row) => row.error);
+      const errors = (rows: TabletRow[]) =>
+        rows
+          .filter((row) => row.error)
+          .map((row) => row.text)
+          .join("\n");
+      const newError =
+        errorIndex >= 0 && errors(next.rows) !== errors(view?.rows ?? []);
+      if (
+        next.stall !== view?.stall ||
+        next.subtitle !== view?.subtitle ||
+        newError
+      ) {
+        page = errorIndex >= 0 ? Math.floor(errorIndex / PER_PAGE) : 0;
         focused = -1;
       }
       view = next;

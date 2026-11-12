@@ -94,10 +94,35 @@ test("a diner orders and follows service at the 3D counter without leaving the h
   await tap("review");
   const quoted = await (await quoteResponse).json();
   await expect(rows.locator('[data-tablet-kind="confirm"]')).toBeAttached();
+  await expect(rows.locator("li")).toHaveCount(
+    quoted.terms.components.length + 4,
+  );
+  expect(
+    quoted.terms.components.every(
+      (component: { lines: unknown[] }) => component.lines.length > 0,
+    ),
+  ).toBe(true);
+  expect(
+    Number(
+      await rows
+        .locator('[data-tablet-kind="confirm"]')
+        .getAttribute("data-tablet-row"),
+    ),
+  ).toBeLessThan(6);
   await page.screenshot({
     path: testInfo.outputPath("hall-tablet-checkout.png"),
   });
-  let attempts: { command_id: string; kind: string }[] = [];
+  const hallGeometry = () =>
+    host.evaluate((element) => ({
+      top: element.getBoundingClientRect().top + window.scrollY,
+      height: element.getBoundingClientRect().height,
+    }));
+  const beforeOrder = await hallGeometry();
+  let attempts: {
+    command_id: string;
+    kind: string;
+    payload: { confirmed: unknown };
+  }[] = [];
   await page.route("**/api/commands", async (route) => {
     const data = route.request().postDataJSON();
     if (data.kind !== "admit_visit") return route.continue();
@@ -108,14 +133,21 @@ test("a diner orders and follows service at the 3D counter without leaving the h
   });
   await tap("confirm");
   await expect(rows.locator('[data-tablet-kind="retry"]')).toBeAttached();
+  await expect(page.locator("main > .banner:not(.success-notice)")).toHaveCount(
+    0,
+  );
+  expect(await hallGeometry()).toEqual(beforeOrder);
   await tap("retry");
   await expect(rows.locator('[data-tablet-kind="retry"]')).toHaveCount(0);
   expect(attempts).toHaveLength(2);
   expect(attempts[0].command_id).toBe(attempts[1].command_id);
+  expect(attempts[0].payload.confirmed).toEqual(quoted.terms);
   await expect
     .poll(async () => (await state(page)).profile.visit?.stall)
     .toBe("s001");
   const view = await state(page);
+  await expect(page.locator(".visit-tracker")).toHaveCount(0);
+  expect(await hallGeometry()).toEqual(beforeOrder);
   await host.focus();
   await host.press("Escape");
   await page
@@ -127,8 +159,15 @@ test("a diner orders and follows service at the 3D counter without leaving the h
   await expect(rows.locator('[data-tablet-kind="dessert"]')).toHaveCount(0);
   await tap("visit");
   await expect(host).toHaveAttribute("data-hall-tablet", "s001");
+  const beforeService = await hallGeometry();
   await hall.control({ advance_to: view.profile.visit.estimate });
-  await expect(rows).toContainText(/Meal served|Tray served/);
+  await expect(rows.locator('[data-tablet-kind="main"]')).toBeAttached();
+  await expect(rows.locator('[data-tablet-kind="review"]')).toBeDisabled();
+  await expect(rows).not.toContainText(
+    /Meal served|Tray served|Estimated wait|Charged|Checking the menu/,
+  );
+  await expect(page.locator(".visit-tracker")).toHaveCount(0);
+  expect(await hallGeometry()).toEqual(beforeService);
   expect((await state(page)).profile.balance).toBe(
     (1200n - BigInt(quoted.total)).toString(),
   );
@@ -136,6 +175,12 @@ test("a diner orders and follows service at the 3D counter without leaving the h
     await page.request.get(hall.origin + "/api/dining-history")
   ).json();
   expect(history.receipts).toHaveLength(1);
+  const servedAt = (await state(page)).hall.now;
+  await tap("main");
+  await expect(rows.locator('[data-tablet-kind="review"]')).toBeEnabled();
+  await tap("review");
+  await expect(rows.locator('[data-tablet-kind="confirm"]')).toBeAttached();
+  expect((await state(page)).hall.now).toBe(servedAt);
   expect(await canvas!.evaluate((node) => node.isConnected)).toBe(true);
   await host.focus();
   await host.press("Escape");
@@ -370,4 +415,115 @@ test("a tablet supports visitor signup, dietary availability and the cleaning cu
   await expect(rows.locator('[data-tablet-kind="review"]')).toHaveCount(0);
   await page.getByRole("button", { name: "Reset camera", exact: true }).click();
   await expect(host).toHaveAttribute("data-hall-tablet", "");
+});
+
+test("confirmation errors open their tablet page and preserve whole red words", async ({
+  page,
+  hall,
+}, info) => {
+  type Probe = Window & { tabletTextDraws: { text: string; color: string }[] };
+  await page.addInitScript(() => {
+    const probe = window as unknown as Probe;
+    probe.tabletTextDraws = [];
+    const original = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (
+      value,
+      x,
+      y,
+      maxWidth,
+    ) {
+      probe.tabletTextDraws.push({
+        text: value,
+        color: String(this.fillStyle),
+      });
+      if (probe.tabletTextDraws.length > 2000)
+        probe.tabletTextDraws.splice(0, 1000);
+      if (maxWidth === undefined) return original.call(this, value, x, y);
+      return original.call(this, value, x, y, maxWidth);
+    };
+  });
+  await page.goto(hall.origin);
+  await createGuest(page, "Tablet error diner");
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await focusStall(page, "s001");
+  await stationControl(page, "menu").click();
+  await tapTablet(page, "allowance");
+  await tapTablet(page, "main");
+  await tapTablet(page, "review");
+  const confirm = page.locator(
+    '.tablet-text-controls [data-tablet-kind="confirm"]',
+  );
+  await expect(confirm).toBeAttached();
+  expect(Number(await confirm.getAttribute("data-tablet-row"))).toBeLessThan(6);
+  const host = page.locator("[data-hall-canvas]");
+  const geometry = () =>
+    host.evaluate((element) => ({
+      top: element.getBoundingClientRect().top + window.scrollY,
+      height: element.getBoundingClientRect().height,
+    }));
+  const beforeFailure = await geometry();
+  let attempts = 0;
+  await page.route("**/api/commands", async (route) => {
+    if (route.request().postDataJSON().kind !== "admit_visit")
+      return route.continue();
+    attempts++;
+    await page.evaluate(
+      () => ((window as unknown as Probe).tabletTextDraws = []),
+    );
+    await route.fulfill({ json: { accepted: false, reason: "unavailable" } });
+  });
+  await tapTablet(page, "confirm");
+  const messages = page.locator(".tablet-text-controls li.tablet-error");
+  await expect(messages).toHaveCount(1);
+  await expect(page.locator("main > .banner:not(.success-notice)")).toHaveCount(
+    0,
+  );
+  expect(await geometry()).toEqual(beforeFailure);
+  const lines = (await messages.allTextContents()).map((text) => text.trim());
+  expect(lines.join(" ")).toBe(
+    "The stall doesn’t have enough of the ingredients allowed for this order.",
+  );
+  await expect(page.locator("main > .sr-only")).toHaveText(lines.join(" "));
+  const drawn = await page.evaluate(
+    () => (window as unknown as Probe).tabletTextDraws,
+  );
+  const errorLines = [
+    ...new Set(
+      drawn
+        .filter(
+          (item) =>
+            item.color === "#ff8f93" &&
+            item.text !== "Please check the message below",
+        )
+        .map((item) => item.text),
+    ),
+  ];
+  expect(errorLines.length).toBeGreaterThan(1);
+  expect(errorLines.join(" ")).toBe(lines.join(" "));
+  // Retrying the same failing operation must reveal an identical error again.
+  await tapTablet(page, "confirm");
+  await expect.poll(() => attempts).toBe(2);
+  await expect
+    .poll(async () => {
+      const repeated = await page.evaluate(
+        () => (window as unknown as Probe).tabletTextDraws,
+      );
+      return errorLines.every((text) =>
+        repeated.some((item) => item.text === text && item.color === "#ff8f93"),
+      );
+    })
+    .toBe(true);
+  expect((await state(page)).profile.visit).toBeNull();
+  await page.screenshot({ path: info.outputPath("tablet-error-en.png") });
+  await page.getByLabel("Language / 言語").selectOption("ja");
+  await expect(messages).toHaveText([
+    "この注文に使用できる食材の在庫が足りません。",
+  ]);
+  await page.screenshot({ path: info.outputPath("tablet-error-ja.png") });
+  await page.getByRole("button", { name: "注文", exact: true }).click();
+  await expect(page.locator(".refusal-notice")).toContainText(
+    "この注文に使用できる食材の在庫が足りません。",
+  );
+  await page.locator(".refusal-notice button").click();
+  await expect(page.locator(".refusal-notice")).toHaveCount(0);
 });

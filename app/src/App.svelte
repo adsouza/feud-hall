@@ -7,6 +7,8 @@
   import DinerCompare from "./DinerCompare.svelte";
   import HallScene from "./HallScene.svelte";
   import type { CameraState, HallTarget } from "./hall-scene";
+  import { splitTabletMessage } from "./tablet-text";
+  import { servedTrays } from "./diner-pickup";
   import type { TabletView, TabletAction, TabletRow } from "./hall-tablet";
   import {
     ApiError,
@@ -419,6 +421,8 @@
   let receiptError = $state(false);
   let receiptLoading = $state(false);
   let receiptRequest = 0;
+  let receiptOwnerId = $state("");
+  let takenTrayIds = $state<string[]>([]);
   let composing = false;
   let refreshRunning = false;
   let selectedLanding = false;
@@ -454,6 +458,20 @@
         : ""
       : recentPickup,
   );
+  let personalTrays = $derived(
+    view?.hall.access === "open"
+      ? servedTrays(
+          profile,
+          receiptOwnerId === profile?.account.id ? receipts : null,
+          view.hall.now,
+        ).filter((tray) => !takenTrayIds.includes(tray.id))
+      : [],
+  );
+  function takePersonalTray(id: string) {
+    if (!personalTrays.some((tray) => tray.id === id)) return false;
+    takenTrayIds = [...takenTrayIds.slice(-79), id];
+    return true;
+  }
   let restaurant = $derived(profile?.restaurant ?? null);
   let ownerStall = $derived(
     restaurant?.stalls.find((stall) => stall.id === ownerStallId) ??
@@ -603,6 +621,7 @@
   let trayRequest = $derived(currentQuoteRequest("tray"));
   let dessertRequest = $derived(currentQuoteRequest("dessert"));
   let autoDessertKey = "";
+  let observedVisitId = "";
   let dessertPreviewUnavailable = $state(false);
   let currentQuote = $derived(
     quoteRequest && isCurrentQuoteRequest(quoteRequest) ? quote : null,
@@ -632,7 +651,7 @@
       : t("tabletTap");
     const visit = profile?.visit;
     const problem = !connected
-      ? t("offline")
+      ? t(updateRequired ? "updateRequired" : "offline")
       : status === "uncertain"
         ? t("uncertain")
         : status && typeof status === "object"
@@ -640,9 +659,9 @@
           : "";
     if (problem) {
       notice = t("tabletAttention");
-      const characters = Array.from(problem);
-      for (let i = 0; i < characters.length; i += 32)
-        add(characters.slice(i, i + 32).join(""));
+      rows.push(
+        ...splitTabletMessage(problem).map((text) => ({ text, error: true })),
+      );
     }
 
     if (pending)
@@ -688,10 +707,6 @@
               valid = false;
               break;
             }
-            add(
-              title(line.product) +
-                (line.substituted ? " · " + t("tabletSubstitute") : ""),
-            );
           }
         }
       const expires = currentQuote.terms.deadline;
@@ -720,7 +735,7 @@
         add(t("tabletOtherVisit"));
         add(t("viewVisit"), { kind: "visit" });
       }
-      if (visit.estimate != null)
+      if (visit.stage !== "served" && visit.estimate != null)
         add(
           t("estimatedWait") +
             " " +
@@ -751,12 +766,6 @@
         );
       add(t("tabletBack"), { kind: "menu" });
     } else {
-      const receipt =
-        recentPickup === stall.stall_id ? receipts?.receipts[0] : null;
-      if (receipt) {
-        notice = t("pickupReady").replace("{stall}", stall.name);
-        add(t("diningCharged") + " " + cash(receipt.total));
-      }
       if (!profile) add(t("startGuest"), { kind: "guest" }, tabletRegistering);
       else if (!profile.allowance_claimed)
         add(t("allowance"), { kind: "allowance" });
@@ -787,13 +796,21 @@
       stall: stall.stall_id,
       title: stall.name,
       subtitle,
-      notice,
+      notice: problem ? t("tabletAttention") : notice,
+      noticeError: !!problem,
       rows,
       previous: t("tabletPrevious"),
       next: t("tabletNext"),
       close: t("tabletClose"),
     };
   });
+
+  let inWorldNotices = $derived(
+    page === "hall" &&
+      hallMode === "3d" &&
+      !!tabletView &&
+      !(phone && phoneDetail),
+  );
 
   onMount(() => {
     locale = navigator.language.startsWith("ja") ? "ja" : "en";
@@ -902,6 +919,7 @@
     return () => {
       receiptRequest++;
       receipts = null;
+      receiptOwnerId = "";
       receiptError = false;
       receiptLoading = false;
     };
@@ -909,17 +927,20 @@
 
   async function loadReceipts(before?: string) {
     const request = ++receiptRequest;
+    const principal = profile?.account.id ?? "";
     receiptLoading = true;
     receiptError = false;
     try {
       const next = await getDiningHistory(before);
-      if (request === receiptRequest)
+      if (request === receiptRequest) {
+        receiptOwnerId = principal;
         receipts = {
           ...next,
           receipts: before
             ? [...(receipts?.receipts ?? []), ...next.receipts]
             : next.receipts,
         };
+      }
     } catch {
       if (request === receiptRequest) receiptError = true;
     } finally {
@@ -929,6 +950,18 @@
 
   $effect(() => {
     if (tabletStall && hallSelection !== tabletStall) tabletStall = "";
+  });
+
+  $effect(() => {
+    const id = profile?.visit?.id ?? "";
+    if (id) observedVisitId = id;
+    else if (observedVisitId) {
+      observedVisitId = "";
+      tabletPage = "menu";
+      main = "";
+      drink = "";
+      clearQuote();
+    }
   });
 
   $effect(() => {
@@ -1068,6 +1101,15 @@
       } else {
         pending = null;
         if (result.accepted) {
+          if (
+            ["admit_visit", "accept_dessert", "decline_dessert"].includes(
+              action.kind,
+            )
+          ) {
+            tabletPage = "menu";
+            main = "";
+            drink = "";
+          }
           if (action.kind === "select_handover") acknowledgedHandover = action;
           else status = "update";
           clearQuote();
@@ -2129,12 +2171,19 @@
 </nav>
 
 <main>
-  {#if !connected}<p class="banner" role="status">
+  {#if !connected && !inWorldNotices}<p class="banner" role="status">
       {t(updateRequired ? "updateRequired" : "offline")}
     </p>{/if}
-  <span class="sr-only" role="status"
-    >{status === "update" ? t("update") : ""}</span
-  >
+  <span class="sr-only" role="status">
+    {inWorldNotices && tabletView?.noticeError
+      ? tabletView.rows
+          .filter((row) => row.error)
+          .map((row) => row.text)
+          .join(locale === "ja" ? "" : " ")
+      : status === "update"
+        ? t("update")
+        : ""}
+  </span>
   {#if status === "update"}
     <div
       class="banner success-notice"
@@ -2154,23 +2203,25 @@
         onclick={() => (status = null)}>×</button
       >
     </div>
-  {:else if status === "uncertain" || pending}<p class="banner" role="status">
-      {t("uncertain")}
-      {#if pending}<button
-          disabled={!connected || submitting}
-          onclick={() => pending && deliver(pending)}>{t("retry")}</button
-        >{/if}
-    </p>
-  {:else if status}
-    <div class="banner refusal-notice">
-      <span role="status">{refusalMessage(locale, status.refusal)}</span>
-      <button
-        class="notice-dismiss"
-        type="button"
-        aria-label={t("dismissNotification")}
-        onclick={() => (status = null)}>×</button
-      >
-    </div>
+  {:else if !inWorldNotices}
+    {#if status === "uncertain" || pending}<p class="banner" role="status">
+        {t("uncertain")}
+        {#if pending}<button
+            disabled={!connected || submitting}
+            onclick={() => pending && deliver(pending)}>{t("retry")}</button
+          >{/if}
+      </p>
+    {:else if status}
+      <div class="banner refusal-notice">
+        <span role="status">{refusalMessage(locale, status.refusal)}</span>
+        <button
+          class="notice-dismiss"
+          type="button"
+          aria-label={t("dismissNotification")}
+          onclick={() => (status = null)}>×</button
+        >
+      </div>
+    {/if}
   {/if}
   {#if !view}
     <p>{t("loading")}</p>
@@ -2186,21 +2237,6 @@
           >
         </p>{/if}
       {#if view.hall.visitor_play}
-        {#if profile?.visit || pickup}
-          <section class="visit-tracker" aria-label={t("visit")}>
-            {@render visitProgress()}
-            {#if pickup}
-              <p role="status">
-                {t("pickupReady").replace(
-                  "{stall}",
-                  view.hall.stalls.find((stall) => stall.stall_id === pickup)
-                    ?.name ?? pickup,
-                )}
-              </p>
-            {/if}
-            <button onclick={() => navigate("visit")}>{t("viewVisit")}</button>
-          </section>
-        {/if}
         <div class="hall-mode" role="group" aria-label={t("hall")}>
           <button
             aria-pressed={hallMode === "3d"}
@@ -2263,6 +2299,8 @@
               )}
               selected={hallSelection}
               {pickup}
+              pickups={personalTrays}
+              onTakePickup={takePersonalTray}
               tablet={tabletView}
               onTabletAction={tabletAction}
               saved={camera}
@@ -2270,10 +2308,10 @@
               {title}
               {reopeningTime}
               select={(id) => (hallSelection = id)}
-              inspect={(id) =>
-                immersiveHall
-                  ? openHallInteraction(id, "counter")
-                  : openStallDetails(id)}
+              inspect={(id) => {
+                if (immersiveHall) hallSelection = id;
+                else openStallDetails(id);
+              }}
               interact={openHallInteraction}
               immersive={immersiveHall}
               toggleImmersive={() => (immersiveHall = !immersiveHall)}

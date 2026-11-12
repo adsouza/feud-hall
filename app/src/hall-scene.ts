@@ -4,11 +4,15 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import type { Stall } from "./api";
 import { createCuisineArt } from "./cuisine-art";
 import { createHallShell } from "./hall-shell";
+import { createPickupHands } from "./hall-pickup";
+import type { PersonalTray } from "./diner-pickup";
 import { createTabletScreen } from "./hall-tablet";
 import type { TabletView, TabletAction } from "./hall-tablet";
 import {
   layoutStalls,
   nextStallSlot,
+  walkingEntrance,
+  stallBlocks,
   type StallSlot,
   toHall,
   toStall,
@@ -16,7 +20,12 @@ import {
 } from "./hall-layout";
 
 type Point = [number, number, number];
-type CameraPose = { position: Point; target: Point; fov?: number };
+type CameraPose = {
+  position: Point;
+  target: Point;
+  fov?: number;
+  walk?: { stall: string };
+};
 export type CameraState = CameraPose & {
   inside?: { stall: string; hall: CameraPose };
   menu?: { stall: string; hall: CameraPose };
@@ -29,12 +38,16 @@ type Actions = {
   hover: (id: string | null) => void;
   fail: () => void;
   inside: (id: string) => void;
+  walk: (id: string) => void;
+  collect: (id: string) => boolean;
+  collected: () => void;
 };
 type Appearance = {
   stalls: Stall[];
   ownedStalls: string[];
   selected: string;
   pickup: string;
+  pickups: PersonalTray[];
   closedLabel: string;
   cuisineLabel: (id: string) => string;
   reopeningHeading: string;
@@ -300,6 +313,7 @@ export function createHallScene(
   orbit.maxPolarAngle = ORBIT_POLAR_LIMIT;
   orbit.mouseButtons.LEFT = T.MOUSE.ROTATE;
   orbit.touches.ONE = T.TOUCH.ROTATE;
+  let walking: string | null = saved?.walk?.stall ?? null;
   let insideStall = saved?.inside?.stall ?? "";
   let hallView: CameraPose | undefined = saved?.inside?.hall;
   let radius = 15;
@@ -337,6 +351,17 @@ export function createHallScene(
     vertexColors: true,
     roughness: 0.75,
   });
+  const pickupHands = createPickupHands(
+    scene,
+    camera,
+    pickupGeometry,
+    pickupMaterial,
+  );
+  const personalMaterial = pickupMaterial.clone();
+  personalMaterial.emissive.set("#684724");
+  personalMaterial.emissiveIntensity = 0.2;
+  const personalPickups = new Map<string, { mesh: T.Mesh; stall: string }>();
+  const collectedPickups = new Set<string>();
   const tileMat = new T.MeshStandardMaterial({
     color: "#252b40",
     roughness: 0.86,
@@ -1123,6 +1148,7 @@ export function createHallScene(
     ownedStalls: [],
     selected: "",
     pickup: "",
+    pickups: [],
     closedLabel: "",
     cuisineLabel: (id) => id,
     reopeningHeading: "",
@@ -1163,7 +1189,11 @@ export function createHallScene(
       model.trim.visible = detailed;
       model.sign.visible = detailed || stalls.size <= SMALL_HALL;
       model.edge.visible = inspected;
-      model.pickup.visible = Boolean(model.activity?.handover);
+      model.pickup.visible =
+        Boolean(model.activity?.handover) &&
+        ![...personalPickups.values()].some(
+          (tray) => tray.stall === id && tray.mesh.visible,
+        );
       const activity = model.activity;
       const yaw = model.placement.yaw;
       const owner = toHall(model.placement, -0.61, 0.08);
@@ -1263,6 +1293,9 @@ export function createHallScene(
     for (const mesh of animatedMeshes) mesh.instanceMatrix.needsUpdate = true;
     if (body.instanceColor) body.instanceColor.needsUpdate = true;
     if (heads.instanceColor) heads.instanceColor.needsUpdate = true;
+    const wasTaking = pickupHands.active;
+    pickupHands.update(now);
+    if (wasTaking && !pickupHands.active) actions.collected();
     try {
       renderer.render(scene, camera);
     } catch {
@@ -1288,6 +1321,7 @@ export function createHallScene(
         (stall.activity.waiting > 0 || stall.activity.staging),
     );
     const activeMotion =
+      pickupHands.active ||
       heldArrows.size > 0 ||
       (appearance.motion &&
         (departures.length > 0 || (appearance.detail && active)));
@@ -1308,9 +1342,7 @@ export function createHallScene(
 
   function blockingStall(x: number, z: number) {
     for (const model of stalls.values()) {
-      const { x: dx, z: dz } = toStall(model.placement, x, z);
-      // Leave room for the near plane outside the counter and side walls.
-      if (Math.abs(dx) < 1.92 && dz > -1.27 && dz < 1.44) return model;
+      if (stallBlocks(model.placement, x, z)) return model;
     }
   }
 
@@ -1355,6 +1387,27 @@ export function createHallScene(
     if (!blockingStall(nextX, position.z)) position.x = nextX;
     const nextZ = clampZ(position.z + dz);
     if (!blockingStall(position.x, nextZ)) position.z = nextZ;
+  }
+
+  function enterWalking() {
+    const entrance = walkingEntrance(
+      [...stalls.entries()].map(([id, model]) => ({
+        id,
+        open: model.open,
+        placement: model.placement,
+      })),
+      appearance.selected,
+      floorTop.scale.x,
+      floorTop.scale.z,
+    );
+    walking = entrance.stall;
+    camera.position.set(entrance.position.x, EYE_HEIGHT, entrance.position.z);
+    orbit.target.set(entrance.target.x, EYE_HEIGHT, entrance.target.z);
+    camera.fov = 42;
+    configureCamera();
+    camera.updateProjectionMatrix();
+    orbit.update();
+    if (entrance.stall) actions.walk(entrance.stall);
   }
 
   function navigate(seconds: number) {
@@ -1406,7 +1459,75 @@ export function createHallScene(
     return orbit.update();
   }
 
+  function takePickup(id: string) {
+    const item = personalPickups.get(id);
+    if (pickupHands.active || !item?.mesh.visible || collectedPickups.has(id))
+      return;
+    const model = stalls.get(item.stall);
+    if (!model || !actions.collect(id)) return;
+    const from = item.mesh.getWorldPosition(new T.Vector3());
+    const rotation = item.mesh.getWorldQuaternion(new T.Quaternion());
+    collectedPickups.add(id);
+    item.mesh.visible = false;
+    stopWalking();
+    if (readingMenu) {
+      actions.tablet(readingMenu, { kind: "close" });
+      readMenu("");
+    }
+    setInside("");
+    if (appearance.motion) {
+      walking = item.stall;
+      const position = toHall(model.placement, 0, 2.2);
+      camera.position.set(position.x, EYE_HEIGHT, position.z);
+      orbit.target.copy(camera.position).add(
+        new T.Vector3(0, -0.28, -1)
+          .normalize()
+          .multiplyScalar(6)
+          .applyAxisAngle(new T.Vector3(0, 1, 0), model.placement.yaw),
+      );
+      camera.fov = 42;
+      configureCamera();
+      camera.updateProjectionMatrix();
+      orbit.update();
+      actions.walk(item.stall);
+      pickupHands.begin(from, rotation, performance.now());
+    } else actions.collected();
+    schedule();
+    draw();
+  }
+
   function keyDown(event: KeyboardEvent) {
+    if (
+      !event.isComposing &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey
+    ) {
+      if (event.key === "Escape" && pickupHands.active) {
+        event.preventDefault();
+        pickupHands.finish();
+        actions.collected();
+        draw();
+        schedule();
+        return;
+      }
+      if (event.key.toLowerCase() === "f" && !event.repeat) {
+        const available = appearance.pickups.find(
+          (tray) =>
+            tray.stall === (readingMenu || walking || appearance.selected) &&
+            !collectedPickups.has(tray.id),
+        );
+        if (available) {
+          event.preventDefault();
+          takePickup(available.id);
+          return;
+        }
+      }
+      if (pickupHands.active && ARROW_KEYS.has(event.key)) {
+        event.preventDefault();
+        return;
+      }
+    }
     if (
       readingMenu &&
       !event.isComposing &&
@@ -1439,7 +1560,7 @@ export function createHallScene(
       !event.ctrlKey &&
       !event.metaKey
     ) {
-      const id = insideStall || appearance.selected;
+      const id = insideStall || walking || appearance.selected;
       if (id) {
         event.preventDefault();
         actions.interact(id, "counter");
@@ -1457,6 +1578,7 @@ export function createHallScene(
       return;
     event.preventDefault();
     if (heldArrows.has(event.key)) return;
+    if (!insideStall && walking === null) enterWalking();
     heldArrows.add(event.key);
     navigate(1 / 30);
     schedule();
@@ -1478,6 +1600,7 @@ export function createHallScene(
       position: point(camera.position),
       target: point(orbit.target),
       fov: camera.fov,
+      ...(walking !== null ? { walk: { stall: walking } } : {}),
     };
   }
 
@@ -1489,7 +1612,9 @@ export function createHallScene(
     orbit.enablePan = !insideStall;
     orbit.enableZoom = !insideStall;
     orbit.maxPolarAngle =
-      insideStall || readingMenu ? Math.PI - 0.25 : ORBIT_POLAR_LIMIT;
+      insideStall || readingMenu || walking !== null
+        ? Math.PI - 0.25
+        : ORBIT_POLAR_LIMIT;
   }
 
   function setInside(id: string) {
@@ -1499,6 +1624,7 @@ export function createHallScene(
     stopWalking();
     if (id) {
       hallView ??= pose();
+      walking = null;
       insideStall = id;
       configureCamera();
       const root = stalls.get(id)!.root;
@@ -1526,6 +1652,7 @@ export function createHallScene(
         camera.position.copy(vec(hallView.position));
         orbit.target.copy(vec(hallView.target));
         camera.fov = hallView.fov ?? 42;
+        walking = hallView.walk?.stall ?? null;
         const phi = new T.Spherical().setFromVector3(
           camera.position.clone().sub(orbit.target),
         ).phi;
@@ -1542,6 +1669,7 @@ export function createHallScene(
   function reset() {
     readMenu("");
     setInside("");
+    walking = null;
     orbit.maxPolarAngle = ORBIT_POLAR_LIMIT;
     orbit.target.copy(centre);
     camera.position
@@ -1556,6 +1684,7 @@ export function createHallScene(
     setInside("");
     const model = stalls.get(id);
     if (!model) return;
+    walking = null;
     orbit.target.copy(model.root.localToWorld(new T.Vector3(0, 0.75, 0.35)));
     const offset = new T.Vector3(0.7, 1.65, 7.8).applyAxisAngle(
       new T.Vector3(0, 1, 0),
@@ -1575,6 +1704,7 @@ export function createHallScene(
       stopWalking();
       setInside("");
       menuReturn ??= pose();
+      walking = null;
       readingMenu = id;
       const target = model.tablet.getWorldPosition(new T.Vector3());
       const tangent = Math.tan(T.MathUtils.degToRad(camera.fov / 2));
@@ -1595,6 +1725,7 @@ export function createHallScene(
         camera.position.copy(vec(menuReturn.position));
         orbit.target.copy(vec(menuReturn.target));
         camera.fov = menuReturn.fov ?? 42;
+        walking = menuReturn.walk?.stall ?? null;
       }
       menuReturn = undefined;
     }
@@ -1631,12 +1762,26 @@ export function createHallScene(
       Math.hypot(event.clientX - press[0], event.clientY - press[1]) > 5
     )
       return;
-    // The tablet sits just outside the stall hit box, so its screen wins the ray.
+    if (pickupHands.active) return;
+    // Test the real tray and screen meshes before the coarse stall hit box.
     const selected = hit(event);
     const screen = ray.intersectObjects(
       [...stalls.values()].map((model) => model.tablet),
       false,
     )[0];
+    const food = ray.intersectObjects(
+      [...personalPickups.values()]
+        .filter((item) => item.mesh.visible)
+        .map((item) => item.mesh),
+      false,
+    )[0];
+    if (food && (!screen || food.distance < screen.distance)) {
+      const id = food.object.userData.pickupId as string;
+      if (!selected || selected === personalPickups.get(id)?.stall) {
+        takePickup(id);
+        return;
+      }
+    }
     if (
       screen?.uv &&
       (!selected || selected === screen.object.userData.stall)
@@ -1684,6 +1829,22 @@ export function createHallScene(
     draw(performance.now());
   }
   orbit.addEventListener("change", orbitChanged);
+  let gestureStart: { position: T.Vector3; target: T.Vector3 } | null = null;
+  orbit.addEventListener("start", () => {
+    gestureStart =
+      walking !== null && !insideStall && !readingMenu
+        ? { position: camera.position.clone(), target: orbit.target.clone() }
+        : null;
+  });
+  orbit.addEventListener("end", () => {
+    if (
+      gestureStart &&
+      (gestureStart.position.distanceToSquared(camera.position) > 1e-8 ||
+        gestureStart.target.distanceToSquared(orbit.target) > 1e-8)
+    )
+      walking = null;
+    gestureStart = null;
+  });
   const resize = new ResizeObserver(() => {
     if (!host.clientWidth || !host.clientHeight) return;
     renderer.setPixelRatio(
@@ -1726,7 +1887,13 @@ export function createHallScene(
         close: "",
       });
       if (next.tablet) activeTablet.update(next.tablet);
-      if (!next.motion) departures = [];
+      if (!next.motion) {
+        departures = [];
+        if (pickupHands.active) {
+          pickupHands.finish();
+          actions.collected();
+        }
+      }
       paintShutters(next.closedLabel);
       const ids = new Set(next.stalls.map((stall) => stall.stall_id));
       for (const [id, model] of stalls) {
@@ -1795,10 +1962,13 @@ export function createHallScene(
         (!next.ownedStalls.includes(insideStall) || !stalls.has(insideStall))
       )
         setInside("");
+      if (walking && !stalls.has(walking)) walking = null;
       hasHallView = true;
       const models = [...stalls.values()];
       const layout = layoutStalls(models.map((model) => model.placement));
-      const anchor = stalls.get(insideStall || readingMenu || next.selected);
+      const anchor = stalls.get(
+        insideStall || readingMenu || walking || next.selected,
+      );
       const before = anchor?.placement;
       for (const [i, model] of models.entries()) {
         const placement = layout.placements[i];
@@ -1851,6 +2021,34 @@ export function createHallScene(
       }
       islandFloors.instanceMatrix.needsUpdate = true;
       orbit.update();
+      const available = new Set(
+        next.pickups
+          .filter((tray) => !collectedPickups.has(tray.id))
+          .map((tray) => tray.id),
+      );
+      for (const [id, item] of personalPickups)
+        if (!available.has(id) || !stalls.has(item.stall)) {
+          item.mesh.removeFromParent();
+          personalPickups.delete(id);
+        }
+      const stacked = new Map<string, number>();
+      for (const tray of next.pickups) {
+        if (collectedPickups.has(tray.id)) continue;
+        const model = stalls.get(tray.stall);
+        if (!model) continue;
+        let item = personalPickups.get(tray.id);
+        if (!item) {
+          const mesh = new T.Mesh(pickupGeometry, personalMaterial);
+          mesh.name = "personal-pickup:" + tray.id;
+          mesh.userData.pickupId = tray.id;
+          item = { mesh, stall: tray.stall };
+          personalPickups.set(tray.id, item);
+        }
+        if (item.mesh.parent !== model.root) model.root.add(item.mesh);
+        const index = stacked.get(tray.stall) ?? 0;
+        stacked.set(tray.stall, index + 1);
+        item.mesh.position.set(0, 0.93 + index * 0.13, 0.88);
+      }
       cuisineArt.update(stalls.values(), next.cuisineLabel);
       if (detailChanged)
         renderer.setPixelRatio(
@@ -1867,6 +2065,7 @@ export function createHallScene(
     reset,
     setInside,
     readMenu,
+    takePickup,
     tilt(angle: number) {
       if (!insideStall) return;
       const spherical = new T.Spherical().setFromVector3(
@@ -1890,6 +2089,7 @@ export function createHallScene(
         draw();
         return;
       }
+      if (!readingMenu) walking = null;
       const delta = camera.position.clone().sub(orbit.target);
       delta.setLength(
         T.MathUtils.clamp(
@@ -1903,6 +2103,7 @@ export function createHallScene(
       draw();
     },
     rotate(angle: number) {
+      if (!insideStall && !readingMenu) walking = null;
       const delta = camera.position.clone().sub(orbit.target);
       delta.applyAxisAngle(new T.Vector3(0, 1, 0), angle);
       camera.position.copy(orbit.target).add(delta);
@@ -1944,6 +2145,8 @@ export function createHallScene(
       renderer.domElement.removeEventListener("webglcontextlost", lost);
       orbit.dispose();
       for (const model of stalls.values()) discardCounter(model);
+      pickupHands.dispose();
+      personalMaterial.dispose();
       idleTablet.dispose();
       activeTablet.dispose();
       tabletGeometry.dispose();

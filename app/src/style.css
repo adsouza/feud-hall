@@ -294,8 +294,7 @@ textarea {
 .stall-inspector {
   grid-area: inspector;
 }
-.stall-inspector,
-.visit-tracker {
+.stall-inspector {
   padding: 0.75rem;
   border: 1px solid var(--line);
   border-radius: 0.65rem;

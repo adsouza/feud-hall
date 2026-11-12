@@ -40,3 +40,35 @@ export function layoutTabletText(
   }
   return { size: 1, lines: [value] };
 }
+
+/** Keep long notices readable across tablet rows without cutting words in half. */
+export function splitTabletMessage(value: string): string[] {
+  const words = new Intl.Segmenter("ja", { granularity: "word" });
+  const tokens = (value.match(/\s+|\S+/gu) ?? []).flatMap((token) =>
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(token)
+      ? Array.from(words.segment(token), (part) => part.segment)
+      : [token],
+  );
+  const limit = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(
+    value,
+  )
+    ? 32
+    : 80;
+  const rows: string[] = [];
+  let line = "",
+    space = "";
+  for (const token of tokens) {
+    if (/^\s+$/u.test(token)) {
+      space = line ? " " : "";
+      continue;
+    }
+    const candidate = line + space + token;
+    if (line && Array.from(candidate).length > limit) {
+      rows.push(line);
+      line = token;
+    } else line = candidate;
+    space = "";
+  }
+  if (line) rows.push(line);
+  return rows;
+}

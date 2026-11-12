@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "./hall";
-import { layoutTabletText } from "../../src/tablet-text";
+import { layoutTabletText, splitTabletMessage } from "../../src/tablet-text";
 
-const source = `export const layoutTabletText = ${layoutTabletText.toString()};`;
+const source = `export const layoutTabletText = ${layoutTabletText.toString()};
+export const splitTabletMessage = ${splitTabletMessage.toString()};`;
 const cuisines = JSON.parse(
   readFileSync(
     new URL("../../../server/priv/content/launch_menus.json", import.meta.url),
@@ -24,7 +25,7 @@ test("tablet labels wrap complete dish words and prices with real English/Japane
   );
   const result = await page.evaluate(
     async ({ url, labels }) => {
-      const { layoutTabletText } = await import(url);
+      const { layoutTabletText, splitTabletMessage } = await import(url);
       await document.fonts.load('400 36px "Noto Sans JP"', labels.join(""));
       const context = document.createElement("canvas").getContext("2d")!;
       const measure = (text: string, size: number) => {
@@ -60,6 +61,31 @@ test("tablet labels wrap complete dish words and prices with real English/Japane
           )
             failure.push("split word: " + text);
         }
+      for (const message of [
+        "The stall doesn’t have enough of the ingredients allowed for this order.",
+        "The server may have committed this command. Retry with its original ID.",
+        "This restaurant cannot accept the requested order because another player has already reserved the remaining ingredients. Please choose a different dish.",
+        "An ingredient in this order doesn’t meet your selected dietary requirements.",
+        "この注文に使用できる食材の在庫が足りません。",
+        "この注文には、選択した食事条件に合わない食材が含まれています。",
+      ]) {
+        const rows: string[] = splitTabletMessage(message);
+        const lines: string[] = rows.flatMap(
+          (row) => layoutTabletText(row, 648, 36, 2, measure).lines,
+        );
+        if (
+          lines.join("").replaceAll(/\s/gu, "") !==
+          message.replaceAll(/\s/gu, "")
+        )
+          failure.push("lost error text");
+        if (
+          !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(
+            message,
+          ) &&
+          lines.join(" ") !== message
+        )
+          failure.push("split error word");
+      }
       const regression = "Vegetable couscous · $12.34";
       const width = measure("Vegetable couscous · $12.", 36);
       const layout = layoutTabletText(regression, width, 36, 2, measure);

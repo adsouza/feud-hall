@@ -22,10 +22,19 @@ test("M5 diner keeps a live visit and can compare and order after WebGL loss", a
   await expect(reset).toBeEnabled();
   await page.getByRole("button", { name: "Orbit left" }).click();
   await reset.click();
+  const host = page.locator("[data-hall-canvas]");
+  await host.focus();
+  await host.press("ArrowUp");
+  const location = page.getByRole("combobox", {
+    name: "Location",
+    exact: true,
+  });
+  await expect(location).not.toHaveValue("");
+  await location.selectOption("");
   const scene = await canvas.boundingBox();
   expect(scene).not.toBeNull();
   await canvas.click({
-    position: { x: scene!.width * 0.52, y: scene!.height * 0.43 },
+    position: { x: scene!.width * 0.5, y: scene!.height * 0.6 },
   });
   await expect(
     page.getByRole("combobox", { name: "Location" }),
@@ -69,13 +78,14 @@ test("M5 diner keeps a live visit and can compare and order after WebGL loss", a
     .poll(async () => (await state(page)).profile.visit)
     .not.toBeNull();
   await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await expect(page.locator(".visit-tracker")).toHaveCount(0);
+  await page.getByRole("button", { name: "My visit", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "View my visit" }),
+    page.getByRole("status").filter({
+      hasText: /Preparing your tray|Order queued|At the counter/,
+    }),
   ).toBeVisible();
-
   await hall.control({ advance_to: quote.earliest_completion });
-  await expect(page.getByText(/Meal served at /)).toBeVisible();
-  await page.getByRole("button", { name: "View my visit" }).click();
   await expect(
     page.getByRole("heading", { name: "Dining receipts" }),
   ).toBeVisible();

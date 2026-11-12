@@ -189,3 +189,42 @@ export function toStall(pose: Frame, x: number, z: number) {
     dz = z - pose.z;
   return { x: c * dx - s * dz, z: s * dx + c * dz };
 }
+
+export function stallBlocks(pose: Frame, x: number, z: number) {
+  const local = toStall(pose, x, z);
+  return Math.abs(local.x) < 1.92 && local.z > -1.27 && local.z < 1.44;
+}
+
+/** Enter walking at eye level in a clear aisle, with an open counter ahead. */
+export function walkingEntrance(
+  stalls: { id: string; open: boolean; placement: StallPlacement }[],
+  selected: string,
+  floorWidth: number,
+  floorDepth: number,
+) {
+  const open = stalls.filter((stall) => stall.open);
+  const candidates = open.length ? open : stalls;
+  const preferred = candidates.find((stall) => stall.id === selected);
+  const ordered = preferred
+    ? [preferred, ...candidates.filter((stall) => stall !== preferred)]
+    : candidates;
+  for (const stall of ordered)
+    for (const distance of [4.6, 5.2, 6])
+      for (const offset of [0, -0.8, 0.8]) {
+        const position = toHall(stall.placement, offset, distance);
+        if (
+          Math.abs(position.x) > floorWidth / 2 - 0.3 ||
+          Math.abs(position.z) > floorDepth / 2 - 0.3 ||
+          stalls.some((other) =>
+            stallBlocks(other.placement, position.x, position.z),
+          )
+        )
+          continue;
+        return {
+          stall: stall.id,
+          position,
+          target: toHall(stall.placement, 0, 0.6),
+        };
+      }
+  return { stall: "", position: { x: 0, z: 0 }, target: { x: 0, z: -6 } };
+}

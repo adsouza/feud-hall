@@ -525,9 +525,9 @@ geometry](https://www.naturalearthdata.com/about/terms-of-use/) distributed by
 approximate cultural locator footprints for the launch catalog.
 
 The focused `app/test/browser/hall-interactions.spec.ts` coverage includes real
-ray/UV clicks on the physical menu tablet (allowance, diet, main, paginated bill
+ray/UV clicks on the physical menu tablet (allowance, diet, main, compact bill
 and confirmation), a lost accepted response retried with the same command ID,
-committed service/receipt, keyboard stepping back, Japanese portrait rendering
+committed service/receipt without changing the scene's document position or height, keyboard stepping back, Japanese portrait rendering
 and WebGL fallback. It also checks helper and owner workbenches. Run this file
 with one worker against the disposable browser-hall fixture; inspect its tablet
 screenshots as well as the assertions. The accessible text mirror is inspected
@@ -537,6 +537,18 @@ for action metadata, but purchase actions in the tablet journey use canvas click
 labels with real canvas font metrics and several prices. It requires complete
 prices, English word boundaries, no clipped text, and at most two readable lines
 per tablet row, including a regression where only part of a price used to fit.
+It also checks English/Japanese error messages after splitting them into rows.
+The focused `confirmation errors` hall-interaction test refuses confirmation
+and checks immediate whole-word red explanations, Japanese rendering and
+repeated identical failures. Refusals and uncertain outcomes must not add a
+page-top banner or move the 3D scene while their tablet is visible; ordinary
+refusal notifications remain dismissible on the conventional screens. The dining journey checks that the compact review
+contains ordered items and prices without ingredient rows, while the original
+bound quote is still confirmed. Completed visits immediately restore a clean
+menu and allow another quote without advancing time, while the receipt remains
+in dining history. `tablet-pages.spec.ts` exercises the renderer
+directly with a long view: new errors open their page, routine updates allow
+browsing elsewhere, and repeated errors become visible again.
 
 `app/test/browser/hall-layout.spec.ts` checks corner-first/largest-gap placement,
 the sixteen-stall island threshold, eight-stall cap, balanced splitting, stable logical identities, inward/outward
@@ -545,3 +557,18 @@ size through 150. A bounded seeded property checks vacancies and coordinate
 transforms. Browser artifacts cover a populated outer ring, multiple compact islands, a tablet that stays pickable when its stall changes island and heading, and 150-stall rendering; these are presentation checks, not a simulation
 capacity benchmark. Run with one worker alongside focused hall-interaction and
 owner-view tests when changing stall orientation or placement.
+
+`app/test/browser/hall-navigation.spec.ts` checks clear walking entrances and
+open-stall preference through 150 stalls, including closed/empty fallback. Its
+browser probe inspects the actual WebGL view matrix for arrow/Shift entry,
+eye height, level heading, continued movement and restoration after navigation.
+
+`tray-pickup.spec.ts` checks private served-course eligibility and deduplication,
+real ray clicks on a served tray, reaching/taking animation, reduced-motion F-key
+collection, and absence after scene remount. It verifies that collection changes
+neither the committed position nor dining balance and sends no gameplay command.
+It also checks real canvas clicks on counter surfaces, signage and another diner's
+public tray in the immersive layout: these select the stall without opening the
+tablet, while a click on its actual screen opens it.
+Run this focused file with one worker against the disposable browser hall and
+inspect its pickup screenshot.
