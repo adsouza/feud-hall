@@ -196,12 +196,15 @@ export function tableSpots(room: number): (Point & { yaw: number })[] {
     z: c.z + dz,
     yaw: Math.atan2(-dx, -dz),
   });
+  // Two rings of four on the diagonals, clear of the doorway and entrance lines.
   return [
     at(-5.5, -5.5),
     at(5.5, -5.5),
     at(-5.5, 5.5),
     at(5.5, 5.5),
-    at(0, -8),
     at(-9.5, -9.5),
+    at(9.5, -9.5),
+    at(-9.5, 9.5),
+    at(9.5, 9.5),
   ];
 }

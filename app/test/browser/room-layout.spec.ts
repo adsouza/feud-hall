@@ -94,6 +94,9 @@ test("rooms: 150 spots have 150 distinct placements inside their own room", () =
     expect(roomAt(p.x, p.z)).toBe(p.room);
     for (const corner of box(p, 1.44))
       expect(roomAt(corner.x, corner.z)).toBe(p.room);
+    // The queue in front of each booth stays inside the same room.
+    for (const corner of box(p, 2.9))
+      expect(roomAt(corner.x, corner.z)).toBe(p.room);
   }
 });
 
@@ -224,6 +227,14 @@ test("rooms: stalls without room data are placed fifteen to a room in ID order",
     ["b", { room: 3, position: 4 }],
     ["a", { room: 1, position: 0 }],
   ]);
+  const fallback = assignSpots(
+    Array.from({ length: 16 }, (_, i) => ({
+      stall_id: `s${String(i + 1).padStart(3, "0")}`,
+    })),
+  );
+  expect(fallback.get("s001")).toEqual({ room: 1, position: 0 });
+  expect(fallback.get("s015")).toEqual({ room: 1, position: 14 });
+  expect(fallback.get("s016")).toEqual({ room: 2, position: 0 });
 });
 
 test("rooms: walking stays inside open rooms", () => {
@@ -273,6 +284,10 @@ test("rooms: tables stand clear", () => {
     const c = roomCentre(room);
     const tables = tableSpots(room);
     expect(tables.length).toBeGreaterThanOrEqual(6);
+    // The arrangement is symmetric about the room's north-south centre line.
+    const key = (x: number, z: number) => `${x.toFixed(6)},${z.toFixed(6)}`;
+    const mirrored = new Set(tables.map((t) => key(2 * c.x - t.x, t.z)));
+    for (const t of tables) expect(mirrored.has(key(t.x, t.z))).toBe(true);
     for (const t of tables) {
       expect(walkable(t.x, t.z, room, inRoom(room))).toBe(true);
       for (const p of inRoom(room))
