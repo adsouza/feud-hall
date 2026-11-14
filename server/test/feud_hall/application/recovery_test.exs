@@ -710,6 +710,42 @@ defmodule FeudHall.Application.RecoveryTest do
     assert Enum.count(Enum.flat_map(batches, & &1.events), &(&1.type == :hall_simulation_upgraded)) == 1
   end
 
+  test "a launch hall restarted across the rooms upgrade recovers it once on PostgreSQL" do
+    alias FeudHall.Domain.Content.LaunchCatalog
+    alias FeudHall.Domain.Hall.Rooms
+
+    {mod, store} = adapter(:postgres)
+    assert {:ok, rt, _} = recover(mod, store, "boot")
+    old = FeudHall.Fixtures.quiet_catalog(FeudHall.Fixtures.launch_v2_catalog())
+    far = %{restaurant_id: "far", stall_id: "s150", name: "Far", cuisine: "levantine"}
+
+    rt =
+      run(rt, [
+        {env("init", {:system, :admin}, {:initialize_hall, %{hall_id: "h1", catalog: old, managed: true}}), nil},
+        {env("far", {:npc, "far"}, {:create_restaurant, far}), nil}
+      ])
+
+    refute Rooms.enabled?(rt.state)
+    rent = rt.state.management.leases["s150"].rent
+    # The command start-up issues when the pinned launch version is lower.
+    upgrade = env("web-launch-catalog:3", {:system, :admin}, {:expand_catalog, %{catalog: LaunchCatalog.catalog()}})
+    assert {:accepted, receipt, rt} = CommandWorkflow.execute(rt, upgrade)
+    assert Rooms.summary(rt.state).open == 10
+
+    assert {:ok, restarted, %{recovery_id: "recovery:boot:1"}} = recover(mod, rt.store, "again")
+    assert restarted.state == resumed(rt.state, "recovery:boot:1")
+    assert Rooms.summary(restarted.state).open == 10
+    assert restarted.state.management.leases["s150"].rent == rent
+
+    # Start-up after the restart issues the same command ID: the original receipt, no second expansion.
+    assert {:replayed, ^receipt, again} = CommandWorkflow.execute(restarted, upgrade)
+    assert {again.state, again.position} == {restarted.state, restarted.position}
+    events = Enum.flat_map(batches_after_all(again.store, mod), & &1.events)
+    assert Enum.count(events, &(&1.type == :hall_catalog_expanded)) == 1
+    assert {:ok, replayed} = CommandWorkflow.open(mod, again.store)
+    assert replayed.state == again.state
+  end
+
   describe "a missing batch" do
     test "in memory, a gap in the tail aborts recovery on the genesis and snapshot paths" do
       rt = live(adapter(:memory))

@@ -48,6 +48,8 @@ defmodule FeudHall.Domain.Hall.CatalogExpansion do
         rules: Map.merge(previous.rules, %{market: market, demand: demand, progression: progression})
     }
 
+    catalog = rooms(catalog, launch)
+
     with :ok <- Content.validate(catalog) do
       stock = Map.drop(Market.opening_stock(catalog), Map.keys(previous.products))
       {:ok, [%{type: :hall_catalog_expanded, catalog: catalog, content_hash: Content.hash(catalog), stock: stock}]}
@@ -57,6 +59,24 @@ defmodule FeudHall.Domain.Hall.CatalogExpansion do
   end
 
   def decide(_state, _catalog), do: {:error, :catalog_expansion_unavailable}
+
+  # The room rule arrives with the launch catalog that carries it. Pinned spots keep their tier and
+  # gain the room and position of the same spot ID (a spot's room never changes, so pinned room data
+  # wins); a pinned spot the launch layout lacks stays without a room and fails validation. A pinned
+  # rule is kept. Computer-run profiles take the launch preferred tier and keep everything else.
+  defp rooms(catalog, %{rules: %{rooms: rule}} = launch) do
+    spots = Map.new(launch.layout, &{&1.slot_id, Map.take(&1, [:room, :position])})
+    tiers = Map.new(launch.npc_profiles, &{&1.id, &1.preferred_tier})
+
+    %{
+      catalog
+      | layout: Enum.map(catalog.layout, &Map.merge(Map.get(spots, &1.slot_id, %{}), &1)),
+        npc_profiles: Enum.map(catalog.npc_profiles, &%{&1 | preferred_tier: Map.get(tiers, &1.id, &1.preferred_tier)}),
+        rules: Map.put_new(catalog.rules, :rooms, rule)
+    }
+  end
+
+  defp rooms(catalog, _launch), do: catalog
 
   def evolve(state, event) do
     %{state | catalog: event.catalog, content_hash: event.content_hash}

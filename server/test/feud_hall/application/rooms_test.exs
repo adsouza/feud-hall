@@ -3,23 +3,23 @@ defmodule FeudHall.Application.RoomsTest do
   use ExUnitProperties
 
   alias FeudHall.Application.{CommandWorkflow, Management, Recovery}
-  alias FeudHall.Domain.{Clock, Hall, Identity, PublicView}
+  alias FeudHall.Domain.{Clock, Content, Hall, Identity, PublicView}
   alias FeudHall.Domain.Npc.Planner
   alias FeudHall.Domain.Content.LaunchCatalog
-  alias FeudHall.Domain.Hall.{Evolver, Invariants, Rooms}
+  alias FeudHall.Domain.Hall.{CatalogExpansion, Evolver, Invariants, Rooms}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
-  alias FeudHall.Infrastructure.{HallAuthority, InMemoryEventStore, ManualClock}
+  alias FeudHall.Infrastructure.{HallAuthority, InMemoryEventStore, ManualClock, Snapshot}
   alias FeudHall.Infrastructure.Diagnostics.MemorySink
 
   @draft_keys ~w(type principal expires_at stall_id tier rent holding setup_fee exposure)a
   @lease_keys ~w(type stall_id tier rent holding setup_fee exposure restaurant_id start_hour end_hour enabled principal at)a
 
-  defp boot do
+  defp boot(catalog \\ LaunchCatalog.catalog()) do
     {:ok, rt, _} = Recovery.recover(InMemoryEventStore, InMemoryEventStore.new(), "rooms", scope: "hall:test")
 
     accepted(rt, {:system, :admin}, :initialize_hall, %{
       hall_id: "h1",
-      catalog: FeudHall.Fixtures.quiet_catalog(LaunchCatalog.catalog()),
+      catalog: FeudHall.Fixtures.quiet_catalog(catalog),
       managed: true
     })
   end
@@ -249,6 +249,147 @@ defmodule FeudHall.Application.RoomsTest do
     state = rt.state
     unguarded = update_in(state.catalog.rules, &Map.delete(&1, :rooms))
     assert {:ok, [%{type: :stall_draft_reserved, stall_id: "s005"}]} = Hall.decide(unguarded, command, ctx)
+  end
+
+  # -- existing halls receive rooms through the catalog expansion -------------------
+
+  defp v2_hall do
+    old = FeudHall.Fixtures.launch_v2_catalog()
+    assert :ok = Content.validate(old)
+    rt = boot(old)
+    refute Rooms.enabled?(rt.state)
+    rt
+  end
+
+  defp upgrade(rt), do: accepted(rt, {:system, :admin}, :expand_catalog, %{catalog: LaunchCatalog.catalog()})
+
+  defp events_after(rt, position) do
+    {:ok, batches} = InMemoryEventStore.read_from(rt.store, position)
+    Enum.flat_map(batches, & &1.events)
+  end
+
+  defp preferred_tiers(state), do: Map.new(state.catalog.npc_profiles, &{&1.id, &1.preferred_tier})
+
+  test "a version 2 launch hall gains rooms once" do
+    rt = v2_hall()
+    launch = LaunchCatalog.catalog()
+    tiers = Map.new(rt.state.catalog.layout, &{&1.slot_id, &1.tier})
+    layout = rt.state.layout
+    assert preferred_tiers(rt.state) == %{"budget" => :quiet, "mainstream" => :standard, "premium" => :prime}
+    position = rt.position
+
+    rt = upgrade(rt)
+    assert [:hall_catalog_expanded] == Enum.map(events_after(rt, position), & &1.type)
+    assert Rooms.enabled?(rt.state)
+    assert rt.state.catalog.rules.rooms == launch.rules.rooms
+    assert Map.new(rt.state.catalog.layout, &{&1.slot_id, &1.tier}) == tiers
+    assert rt.state.layout == layout
+
+    assert Enum.map(rt.state.catalog.layout, &Map.take(&1, [:slot_id, :room, :position])) ==
+             Enum.map(launch.layout, &Map.take(&1, [:slot_id, :room, :position]))
+
+    assert preferred_tiers(rt.state) == %{"budget" => :quiet, "mainstream" => :standard, "premium" => :standard}
+    assert Rooms.summary(rt.state).open == 1
+
+    assert rejected(rt, {:system, :admin}, :expand_catalog, %{catalog: launch}) == :catalog_expansion_unavailable
+  end
+
+  test "a pinned room rule is kept by the expansion" do
+    launch = LaunchCatalog.catalog()
+    pinned = put_in(launch.rules.rooms.class_gap, 250)
+    rt = boot(%{pinned | version: 2})
+    assert {:ok, [event]} = CatalogExpansion.decide(rt.state, launch)
+    assert event.catalog.rules.rooms == pinned.rules.rooms
+  end
+
+  test "leases in later rooms survive the upgrade" do
+    {rt, [first]} = owners(v2_hall(), ["first"])
+    rt = rt |> npc_lease("s020") |> npc_lease("s150")
+    leases = rt.state.management.leases
+    stalls = rt.state.stalls
+    assert Map.keys(leases) |> Enum.sort() == ~w(s020 s150)
+
+    rt = upgrade(rt)
+    assert Rooms.room(rt.state, "s020") == 5
+    assert Rooms.room(rt.state, "s150") == 10
+    assert Rooms.summary(rt.state).open == 10
+    assert rt.state.management.leases == leases
+    assert rt.state.stalls == stalls
+
+    rt = accepted(rt, {:principal, first}, :reserve_stall, %{stall_id: "s040"})
+    assert rt.state.management.drafts[first].stall_id == "s040"
+    assert :ok = Invariants.check(rt.state)
+  end
+
+  test "events before the upgrade replay under the old rule" do
+    {rt, [early, later]} = owners(v2_hall(), ["early", "later"])
+    rt = accepted(rt, {:principal, early}, :reserve_stall, %{stall_id: "s005"})
+    draft = rt.state.management.drafts[early]
+
+    rt = upgrade(rt)
+    assert rt.state.management.drafts[early] == draft
+    assert rt.state.now < draft.expires_at
+    assert {:ok, replayed} = CommandWorkflow.open(InMemoryEventStore, rt.store)
+    assert replayed.state == rt.state
+    assert replayed.state.management.drafts[early].stall_id == "s005"
+
+    # The draft holds room 2 open; room 3 stays closed because no class of rooms 1-2 is fully leased.
+    assert Rooms.summary(rt.state).open == 2
+    assert rejected(rt, {:principal, later}, :reserve_stall, %{stall_id: "s009"}) == :slot_unavailable
+    rt = accepted(rt, {:principal, later}, :reserve_stall, %{stall_id: "s006"})
+    assert rt.state.management.drafts[later].stall_id == "s006"
+  end
+
+  test "live, genesis replay and snapshot tail agree" do
+    {rt, [early, later]} = owners(v2_hall(), ["early", "later"])
+    rt = accepted(rt, {:principal, early}, :reserve_stall, %{stall_id: "s005"})
+    rt = npc_lease(rt, "s020")
+    before_upgrade = {Snapshot.take(%{hall: rt.state, control: rt.control}, rt.position), rt.position}
+
+    rt = upgrade(rt)
+    assert Rooms.summary(rt.state).open == 5
+    assert_agree(rt, [before_upgrade])
+    after_upgrade = {Snapshot.take(%{hall: rt.state, control: rt.control}, rt.position), rt.position}
+    position = rt.position
+
+    rt = Enum.reduce(~w(s001 s002 s003 s006 s007 s010), rt, &npc_lease(&2, &1))
+    rt = accepted(rt, {:principal, later}, :reserve_stall, %{stall_id: "s011"})
+
+    rt =
+      Enum.reduce(1..3, rt, fn hours, rt ->
+        to = Clock.service_ms(Clock.hour() * hours)
+        accepted(rt, {:system, :scheduler}, :advance_clock, %{to_service_ms: to})
+      end)
+
+    assert length(events_after(rt, position)) >= 10
+    assert_agree(rt, [before_upgrade, after_upgrade])
+  end
+
+  # Live state equals genesis replay, each earlier snapshot plus its tail, and a snapshot taken at
+  # the head restored with an empty tail (a field the snapshot drops cannot be re-recorded by tail events).
+  defp assert_agree(rt, snapshots) do
+    assert {:ok, genesis} = CommandWorkflow.open(InMemoryEventStore, rt.store)
+    assert genesis.state == rt.state
+    head = {Snapshot.take(%{hall: rt.state, control: rt.control}, rt.position), rt.position}
+
+    for {snapshot, position} <- snapshots ++ [head] do
+      {:ok, tail} = InMemoryEventStore.read_from(rt.store, position)
+      assert position == rt.position == (tail == [])
+      assert {:ok, restored} = Snapshot.restore(snapshot, tail)
+      assert restored.hall == rt.state
+      assert restored.control == rt.control
+    end
+  end
+
+  test "a pinned spot outside the launch layout stops the upgrade" do
+    state = v2_hall().state
+    state = update_in(state.catalog.layout, &(&1 ++ [%{slot_id: "x999", tier: :quiet}]))
+    command = {:expand_catalog, %{catalog: LaunchCatalog.catalog()}}
+
+    assert {:error, {:invalid_content, problems}} =
+             Hall.decide(state, command, %{actor: {:system, :admin}, command_id: "x"})
+
+    assert {:layout, :slot_without_room, "x999"} in problems
   end
 
   # -- property -----------------------------------------------------------------

@@ -18,6 +18,27 @@ defmodule FeudHall.Fixtures do
   def quiet_catalog(catalog \\ MexicanFixture.catalog()),
     do: put_in(catalog, [:rules, :demand, :arrivals_per_equivalent], 0)
 
+  @doc """
+  The launch catalog as version 2 shipped it, before rooms: version 3 without
+  `rules.rooms`, without each spot's `room` and `position`, and with the
+  premium computer-run profile preferring prime spots.
+  """
+  def launch_v2_catalog do
+    launch = FeudHall.Domain.Content.LaunchCatalog.catalog()
+
+    %{
+      launch
+      | version: 2,
+        rules: Map.delete(launch.rules, :rooms),
+        layout: Enum.map(launch.layout, &Map.drop(&1, [:room, :position])),
+        npc_profiles:
+          Enum.map(launch.npc_profiles, fn
+            %{id: "premium"} = profile -> %{profile | preferred_tier: :prime}
+            profile -> profile
+          end)
+    }
+  end
+
   def owner(id \\ "alice"), do: {:principal, id}
 
   @doc "Runs a command that must succeed; returns `{state, events}`."
