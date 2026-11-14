@@ -3009,6 +3009,8 @@
                       restaurant_id: restaurant.id,
                       stall_id: expansionSlot.stall_id,
                       cuisine: expansionCuisine,
+                      // The rent shown; the server refuses if the quote has moved.
+                      expected_rent: expansionSlot.rent,
                     });
                 }}
               >

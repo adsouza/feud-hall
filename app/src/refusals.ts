@@ -154,6 +154,10 @@ const messages = {
     "This stall can’t be reserved or leased right now. Check your current reservation or choose another stall.",
     "現在この区画を予約・契約できません。予約状況を確認するか、別の区画を選んでください。",
   ],
+  quote_changed: [
+    "The rent for that spot has changed. Check the new rent and confirm again.",
+    "その区画の賃料が変わりました。新しい賃料を確認して、もう一度確定してください。",
+  ],
   room_closed: [
     "That hall isn’t open yet.",
     "そのホールはまだ開いていません。",

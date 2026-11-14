@@ -393,6 +393,8 @@ test("150 stalls across ten rooms render", async ({ page, hall }) => {
     for (let position = 0; position < 15; position++)
       spots.push([room, position]);
   await routed(page, hall.origin, spots, 10);
+  // With every hall open there is no closed hall to explain.
+  await expect(page.locator("#hall-room-closed")).toHaveCount(0);
   await expect(
     page
       .getByRole("combobox", { name: "Location", exact: true })
@@ -495,9 +497,15 @@ test("the Halls control lists every room and enables the open ones", async ({
   for (let room = 2; room <= 10; room++) {
     await expect(hallButton(page, room)).toBeDisabled();
     await expect(hallButton(page, room)).toHaveAccessibleDescription(
-      "Opens when a class of spots is full",
+      "Closed halls open when a class of spots is full",
     );
   }
+  // The reason is also shown, as a line under the control.
+  const reason = page.locator("#hall-room-closed");
+  await expect(reason).toBeVisible();
+  await expect(reason).toHaveText(
+    "Closed halls open when a class of spots is full",
+  );
   await page.getByLabel("Language / 言語").selectOption("ja");
   const japanese = hallsGroup(page, "ホールの切り替え");
   await expect(
@@ -505,7 +513,12 @@ test("the Halls control lists every room and enables the open ones", async ({
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
     japanese.getByRole("button", { name: "ホール2", exact: true }),
-  ).toHaveAccessibleDescription("同じ区分の区画がすべて埋まると開きます");
+  ).toHaveAccessibleDescription(
+    "閉じているホールは、同じ区分の区画がすべて埋まると開きます",
+  );
+  await expect(page.locator("#hall-room-closed")).toHaveText(
+    "閉じているホールは、同じ区分の区画がすべて埋まると開きます",
+  );
 });
 
 test("the Halls control and the bracket keys move between open rooms", async ({
@@ -1072,6 +1085,70 @@ test("the expansion estimate explains its rent", async ({ page, hall }) => {
   );
 });
 
+test("an expansion sends the rent it showed and keeps the form open when it changed", async ({
+  page,
+  hall,
+}) => {
+  await seededOwner(page, hall, "Expected rent");
+  await page.getByRole("button", { name: "Business", exact: true }).click();
+  await locationPicker(page).selectOption("s043");
+  await page
+    .getByRole("button", { name: "Reserve stall for ten minutes" })
+    .click();
+  await page.getByRole("radio", { name: "Tamil", exact: true }).check();
+  await page.getByLabel("Restaurant name").fill("First counter");
+  await page.getByRole("button", { name: "Confirm lease" }).click();
+  await expect(
+    page.getByRole("heading", { name: "First counter", exact: true }),
+  ).toBeVisible();
+
+  const slot = (await state(page)).profile!.slots.find(
+    (s: { stall_id: string }) => s.stall_id === "s044",
+  )!;
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await page.getByRole("button", { name: "Stall list", exact: true }).click();
+  await spotCard(page, "s044")
+    .getByRole("button", { name: "View spot s044", exact: true })
+    .click();
+  await spotPanel(page)
+    .getByRole("button", { name: "Lease this spot" })
+    .click();
+  const form = page.locator("form").filter({ hasText: "s044" });
+  const expansion = page.locator("details").filter({ has: form });
+  const picker = form.getByRole("combobox", { name: "Location" });
+  await expect(picker).toHaveValue("s044");
+  await expect(form).toContainText(`Daily open rent ${cash(slot.rent)}`);
+  await form.getByRole("radio", { name: "Levantine", exact: true }).check();
+
+  const leases: Record<string, unknown>[] = [];
+  await page.route("**/api/commands", async (route) => {
+    const command = route.request().postDataJSON();
+    if (command.kind !== "lease_location") return route.continue();
+    leases.push(command.payload);
+    await route.fulfill({ json: { accepted: false, reason: "quote_changed" } });
+  });
+  await form.getByRole("button", { name: "Confirm lease" }).click();
+  await expect(
+    page.getByText(
+      "The rent for that spot has changed. Check the new rent and confirm again.",
+    ),
+  ).toBeVisible();
+  expect(leases).toEqual([
+    {
+      restaurant_id: expect.any(String),
+      stall_id: "s044",
+      cuisine: "levantine",
+      expected_rent: slot.rent,
+    },
+  ]);
+  await expect(expansion).toHaveAttribute("open", "");
+  await expect(form).toContainText(`Daily open rent ${cash(slot.rent)}`);
+  await expect(picker).toHaveValue("s044");
+  // Nothing was resubmitted.
+  await page.waitForTimeout(500);
+  expect(leases).toHaveLength(1);
+});
+
 test("Japanese shows the same numbers", async ({ page, hall }) => {
   await page.goto(hall.origin);
   await expect(page.locator("[data-hall-canvas] canvas")).toBeVisible();
@@ -1116,6 +1193,40 @@ test("a spot taken while the panel is open", async ({ page, hall }) => {
   await expect(panel.getByRole("button")).toHaveText(["Close spot details"]);
   await panel.getByRole("button", { name: "Close spot details" }).click();
   await expect(panel).toHaveCount(0);
+});
+
+test("a spot the viewer reserves is not reported as taken", async ({
+  page,
+  hall,
+}) => {
+  await seededOwner(page, hall, "Own reservation");
+  await page.getByRole("button", { name: "Stall list", exact: true }).click();
+  await spotCard(page, "s043")
+    .getByRole("button", { name: "View spot s043", exact: true })
+    .click();
+  const panel = spotPanel(page);
+  await expect(panel).toContainText("s043");
+
+  // Reserve the viewed spot elsewhere while its panel is still open.
+  await page.getByRole("button", { name: "Business", exact: true }).click();
+  await locationPicker(page).selectOption("s043");
+  await page
+    .getByRole("button", { name: "Reserve stall for ten minutes" })
+    .click();
+  await expect(page.getByLabel("Restaurant name")).toBeVisible();
+  expect((await state(page)).profile.draft).toMatchObject({
+    stall_id: "s043",
+  });
+  await nextPoll(page);
+
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await expect(spotCard(page, "s044")).toBeVisible();
+  await expect(panel).toHaveCount(0);
+  await expect(
+    page.getByText(
+      "This stall can’t be reserved or leased right now. Check your current reservation or choose another stall.",
+    ),
+  ).toHaveCount(0);
 });
 
 test.describe("on a phone", () => {

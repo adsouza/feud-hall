@@ -219,7 +219,9 @@
       >
     {/each}
   </div>
-  <p id="hall-room-closed" class="sr-only">{t("hallRoomClosed")}</p>
+  {#if rooms.open < rooms.count}
+    <p id="hall-room-closed" class="hall-room-note">{t("hallRoomClosed")}</p>
+  {/if}
 {/if}
 <div class="controls" role="group" aria-label={t("hallActions")}>
   <button aria-pressed={immersive} onclick={toggleImmersive}
@@ -458,5 +460,9 @@
   }
   .controls input[type="range"] {
     width: 6rem;
+  }
+  .hall-room-note {
+    margin-block: -0.35rem 0.65rem;
+    font-size: 0.9em;
   }
 </style>
