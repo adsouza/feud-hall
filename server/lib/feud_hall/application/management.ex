@@ -114,6 +114,8 @@ defmodule FeudHall.Application.Management do
       now: state.now,
       access: state.access,
       stalls: stalls,
+      today: public.today,
+      queue_limit: state.catalog.rules.kitchen.queue_limit,
       position: runtime.position,
       visitor_play: CounterPlay.enabled?(state),
       failed_ventures: public_history(state, identity),

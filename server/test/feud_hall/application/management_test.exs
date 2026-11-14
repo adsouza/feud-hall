@@ -464,6 +464,19 @@ defmodule FeudHall.Application.ManagementTest do
     assert restored.control == rt.control
   end
 
+  test "the hall view carries today's totals and the queue limit, and no reasons" do
+    rt = boot(InMemoryEventStore, InMemoryEventStore.new())
+    {rt, _guest} = register(rt, "guest-device", "Guest")
+    today = %{arrivals: 9, admitted: 5, left: %{queue_full: 3, no_food: 1}, trays_served: 4}
+    rt = put_in(rt.state.demand.today, today)
+
+    assert {:ok, view} = Management.view(rt, "guest-device")
+    assert view.hall.today == %{arrivals: 9, admitted: 5, left: 4}
+    assert view.hall.queue_limit == rt.state.catalog.rules.kitchen.queue_limit
+    refute inspect(view.hall) =~ "queue_full"
+    refute inspect(view.hall) =~ "no_food"
+  end
+
   test "cleanup gates a queued opening and releases unconfirmed stall drafts" do
     rt = boot(InMemoryEventStore, InMemoryEventStore.new())
     {rt, owner} = register(rt, "owner-device", "Owner")

@@ -9,13 +9,17 @@ defmodule FeudHall.Domain.PublicView do
         now: hall_ms,
         market: %{product => %{price: per_kunit, stock: units}},
         stalls: [%{stall_id, restaurant_id, tier, open?, menu: %{recipe_id => price}}],
+        today: %{arrivals, admitted, left},
         demand: [%{day, arrivals, admitted, left, trays_served, menu_prices_median}]
       }
 
   Stalls are sorted by stall ID and include closed ones (they still occupy a
-  slot). A menu is the public price list. Rival cash, warehouse batches,
-  orders, costs, unlocks, policies and random state are never copied in: the
-  projection names its fields rather than filtering a state map.
+  slot). A menu is the public price list. `today` is today's arrival totals:
+  `left` is one integer, the sum of the per-reason counts. Rival cash,
+  warehouse batches, orders, costs, unlocks, policies and random state are
+  never copied in, and neither are the reasons diners left or the per-stall
+  lost-diner counts: the projection names its fields rather than filtering a
+  state map.
   """
 
   alias FeudHall.Domain.Market
@@ -29,8 +33,13 @@ defmodule FeudHall.Domain.PublicView do
       now: state.now,
       market: market(state),
       stalls: stalls(state),
+      today: today(state),
       demand: Enum.map(state.demand.summaries, &Map.take(&1, @summary_keys))
     }
+  end
+
+  defp today(%{demand: %{today: day}}) do
+    %{arrivals: day.arrivals, admitted: day.admitted, left: day.left |> Map.values() |> Enum.sum()}
   end
 
   defp market(%{catalog: catalog, market: market}) do

@@ -205,6 +205,8 @@ export type View = {
     visitor_play?: boolean;
     access: string;
     stalls: Stall[];
+    today?: { arrivals: number; admitted: number; left: number };
+    queue_limit?: number;
     rooms?: { count: number; open: number };
     vacancies?: Vacancy[];
     position: number;
