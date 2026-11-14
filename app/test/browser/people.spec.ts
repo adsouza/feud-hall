@@ -241,11 +241,24 @@ test("people: every pose is finite, and no look is wider than the stated span", 
             expect(matrix.elements.every(Number.isFinite)).toBe(true);
           },
         );
-        const xs = parts(look)
-          .filter((p) => p.kind === "upperArm")
-          .map((p) => p.at.x);
-        expect(Math.abs(xs[1] - xs[0])).toBeLessThanOrEqual(FIGURE_MAX_SPAN);
+        const limit = FIGURE_MAX_SPAN / 2 + 1e-9;
+        const reach = FIGURE.handR * look.height * look.width;
+        const posed = { ...stand, stride, walking, carrying };
+        for (const hand of parts(look, posed).filter((p) => p.kind === "hand"))
+          expect(Math.abs(hand.at.x) + reach).toBeLessThanOrEqual(limit);
       },
     ),
   );
+
+  // And the bound is tight, not loose.
+  let widest: Look | undefined;
+  for (let serial = 0; serial < 5000 && !widest; serial++) {
+    const look = personLook(serial, "diner");
+    if (look.height > 1.6 && look.width > 1.08) widest = look;
+  }
+  if (!widest) throw new Error("no such look");
+  const [left, right] = parts(widest).filter((p) => p.kind === "hand");
+  const reach = FIGURE.handR * widest.height * widest.width;
+  const span = right.at.x - left.at.x + 2 * reach;
+  expect(span).toBeGreaterThanOrEqual(0.95 * FIGURE_MAX_SPAN);
 });

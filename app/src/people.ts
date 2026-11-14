@@ -24,6 +24,11 @@ const SKINS = [0xf1c3a0, 0x9d6146, 0xc28a63, 0xe6ad79, 0x704331, 0xb57a57];
 const HAIRS = [0x2a1d17, 0x4a3222, 0x111014, 0x8a5a2e, 0xb9b2aa, 0x5c2e1e];
 const TROUSERS = [0x515068, 0x3b4252, 0x6b5a4a, 0x2f3440, 0x7a6f8a];
 const HAIR_STYLES: readonly HairStyle[] = ["short", "long", "bun", "cap"];
+// Every look's size lies in these ranges; the span calculation below uses them too.
+const HEIGHT_MIN = 1.38;
+const HEIGHT_MAX = 1.62;
+const WIDTH_MIN = 0.9;
+const WIDTH_MAX = 1.1;
 const OWNER_SHIRT = 0xff9e57;
 const WORKER_SHIRT = 0x8de2d1;
 
@@ -63,8 +68,8 @@ export function personLook(serial: number, role: Role): Look {
     skirt: field(bits, 18, 1) === 1,
     shortSleeves: field(bits, 19, 1) === 1,
     apron: role === "owner",
-    height: 1.5 * (0.92 + (0.16 * field(bits, 20, 4)) / 15),
-    width: 0.9 + (0.2 * field(bits, 24, 4)) / 15,
+    height: HEIGHT_MIN + ((HEIGHT_MAX - HEIGHT_MIN) * field(bits, 20, 4)) / 15,
+    width: WIDTH_MIN + ((WIDTH_MAX - WIDTH_MIN) * field(bits, 24, 4)) / 15,
   };
 }
 
@@ -112,9 +117,6 @@ export const FIGURE = {
 } as const;
 
 const F = FIGURE;
-const TALLEST = 1.62;
-const WIDEST = 1.1;
-
 // Outer shoulder-to-shoulder width of the tallest, widest look: the arms hang
 // out by `armOut`, so the hands sit further from the body than the shoulders.
 export const FIGURE_MAX_SPAN: number =
@@ -122,8 +124,8 @@ export const FIGURE_MAX_SPAN: number =
   (F.shoulderX +
     F.upperArmR +
     (F.upperArmLen + F.forearmLen) * Math.sin(F.armOut)) *
-  TALLEST *
-  WIDEST;
+  HEIGHT_MAX *
+  WIDTH_MAX;
 
 export type PartKind =
   | "torso"
