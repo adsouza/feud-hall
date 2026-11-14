@@ -2309,6 +2309,8 @@
           <div class="hall-scene-pane">
             <HallScene
               stalls={view.hall.stalls}
+              rooms={view.hall.rooms}
+              vacancies={view.hall.vacancies}
               ownedStalls={view.hall.stalls.filter((stall) =>
                 restaurant?.stalls.some((owned) => owned.id === stall.stall_id),
               )}

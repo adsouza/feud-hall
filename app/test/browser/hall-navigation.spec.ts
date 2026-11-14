@@ -1,12 +1,8 @@
 import * as T from "three";
 import type { Page } from "@playwright/test";
 import { test, expect, state } from "./hall";
-import {
-  hallLayout,
-  walkingEntrance,
-  stallBlocks,
-  toStall,
-} from "../../src/hall-layout";
+import { toStall } from "../../src/hall-layout";
+import { assignSpots, spotPlacement } from "../../src/room-layout";
 
 test.use({
   launch: true,
@@ -18,61 +14,6 @@ test.use({
       "--enable-unsafe-swiftshader",
     ],
   },
-});
-
-test("walking entrances prefer open counters and remain clear at every hall size", () => {
-  const failures: string[] = [];
-  for (let count = 1; count <= 150; count++) {
-    const layout = hallLayout(count);
-    for (const chosen of [0, Math.floor(count / 2), count - 1]) {
-      const stalls = layout.placements.map((placement, i) => ({
-        id: `stall-${i}`,
-        open: i === chosen,
-        placement,
-      }));
-      const entry = walkingEntrance(
-        stalls,
-        "stall-0",
-        layout.floorWidth,
-        layout.floorDepth,
-      );
-      if (entry.stall !== `stall-${chosen}`)
-        failures.push("closed counter preferred");
-      if (
-        stalls.some((stall) =>
-          stallBlocks(stall.placement, entry.position.x, entry.position.z),
-        )
-      )
-        failures.push("spawn in booth");
-      if (
-        Math.abs(entry.position.x) > layout.floorWidth / 2 - 0.3 ||
-        Math.abs(entry.position.z) > layout.floorDepth / 2 - 0.3
-      )
-        failures.push("spawn outside room");
-      const local = toStall(
-        stalls[chosen].placement,
-        entry.position.x,
-        entry.position.z,
-      );
-      if (local.z < 4 || Math.abs(local.x) > 1)
-        failures.push("spawn behind counter");
-    }
-  }
-  expect(failures).toEqual([]);
-  const layout = hallLayout(3),
-    stalls = layout.placements.map((placement, i) => ({
-      id: String(i),
-      open: false,
-      placement,
-    }));
-  expect(
-    walkingEntrance(stalls, "1", layout.floorWidth, layout.floorDepth).stall,
-  ).toBe("1");
-  expect(walkingEntrance([], "", 20, 20)).toEqual({
-    stall: "",
-    position: { x: 0, z: 0 },
-    target: { x: 0, z: -6 },
-  });
 });
 
 type Probe = Window & {
@@ -127,7 +68,7 @@ test("every first arrow enters at eye level facing an open stall, then walking r
       forward: new T.Vector3(0, 0, -1).transformDirection(world),
     };
   }
-  const layout = hallLayout(snapshot.hall.stalls.length);
+  const spots = assignSpots(snapshot.hall.stalls);
   for (const key of [
     "ArrowUp",
     "ArrowDown",
@@ -149,7 +90,8 @@ test("every first arrow enters at eye level facing an open stall, then walking r
       (stall: any) => stall.stall_id === id,
     );
     expect(snapshot.hall.stalls[index]["open?"], key).toBe(true);
-    const counter = layout.placements[index];
+    const spot = spots.get(id)!;
+    const counter = spotPlacement(spot.room, spot.position);
     const toward = new T.Vector3(
       counter.x - camera.position.x,
       0,

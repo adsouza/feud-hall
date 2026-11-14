@@ -9,14 +9,9 @@ import type { PersonalTray } from "./diner-pickup";
 import { createTabletScreen } from "./hall-tablet";
 import type { TabletView, TabletAction } from "./hall-tablet";
 import {
-  layoutStalls,
-  nextStallSlot,
-  walkingEntrance,
   stallBlocks,
-  type StallSlot,
   toHall,
   toStall,
-  type StallPlacement,
   COUNTER_TRAY,
   PICKUP_SPOT,
   QUEUE_SPOTS,
@@ -24,6 +19,17 @@ import {
   collectMs,
   collectTray,
 } from "./hall-layout";
+import {
+  ROOM_COUNT,
+  ROOM_SIDE,
+  assignSpots,
+  roomAt,
+  roomCentre,
+  spotPlacement,
+  walkable,
+  walkingEntrance,
+  type SpotPlacement,
+} from "./room-layout";
 import {
   carryPoint,
   personLook,
@@ -55,7 +61,17 @@ export type Actions = {
   walk: (id: string) => void;
   collect: (id: string) => boolean;
   collected: () => void;
+  /** The room the viewer is in changed. */
+  room: (room: number) => void;
+  /** A "to let" bay was selected. */
+  vacancy: (stallId: string) => void;
   frame?: (drawMs: number) => void;
+};
+export type HallVacancy = {
+  stall_id: string;
+  tier: string;
+  room: number;
+  position: number;
 };
 export type Appearance = {
   stalls: Stall[];
@@ -72,6 +88,11 @@ export type Appearance = {
   tablet: TabletView | null;
   tabletLabel: string;
   tabletHint: string;
+  /** Absent for halls without the room rule: every room in use is open. */
+  rooms?: { count: number; open: number };
+  /** Vacant spots of open rooms; drawn as "to let" bays. */
+  vacancies?: HallVacancy[];
+  toLetLabel: string;
 };
 type Diner = {
   look: Look;
@@ -85,10 +106,11 @@ type Departure = {
   z: number;
   side: number;
   startedAt: number;
+  room: number;
   trayFrom?: Point;
   // Set for a served diner: the walk to the counter that comes before leaving.
   collect?: {
-    frame: StallPlacement;
+    frame: SpotPlacement;
     fromX: number;
     fromZ: number;
     ms: number;
@@ -109,8 +131,8 @@ type Counter = {
   plaque: T.Mesh;
   pickup: T.Mesh;
   serviceLamp: T.Mesh;
-  index: number;
-  placement: StallPlacement;
+  index: number; // stable per stall, for animation phase only
+  placement: SpotPlacement;
   name: string;
   cuisine: string;
   color: T.Color;
@@ -127,6 +149,13 @@ type Counter = {
 const SMALL_HALL = 4;
 const STALL_LIMIT = 150;
 const ORBIT_POLAR_LIMIT = 1.46;
+/** The room overview: from the south, high enough to frame the whole room. */
+const OVERVIEW: Point = [4.8, 29.8, 37.4];
+const MAX_DISTANCE = 90;
+const HALF_ROOM = ROOM_SIDE / 2;
+const ROOM_PITCH = roomCentre(2).x - roomCentre(1).x;
+/** Keep the walker's eye this far from walls and booths. */
+const WALK_MARGIN = 0.3;
 const EYE_HEIGHT = 1.55;
 const WALK_LOOK_DISTANCE = 6;
 const WALK_SPEED = 3.2;
@@ -280,14 +309,14 @@ export function createHallScene(
   host.appendChild(renderer.domElement);
 
   const scene = new T.Scene();
-  const fog = new T.FogExp2("#111526", 0.012);
+  const fog = new T.FogExp2("#111526", 0.009);
   scene.fog = fog;
   const camera = new T.PerspectiveCamera(42, 1, 0.25, 175);
   const orbit = new OrbitControls(camera, renderer.domElement);
   orbit.enableDamping = false;
   orbit.screenSpacePanning = true;
   orbit.minDistance = 3.5;
-  orbit.maxDistance = 115;
+  orbit.maxDistance = MAX_DISTANCE;
   orbit.minPolarAngle = 0.25;
   orbit.maxPolarAngle = ORBIT_POLAR_LIMIT;
   orbit.mouseButtons.LEFT = T.MOUSE.ROTATE;
@@ -295,7 +324,6 @@ export function createHallScene(
   let walking: string | null = saved?.walk?.stall ?? null;
   let insideStall = saved?.inside?.stall ?? "";
   let hallView: CameraPose | undefined = saved?.inside?.hall;
-  let radius = 15;
   let readingMenu = saved?.menu?.stall ?? "";
   let menuReturn: CameraPose | undefined = saved?.menu?.hall;
   const tabletGeometry = new T.PlaneGeometry(0.62, 0.93);
@@ -341,14 +369,6 @@ export function createHallScene(
   personalMaterial.emissiveIntensity = 0.2;
   const personalPickups = new Map<string, { mesh: T.Mesh; stall: string }>();
   const collectedPickups = new Set<string>();
-  const tileMat = new T.MeshStandardMaterial({
-    color: "#252b40",
-    roughness: 0.86,
-  });
-  const foundationMat = new T.MeshStandardMaterial({
-    color: "#14172a",
-    roughness: 0.94,
-  });
   const wall = new T.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.75,
@@ -444,13 +464,12 @@ export function createHallScene(
         roughness: 0.78,
       }),
   );
-  const floor = new T.Group();
   const stalls = new Map<string, Counter>();
   let departures: Departure[] = [];
   const buildings = new T.Group();
   const cuisineArt = createCuisineArt(buildings, STALL_LIMIT, () => draw());
   const hallShell = createHallShell(scene, () => draw());
-  scene.add(floor, buildings);
+  scene.add(buildings);
 
   function brick(
     parent: T.Object3D,
@@ -469,49 +488,100 @@ export function createHallScene(
     return mesh;
   }
 
-  const floorBase = brick(floor, foundationMat, 0, -0.32, 0, 1, 0.4, 1);
-  const floorTop = brick(floor, tileMat, 0, -0.115, 0, 1, 0.1, 1);
-  const laneMat = new T.MeshStandardMaterial({
+  const bayMat = new T.MeshStandardMaterial({
     color: "#3a4359",
     roughness: 0.9,
   });
-  const islandFloors = new T.InstancedMesh(
-    box,
-    laneMat,
-    Math.ceil(STALL_LIMIT / 8),
-  );
-  islandFloors.count = 0;
-  islandFloors.frustumCulled = false;
-  floor.add(islandFloors);
-  const islandTransform = new T.Object3D();
-  const lines = new T.Group();
-  floor.add(lines);
-  let floorSignature = "";
-  let centre = new T.Vector3();
+  const toLetMat = new T.MeshBasicMaterial({ color: "#ffffff" });
+  const toLetGeometry = new T.PlaneGeometry(1.5, 0.62);
+  let toLetLabel = "";
 
-  function resizeFloor(width: number, depth: number) {
-    const signature = `${width}:${depth}`;
-    if (signature === floorSignature) return;
-    floorSignature = signature;
-    centre = new T.Vector3();
-    radius = Math.hypot(width, depth) * 0.91;
-    // Keep the whole-room view readable as the rendered hall expands.
-    fog.density = Math.min(0.012, 0.45 / radius);
-    camera.far = Math.max(175, radius * 3);
-    configureCamera();
-    camera.updateProjectionMatrix();
-    floorBase.position.set(0, -0.32, 0);
-    floorBase.scale.set(width + 0.3, 0.4, depth + 0.3);
-    floorTop.position.set(0, -0.09, 0);
-    floorTop.scale.set(width, 0.1, depth);
-    hallShell.resize(0, 0, width, depth);
-    lines.clear();
-    const insetX = width / 2 - 4.5,
-      insetZ = depth / 2 - 4.5;
-    for (const sign of [-1, 1]) {
-      brick(lines, laneMat, sign * insetX, -0.028, 0, 0.065, 0.025, insetZ * 2);
-      brick(lines, laneMat, 0, -0.028, sign * insetZ, insetX * 2, 0.025, 0.065);
+  function paintToLet(label: string, repaint = false) {
+    if (!repaint && label === toLetLabel) return;
+    toLetLabel = label;
+    const canvas = document.createElement("canvas");
+    canvas.width = 384;
+    canvas.height = 160;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#fff0cd";
+    ctx.fillRect(0, 0, 384, 160);
+    ctx.fillStyle = "#b8443c";
+    ctx.fillRect(10, 10, 364, 140);
+    ctx.fillStyle = "#fff6e3";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const font = '900 64px "Noto Sans JP", system-ui, sans-serif';
+    ctx.font = font;
+    ctx.fillText(label, 192, 82, 340);
+    const map = new T.CanvasTexture(canvas);
+    map.colorSpace = T.SRGBColorSpace;
+    toLetMat.map?.dispose();
+    toLetMat.map = map;
+    toLetMat.needsUpdate = true;
+    if (!repaint && !document.fonts.check(font, label)) {
+      void document.fonts
+        .load(font, label)
+        .then(() => {
+          if (disposed || toLetLabel !== label) return;
+          paintToLet(label, true);
+          draw();
+        })
+        .catch(() => {});
     }
+  }
+
+  type Bay = { root: T.Group; hit: T.Mesh; placement: SpotPlacement };
+  const bays = new Map<string, Bay>();
+
+  /** An empty spot: a marked floor and a "to let" sign facing the room. */
+  function createBay(id: string, placement: SpotPlacement): Bay {
+    const root = new T.Group();
+    root.position.set(placement.x, 0, placement.z);
+    root.rotation.y = placement.yaw;
+    brick(root, bayMat, 0, -0.02, 0.08, 3.5, 0.03, 2.5);
+    for (const side of [-1, 1])
+      brick(root, highlight, side * 1.72, -0.005, 0.08, 0.06, 0.012, 2.5);
+    brick(root, wood, 0, 0.62, 0.55, 0.08, 1.24, 0.08);
+    brick(root, wood, 0, 0.02, 0.55, 0.6, 0.04, 0.4);
+    const sign = new T.Mesh(toLetGeometry, toLetMat);
+    sign.position.set(0, 1.42, 0.6);
+    root.add(sign);
+    const hit = brick(root, hitMat, 0, 1.06, 0.07, 3.5, 2.2, 2.25);
+    hit.userData.vacancy = id;
+    buildings.add(root);
+    return { root, hit, placement };
+  }
+
+  function discardBay(bay: Bay) {
+    buildings.remove(bay.root);
+  }
+
+  /** One bay per vacant spot; halls without the room rule have none. */
+  function updateBays(next: Appearance) {
+    const vacant = new Map(
+      (next.rooms ? (next.vacancies ?? []) : []).map((vacancy) => [
+        vacancy.stall_id,
+        vacancy,
+      ]),
+    );
+    for (const [id, bay] of bays) {
+      const vacancy = vacant.get(id);
+      if (
+        !vacancy ||
+        vacancy.room !== bay.placement.room ||
+        vacancy.position !== bay.placement.position
+      ) {
+        discardBay(bay);
+        bays.delete(id);
+      }
+    }
+    for (const [id, vacancy] of vacant)
+      if (!bays.has(id))
+        bays.set(
+          id,
+          createBay(id, spotPlacement(vacancy.room, vacancy.position)),
+        );
   }
 
   const signGeometry = new T.PlaneGeometry(2.9, 0.43);
@@ -612,19 +682,11 @@ export function createHallScene(
   function createCounter(
     stall: Stall,
     index: number,
-    slot: StallSlot = nextStallSlot(
-      [...stalls.values()].map((model) => model.placement),
-    ),
+    placement: SpotPlacement,
   ): Counter {
     const root = new T.Group();
     const trim = new T.Group();
     root.add(trim);
-    const placement = layoutStalls([
-      ...[...stalls.values()]
-        .filter((model) => model.index !== index)
-        .map((model) => model.placement),
-      slot,
-    ]).placements.at(-1)!;
     root.position.set(placement.x, 0, placement.z);
     root.rotation.y = placement.yaw;
     const colorIndex = hash(stall.cuisine) % hues.length;
@@ -860,6 +922,7 @@ export function createHallScene(
         diner,
         x: spot.x,
         z: spot.z,
+        room: model.placement.room,
         yaw: model.placement.yaw,
         side: 1, // leave to the right, away from the queue
         startedAt: now,
@@ -883,6 +946,7 @@ export function createHallScene(
       diner,
       x,
       z,
+      room: model.placement.room,
       yaw: model.placement.yaw,
       side,
       // An interrupted arrival heads back from its current point in the aisle.
@@ -1017,8 +1081,9 @@ export function createHallScene(
         now - startedAt < WALK_MS + (collect?.ms ?? 0),
     );
     for (const departure of departures) {
-      const { diner, x, z, side, startedAt, trayFrom, yaw, collect } =
+      const { diner, x, z, side, startedAt, trayFrom, yaw, collect, room } =
         departure;
+      if (!shown.has(room)) continue;
       const elapsed = Math.max(0, now - startedAt);
       if (collect && elapsed < collect.ms) {
         collectDiner(diner, collect, elapsed, trayFrom);
@@ -1053,8 +1118,14 @@ export function createHallScene(
     tablet: null,
     tabletLabel: "",
     tabletHint: "",
+    toLetLabel: "",
   };
   let hover = "";
+  // The room the viewer is in, the open rooms, and how each drawn room is drawn.
+  let currentRoom = 1;
+  let openRooms = 1;
+  const shown = new Map<number, "full" | "simple">([[1, "full"]]);
+  let drawnBays = -1;
   let frame = 0;
   let animating = false;
   let frameInterval = 32;
@@ -1069,17 +1140,25 @@ export function createHallScene(
   function draw(now = performance.now()) {
     if (disposed || document.hidden) return;
     const started = performance.now();
+    trackRoom();
     hallShell.update(camera.position);
     let puffs = 0;
     carriedTrays.count = 0;
     people.begin();
     const time = appearance.motion ? now / 1000 : 0;
     for (const [id, model] of stalls) {
+      const level = shown.get(model.placement.room);
+      if (!level) {
+        model.visibleDiners = 0;
+        continue;
+      }
       const nearby =
         camera.position.distanceToSquared(model.root.position) < 28 ** 2;
       const inspected =
         id === appearance.selected || id === hover || id === appearance.pickup;
-      const detailed = inspected || (appearance.detail && nearby);
+      // Rooms next door are drawn simply.
+      const detailed =
+        level === "full" && (inspected || (appearance.detail && nearby));
       model.trim.visible = detailed;
       model.sign.visible = detailed || stalls.size <= SMALL_HALL;
       model.edge.visible = inspected;
@@ -1249,15 +1328,20 @@ export function createHallScene(
       camera.position.set(next.x, EYE_HEIGHT, next.z);
       return;
     }
-    const { x, z } = floorTop.position;
-    const halfWidth = floorTop.scale.x / 2 - 0.3;
-    const halfDepth = floorTop.scale.z / 2 - 0.3;
-    const clampX = (value: number) =>
-      T.MathUtils.clamp(value, x - halfWidth, x + halfWidth);
-    const clampZ = (value: number) =>
-      T.MathUtils.clamp(value, z - halfDepth, z + halfDepth);
+    const placements = [...stalls.values()]
+      .filter((model) => shown.has(model.placement.room))
+      .map((model) => model.placement);
+    const free = (x: number, z: number) =>
+      walkable(x, z, openRooms, placements);
+    // Clear of walls and booths by a margin, so the eye never enters one.
+    const clear = (x: number, z: number) =>
+      free(x, z) &&
+      free(x + WALK_MARGIN, z) &&
+      free(x - WALK_MARGIN, z) &&
+      free(x, z + WALK_MARGIN) &&
+      free(x, z - WALK_MARGIN);
     const position = camera.position;
-    position.set(clampX(position.x), EYE_HEIGHT, clampZ(position.z));
+    position.y = EYE_HEIGHT;
     const blocked = blockingStall(position.x, position.z);
     if (blocked) {
       const local = toStall(blocked.placement, position.x, position.z);
@@ -1266,14 +1350,18 @@ export function createHallScene(
         T.MathUtils.clamp(local.x, -1.2, 1.2),
         1.5,
       );
-      position.x = clampX(exit.x);
-      position.z = clampZ(exit.z);
+      if (free(exit.x, exit.z)) {
+        position.x = exit.x;
+        position.z = exit.z;
+      }
     }
-
-    const nextX = clampX(position.x + dx);
-    if (!blockingStall(nextX, position.z)) position.x = nextX;
-    const nextZ = clampZ(position.z + dz);
-    if (!blockingStall(position.x, nextZ)) position.z = nextZ;
+    // Moving out of a tight spot is allowed as long as it stays walkable.
+    const step = (x: number, z: number) =>
+      clear(x, z) || (!clear(position.x, position.z) && free(x, z));
+    const nextX = position.x + dx;
+    if (step(nextX, position.z)) position.x = nextX;
+    const nextZ = position.z + dz;
+    if (step(position.x, nextZ)) position.z = nextZ;
   }
 
   function enterWalking() {
@@ -1284,8 +1372,7 @@ export function createHallScene(
         placement: model.placement,
       })),
       appearance.selected,
-      floorTop.scale.x,
-      floorTop.scale.z,
+      currentRoom,
     );
     walking = entrance.stall;
     camera.position.set(entrance.position.x, EYE_HEIGHT, entrance.position.z);
@@ -1454,6 +1541,19 @@ export function createHallScene(
       }
       return;
     }
+    if (
+      (event.key === "[" || event.key === "]") &&
+      !event.isComposing &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey
+    ) {
+      // The previous or next open room.
+      event.preventDefault();
+      if (!pickupHands.active)
+        showRoom(currentRoom + (event.key === "]" ? 1 : -1));
+      return;
+    }
     shiftHeld = event.shiftKey;
     if (
       !ARROW_KEYS.has(event.key) ||
@@ -1495,7 +1595,7 @@ export function createHallScene(
     // A tiny orbit pivot turns the owner's head in place. Panning or dollying
     // would take the camera through the booth walls or the counter.
     orbit.minDistance = insideStall ? 0.01 : readingMenu ? 0.5 : 3.5;
-    orbit.maxDistance = insideStall ? 0.01 : Math.max(115, radius * 2);
+    orbit.maxDistance = insideStall ? 0.01 : MAX_DISTANCE;
     orbit.enablePan = !insideStall;
     orbit.enableZoom = !insideStall;
     orbit.maxPolarAngle =
@@ -1553,24 +1653,109 @@ export function createHallScene(
     draw();
   }
 
-  function reset() {
-    readMenu("");
-    setInside("");
+  /** Frame a room's overview. */
+  function frameRoom(room: number) {
+    const c = roomCentre(room);
     walking = null;
     orbit.maxPolarAngle = ORBIT_POLAR_LIMIT;
-    orbit.target.copy(centre);
-    camera.position
-      .copy(centre)
-      .add(new T.Vector3(radius * 0.5, radius * 0.75, radius * 0.85));
+    orbit.target.set(c.x, 0, c.z);
+    camera.position.set(c.x + OVERVIEW[0], OVERVIEW[1], c.z + OVERVIEW[2]);
     orbit.update();
+    setRoom(room);
     draw();
+  }
+
+  function reset() {
+    const room = currentRoom;
+    readMenu("");
+    setInside("");
+    frameRoom(Math.min(room, openRooms));
+  }
+
+  /** Move to an open room's overview; a closed or missing room is ignored. */
+  function showRoom(room: number) {
+    if (!Number.isInteger(room) || room < 1 || room > openRooms) return;
+    stopWalking();
+    readMenu("");
+    setInside("");
+    frameRoom(room);
+  }
+
+  /** The room the camera is looking into, before limiting it to open rooms. */
+  function roomOfView() {
+    const model = stalls.get(insideStall || readingMenu);
+    if (model) return model.placement.room;
+    if (walking !== null)
+      return roomAt(camera.position.x, camera.position.z) ?? currentRoom;
+    return T.MathUtils.clamp(
+      Math.round((orbit.target.x - roomCentre(1).x) / ROOM_PITCH) + 1,
+      1,
+      ROOM_COUNT,
+    );
+  }
+
+  function trackRoom() {
+    if (hasHallView) setRoom(Math.min(roomOfView(), openRooms));
+  }
+
+  function setRoom(room: number) {
+    if (room === currentRoom && host.hasAttribute("data-hall-room")) return;
+    const changed = room !== currentRoom;
+    currentRoom = room;
+    host.setAttribute("data-hall-room", String(room));
+    applyRooms();
+    if (changed) actions.room(room);
+  }
+
+  /** Draw the current room in full, open rooms next door simply, nothing else. */
+  function applyRooms() {
+    shown.clear();
+    shown.set(currentRoom, "full");
+    for (const room of [currentRoom - 1, currentRoom + 1])
+      if (room >= 1 && room <= openRooms) shown.set(room, "simple");
+    hallShell.show(
+      [...shown].map(([room, detail]) => ({ room, detail })),
+      openRooms,
+    );
+    const visible: Counter[] = [];
+    for (const model of stalls.values()) {
+      model.root.visible = shown.has(model.placement.room);
+      if (model.root.visible) visible.push(model);
+    }
+    cuisineArt.update(visible, appearance.cuisineLabel);
+    let count = 0;
+    for (const bay of bays.values()) {
+      const room = bay.placement.room;
+      bay.root.visible = shown.has(room) && room <= openRooms;
+      if (bay.root.visible) count++;
+    }
+    if (count !== drawnBays) {
+      drawnBays = count;
+      host.setAttribute("data-hall-bays", String(count));
+    }
+  }
+
+  /** Keep the orbit's target over the open rooms: closed rooms are never shown. */
+  function limitTarget() {
+    if (walking !== null || insideStall || readingMenu) return;
+    const target = orbit.target;
+    const x = T.MathUtils.clamp(
+      target.x,
+      roomCentre(1).x - HALF_ROOM,
+      roomCentre(openRooms).x + HALF_ROOM,
+    );
+    const z = T.MathUtils.clamp(target.z, -HALF_ROOM, HALF_ROOM);
+    if (x === target.x && z === target.z) return;
+    const shift = new T.Vector3(x - target.x, 0, z - target.z);
+    target.add(shift);
+    camera.position.add(shift);
   }
 
   function focus(id: string) {
     readMenu("");
     setInside("");
     const model = stalls.get(id);
-    if (!model) return;
+    if (!model || model.placement.room > openRooms) return;
     walking = null;
     orbit.target.copy(model.root.localToWorld(new T.Vector3(0, 0.75, 0.35)));
     const offset = new T.Vector3(0.7, 1.65, 7.8).applyAxisAngle(
@@ -1625,6 +1810,8 @@ export function createHallScene(
   const ray = new T.Raycaster();
   const cursor = new T.Vector2();
   let press: [number, number] | null = null;
+  // How far along the last pointer ray the stall it found was.
+  let stallDistance = Infinity;
   function hit(event: PointerEvent) {
     const bounds = renderer.domElement.getBoundingClientRect();
     cursor.set(
@@ -1633,9 +1820,12 @@ export function createHallScene(
     );
     ray.setFromCamera(cursor, camera);
     const match = ray.intersectObjects(
-      [...stalls.values()].map((stall) => stall.hit),
+      [...stalls.values()]
+        .filter((stall) => stall.root.visible)
+        .map((stall) => stall.hit),
       false,
     )[0];
+    stallDistance = match?.distance ?? Infinity;
     return (match?.object.userData.stall as string | undefined) ?? "";
   }
   function down(event: PointerEvent) {
@@ -1653,7 +1843,9 @@ export function createHallScene(
     // Test the real tray and screen meshes before the coarse stall hit box.
     const selected = hit(event);
     const screen = ray.intersectObjects(
-      [...stalls.values()].map((model) => model.tablet),
+      [...stalls.values()]
+        .filter((model) => model.root.visible)
+        .map((model) => model.tablet),
       false,
     )[0];
     const food = ray.intersectObjects(
@@ -1679,6 +1871,16 @@ export function createHallScene(
         const action = activeTablet.hit(screen.uv.x, 1 - screen.uv.y);
         if (action) actions.tablet(id, action);
       }
+      return;
+    }
+    const bay = ray.intersectObjects(
+      [...bays.values()]
+        .filter((item) => item.root.visible)
+        .map((item) => item.hit),
+      false,
+    )[0];
+    if (bay && bay.distance < stallDistance) {
+      actions.vacancy(bay.object.userData.vacancy as string);
       return;
     }
     if (selected) actions.select(selected);
@@ -1713,6 +1915,7 @@ export function createHallScene(
   host.addEventListener("blur", stopWalking);
   window.addEventListener("blur", stopWalking);
   function orbitChanged() {
+    limitTarget();
     draw(performance.now());
   }
   orbit.addEventListener("change", orbitChanged);
@@ -1790,9 +1993,16 @@ export function createHallScene(
           stalls.delete(id);
         }
       }
-      const indices = new Set([...stalls.values()].map((model) => model.index));
-      let index = 0;
+      const spots = assignSpots(next.stalls);
+      // Without the room rule every room in use is open.
+      openRooms = T.MathUtils.clamp(
+        next.rooms?.open ??
+          Math.max(1, ...[...spots.values()].map((spot) => spot.room)),
+        1,
+        ROOM_COUNT,
+      );
       for (const stall of next.stalls) {
+        const spot = spots.get(stall.stall_id)!;
         let model = stalls.get(stall.stall_id);
         if (model && model.cuisine !== stall.cuisine) {
           const previous = model;
@@ -1805,10 +2015,22 @@ export function createHallScene(
           stalls.set(stall.stall_id, model);
         }
         if (!model) {
-          while (indices.has(index)) index++;
-          model = createCounter(stall, index);
-          indices.add(index);
+          model = createCounter(
+            stall,
+            hash(stall.stall_id) % 997,
+            spotPlacement(spot.room, spot.position),
+          );
           stalls.set(stall.stall_id, model);
+        }
+        if (
+          model.placement.room !== spot.room ||
+          model.placement.position !== spot.position
+        ) {
+          // Only the fallback for halls without room data can move a stall.
+          const placement = spotPlacement(spot.room, spot.position);
+          model.placement = placement;
+          model.root.position.set(placement.x, 0, placement.z);
+          model.root.rotation.y = placement.yaw;
         }
         if (model.restaurant !== stall.restaurant_id) {
           // The stall changed hands: the new business's owner stands there.
@@ -1859,67 +2081,20 @@ export function createHallScene(
       )
         setInside("");
       if (walking && !stalls.has(walking)) walking = null;
+      if (readingMenu && !stalls.has(readingMenu)) readMenu("");
       hasHallView = true;
-      const models = [...stalls.values()];
-      const layout = layoutStalls(models.map((model) => model.placement));
-      const anchor = stalls.get(
-        insideStall || readingMenu || walking || next.selected,
-      );
-      const before = anchor?.placement;
-      for (const [i, model] of models.entries()) {
-        const placement = layout.placements[i];
-        model.placement = placement;
-        model.root.position.set(placement.x, 0, placement.z);
-        model.root.rotation.y = placement.yaw;
+      updateBays(next);
+      paintToLet(next.toLetLabel);
+      // A room that closes, with the viewer in it: go to the highest open room
+      // below it. Otherwise follow the view, with doors to match the open rooms.
+      const viewRoom = roomOfView();
+      if (initialized && viewRoom > openRooms) showRoom(openRooms);
+      else {
+        const room = Math.min(viewRoom, openRooms);
+        if (room !== currentRoom || !host.hasAttribute("data-hall-room"))
+          setRoom(room);
+        else applyRooms();
       }
-      if (anchor && before) {
-        const reframe = (position: T.Vector3) => {
-          if (
-            before.x === anchor.placement.x &&
-            before.z === anchor.placement.z &&
-            before.yaw === anchor.placement.yaw
-          )
-            return;
-          const local = toStall(before, position.x, position.z);
-          const moved = toHall(anchor.placement, local.x, local.z);
-          position.x = moved.x;
-          position.z = moved.z;
-        };
-        reframe(camera.position);
-        reframe(orbit.target);
-        for (const savedPose of [hallView, menuReturn])
-          if (savedPose) {
-            const position = vec(savedPose.position),
-              target = vec(savedPose.target);
-            reframe(position);
-            reframe(target);
-            savedPose.position = point(position);
-            savedPose.target = point(target);
-          }
-      } else if (
-        initialized &&
-        // A saved camera on the first update is already in this hall's
-        // units: only a floor that was laid out before can have grown.
-        floorSignature !== "" &&
-        (floorTop.scale.x !== layout.floorWidth ||
-          floorTop.scale.z !== layout.floorDepth)
-      ) {
-        const ratio =
-          Math.hypot(layout.floorWidth, layout.floorDepth) /
-          Math.hypot(floorTop.scale.x, floorTop.scale.z);
-        camera.position.multiplyScalar(ratio);
-        orbit.target.multiplyScalar(ratio);
-      }
-      resizeFloor(layout.floorWidth, layout.floorDepth);
-      islandFloors.count = layout.islands.length;
-      for (const island of layout.islands) {
-        islandTransform.position.set(island.x, -0.027, island.z);
-        islandTransform.scale.set(island.side + 2.6, 0.025, island.side + 2.6);
-        islandTransform.updateMatrix();
-        islandFloors.setMatrixAt(island.id, islandTransform.matrix);
-      }
-      islandFloors.instanceMatrix.needsUpdate = true;
-      orbit.update();
       const available = new Set(
         next.pickups
           .filter((tray) => !collectedPickups.has(tray.id))
@@ -1948,7 +2123,6 @@ export function createHallScene(
         stacked.set(tray.stall, index + 1);
         item.mesh.position.set(0, 0.93 + index * 0.13, 0.88);
       }
-      cuisineArt.update(stalls.values(), next.cuisineLabel);
       if (detailChanged)
         renderer.setPixelRatio(
           Math.min(window.devicePixelRatio, next.detail ? 1.65 : 1),
@@ -1965,6 +2139,8 @@ export function createHallScene(
     setInside,
     readMenu,
     takePickup,
+    showRoom,
+    room: () => currentRoom,
     tilt(angle: number) {
       if (!insideStall) return;
       const spherical = new T.Spherical().setFromVector3(
@@ -2049,7 +2225,8 @@ export function createHallScene(
       idleTablet.dispose();
       activeTablet.dispose();
       tabletGeometry.dispose();
-      islandFloors.dispose();
+      for (const bay of bays.values()) discardBay(bay);
+      toLetMat.map?.dispose();
       cuisineArt.dispose();
       hallShell.dispose();
       shut.map?.dispose();
@@ -2060,8 +2237,6 @@ export function createHallScene(
         mesh.dispose();
       }
       for (const material of [
-        tileMat,
-        foundationMat,
         wall,
         wood,
         slate,
@@ -2073,7 +2248,8 @@ export function createHallScene(
         pickupMaterial,
         plaqueMat,
         hitMat,
-        laneMat,
+        bayMat,
+        toLetMat,
         ...accents,
         ...awnings,
       ])
@@ -2084,6 +2260,7 @@ export function createHallScene(
         sideWall,
         signGeometry,
         placardGeometry,
+        toLetGeometry,
         pickupGeometry,
         shutterGeometry,
         steamGeometry,

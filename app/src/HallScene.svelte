@@ -2,13 +2,20 @@
   import { onMount } from "svelte";
   import type { Stall } from "./api";
   import type { Key } from "./i18n";
-  import type { CameraState, HallTarget, createHallScene } from "./hall-scene";
+  import type {
+    CameraState,
+    HallTarget,
+    HallVacancy,
+    createHallScene,
+  } from "./hall-scene";
   import type { TabletView, TabletAction } from "./hall-tablet";
   import type { PersonalTray } from "./diner-pickup";
   import { createHallAudio } from "./hall-audio";
 
   let {
     stalls,
+    rooms,
+    vacancies,
     ownedStalls,
     selected,
     pickup,
@@ -29,6 +36,8 @@
     onUnavailable,
   }: {
     stalls: Stall[];
+    rooms?: { count: number; open: number };
+    vacancies?: HallVacancy[];
     ownedStalls: Stall[];
     selected: string;
     pickup: string;
@@ -105,6 +114,8 @@
                 lastSelection = id;
                 select(id);
               },
+              room: () => {},
+              vacancy: () => {},
             },
             saved,
           );
@@ -128,6 +139,9 @@
     if (!hall) return;
     hall.update({
       stalls,
+      rooms,
+      vacancies,
+      toLetLabel: t("toLet"),
       ownedStalls: ownedStalls.map((stall) => stall.stall_id),
       selected,
       pickup,

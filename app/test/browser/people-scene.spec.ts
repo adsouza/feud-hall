@@ -55,6 +55,14 @@ test("people: the hall draws the owner, workers and queue of each open stall", a
   // Freeze the presentation: only the two owned stalls are open and busy.
   const snapshot: View = await state(page);
   const owned = snapshot.profile!.restaurant!.stalls.map((stall) => stall.id);
+  // Every count below is for Hall 1: both owned stalls are in it, with the
+  // launch hall's own stalls, and no other room is open.
+  expect(snapshot.hall.rooms?.open).toBe(1);
+  expect(
+    snapshot.hall.stalls
+      .filter((stall) => owned.includes(stall.stall_id))
+      .map((stall) => stall.room),
+  ).toEqual([1, 1]);
   for (const stall of snapshot.hall.stalls) {
     const mine = owned.includes(stall.stall_id);
     stall["open?"] = mine;
@@ -77,10 +85,11 @@ test("people: the hall draws the owner, workers and queue of each open stall", a
   const people = async () =>
     Number(await host.getAttribute("data-hall-people"));
   // Returning to the hall keeps the camera where it was last shown. Reset it
-  // and zoom all the way out: at the farthest overview both stalls are beyond
+  // to Hall 1's overview and zoom all the way out: there both stalls are beyond
   // the detail distance, so each draws at reduced detail: 1 owner + 1 worker
   // + 1 queued diner.
   await page.getByRole("button", { name: "Reset camera", exact: true }).click();
+  await expect(host).toHaveAttribute("data-hall-room", "1");
   const zoomOut = page.getByRole("button", { name: "Zoom out", exact: true });
   for (let step = 0; step < 12; step++) await zoomOut.click();
   await expect.poll(people).toBe(6);
