@@ -4,7 +4,9 @@ import * as T from "three";
 import {
   FIGURE,
   FIGURE_MAX_SPAN,
+  SEAT_HEIGHT,
   carryPoint,
+  seatedTrayPoint,
   personLook,
   posePerson,
   serialFor,
@@ -137,6 +139,7 @@ const stand: Pose = {
   stride: 0,
   walking: false,
   carrying: false,
+  seated: false,
 };
 function parts(look: Look, pose: Pose = stand, detail: Detail = "full") {
   const out: { kind: PartKind; at: T.Vector3; colour: number }[] = [];
@@ -311,6 +314,7 @@ test("people: carrying holds both hands level in front, where carryPoint says", 
       stride,
       walking: true,
       carrying: true,
+      seated: false,
     }).filter((p) => p.kind === "hand");
     expect(left.at.y).toBeCloseTo(right.at.y, 6);
     expect(left.at.z).toBeCloseTo(right.at.z, 6);
@@ -318,6 +322,67 @@ test("people: carrying holds both hands level in front, where carryPoint says", 
     expect(carryPoint(look, stride).y).toBeCloseTo(left.at.y, 6);
     expect(carryPoint(look, stride).forward).toBeCloseTo(left.at.z, 6);
   }
+});
+
+const heightOf = (list: { at: T.Vector3 }[]) => list.map((p) => p.at.y);
+const hipHeight = (list: { kind: PartKind; at: T.Vector3 }[]) => {
+  const hips = list.filter((p) => p.kind === "upperLeg");
+  return hips.reduce((sum, p) => sum + p.at.y, 0) / hips.length;
+};
+const lowestPoint = (list: { at: T.Vector3 }[]) => Math.min(...heightOf(list));
+const headHeight = (list: { kind: PartKind; at: T.Vector3 }[]) =>
+  list.find((p) => p.kind === "head")!.at.y;
+
+test("people: a seated figure sits on the seat with feet on the floor", () => {
+  for (const serial of [1, 2, 3, 99, 4096]) {
+    const look = personLook(serial, "diner");
+    for (const detail of ["full", "simple"] as const) {
+      const seated = parts(look, { ...stand, seated: true }, detail);
+      // The hips are at seat height, whatever the figure's height.
+      expect(hipHeight(seated)).toBeCloseTo(SEAT_HEIGHT, 2);
+      // Nothing is below the floor and the head is lower than when standing.
+      expect(lowestPoint(seated)).toBeGreaterThanOrEqual(-0.005);
+      expect(headHeight(seated)).toBeLessThan(
+        headHeight(parts(look, stand, detail)),
+      );
+    }
+  }
+});
+
+test("people: seated hands rest on the table where seatedTrayPoint says", () => {
+  for (const serial of [1, 2, 3, 99, 4096]) {
+    const look = personLook(serial, "diner");
+    const hands = parts(look, { ...stand, seated: true }).filter(
+      (p) => p.kind === "hand",
+    );
+    const tray = seatedTrayPoint(look);
+    for (const hand of hands) {
+      expect(hand.at.y).toBeCloseTo(tray.y, 2);
+      expect(hand.at.z).toBeCloseTo(tray.forward, 2);
+    }
+    // Feet reach the floor: the ankle is as low as when standing.
+    const feet = parts(look, { ...stand, seated: true }).filter(
+      (p) => p.kind === "foot",
+    );
+    for (const foot of feet)
+      expect(foot.at.y).toBeCloseTo(
+        parts(look).find((p) => p.kind === "foot")!.at.y,
+        2,
+      );
+  }
+});
+
+test("people: seated ignores walking and stride", () => {
+  const look = personLook(7, "diner");
+  const a = parts(look, { ...stand, seated: true });
+  const b = parts(look, {
+    ...stand,
+    seated: true,
+    walking: true,
+    stride: 0.8,
+    carrying: true,
+  });
+  expect(b).toEqual(a);
 });
 
 test("people: every pose is finite, and no look is wider than the stated span", () => {

@@ -224,8 +224,17 @@ export type Pose = {
   stride: number; // -1..1, sign picks the leading leg (positive: left leads)
   walking: boolean;
   carrying: boolean; // both hands hold a tray in front
+  seated: boolean; // sitting on a seat, hands on the table; ignores stride and carrying
 };
 type Emit = (kind: PartKind, matrix: T.Matrix4, colour: number) => void;
+
+// Height of a seat's top in world units (hall-shell draws the seat this tall).
+export const SEAT_HEIGHT = 0.46;
+// Height of a table's top surface (hall-shell: centre 0.76, 0.07 thick).
+const TABLE_TOP = 0.795;
+// Seated arms: the upper arm points well forward, the forearm is solved so the
+// hands rest on the table top.
+const SEATED_UPPER = -1.3;
 
 const APRON = 0xf3e6d0;
 const SHOES = 0x2b2623;
@@ -239,6 +248,9 @@ const SCALE = new T.Vector3();
 const QUAT = new T.Quaternion();
 const EULER = new T.Euler();
 const REACH = { angle: 0, length: 0 };
+// The seated pose of one look: unit-figure hip height, the thigh's downward
+// tilt from level, and the forearm angle that puts the hands on the table.
+const SEATED = { hipY: 0, tilt: 0, fore: 0 };
 const NOOP: Emit = () => {};
 let sink: Emit = NOOP;
 
@@ -280,10 +292,31 @@ function bobFor(stride: number): number {
   return -F.bob * Math.abs(stride); // the body dips as the legs spread
 }
 
+// The seat top is a fixed world height whatever the figure's height, so the
+// hips drop to SEAT_HEIGHT and the thighs tilt down just enough for the feet to
+// reach the floor with the shins hanging straight.
+function seatedFor(look: Look): void {
+  const h = look.height;
+  const hipY = SEAT_HEIGHT / h;
+  const ankle = F.hipY - F.thighLen - F.shinLen;
+  SEATED.hipY = hipY;
+  SEATED.tilt = Math.asin(
+    T.MathUtils.clamp((hipY - F.shinLen - ankle) / F.thighLen, 0, 1),
+  );
+  // Hands at the table top: solve the forearm's drop from the shoulder.
+  const shoulder = F.shoulderY + hipY - F.hipY;
+  const want = (shoulder - TABLE_TOP / h) / Math.cos(F.armOut);
+  const fore = (want - F.upperArmLen * Math.cos(SEATED_UPPER)) / F.forearmLen;
+  SEATED.fore = -Math.acos(T.MathUtils.clamp(fore, 0, 1));
+}
+
 function poseParts(look: Look, pose: Pose, detail: Detail): void {
   const full = detail === "full";
-  const stride = pose.walking ? T.MathUtils.clamp(pose.stride, -1, 1) : 0;
-  const bob = bobFor(stride);
+  const seated = pose.seated;
+  if (seated) seatedFor(look);
+  const stride =
+    pose.walking && !seated ? T.MathUtils.clamp(pose.stride, -1, 1) : 0;
+  const bob = seated ? SEATED.hipY - F.hipY : bobFor(stride);
   const cap = look.hairStyle === "cap";
 
   place(
@@ -372,8 +405,8 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
     const lead = side === 0 ? stride : -stride; // the left leg leads for positive stride
 
     // Leg: the hip swings forward when leading; the trailing knee bends.
-    const hip = -F.hipSwing * lead;
-    const shin = hip + F.kneeBend * Math.max(0, -lead);
+    const hip = seated ? SEATED.tilt - Math.PI / 2 : -F.hipSwing * lead;
+    const shin = seated ? 0 : hip + F.kneeBend * Math.max(0, -lead);
     const hx = sx * F.hipX;
     const hy = F.hipY + bob;
     if (full) {
@@ -412,8 +445,12 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
     }
 
     // Arm: counter-swings against the same-side leg, or holds the tray.
-    const upper = pose.carrying ? F.carryUpper : F.armSwing * lead;
-    const fore = pose.carrying ? F.carryFore : upper;
+    const upper = seated
+      ? SEATED_UPPER
+      : pose.carrying
+        ? F.carryUpper
+        : F.armSwing * lead;
+    const fore = seated ? SEATED.fore : pose.carrying ? F.carryFore : upper;
     const out = sx * F.armOut;
     const ax = sx * F.shoulderX;
     const ay = F.shoulderY + bob;
@@ -493,4 +530,14 @@ export function carryPoint(
     y: (F.shoulderY + bobFor(s) - down * Math.cos(F.armOut)) * look.height,
     forward: -back * look.height * look.width,
   };
+}
+
+// Where a tray rests in front of a seated figure: on the table top, between
+// the hands, in world units from the seat (the same units as carryPoint).
+export function seatedTrayPoint(look: Look): { y: number; forward: number } {
+  seatedFor(look);
+  const back =
+    F.upperArmLen * Math.sin(SEATED_UPPER) +
+    F.forearmLen * Math.sin(SEATED.fore);
+  return { y: TABLE_TOP, forward: -back * look.height * look.width };
 }

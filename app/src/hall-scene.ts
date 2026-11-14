@@ -872,6 +872,7 @@ export function createHallScene(
     stride: 0,
     walking: false,
     carrying: false,
+    seated: false,
   };
 
   function stand(
