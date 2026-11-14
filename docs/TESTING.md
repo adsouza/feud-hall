@@ -502,8 +502,12 @@ focused for the whole run (a hidden tab stops the scene drawing). Each page
 ends by showing a `[data-bench-result]` element holding JSON with `stalls`,
 `detail`, `seconds`, `frames`, `fps`, `lateShare` (share of intervals between
 consecutive frames longer than 40 ms), `meanDrawMs`, `p95DrawMs`, and
-`renderer`. The bench alternates the queue length every second so the scene
-keeps animating in both detail modes. Run each URL twice and keep the second.
+`renderer`. Every second the bench gives each stall a new last-served order, so
+one diner per stall walks off with a tray and the scene keeps animating in both
+detail modes. It discards a 2-second warm-up and then measures for `seconds`.
+`meanDrawMs` and `p95DrawMs` are CPU-side `draw()` time including the render
+submit, not GPU time; GPU cost shows up through `fps` and `lateShare`. Run each
+URL twice and keep the second.
 Software-rendered browsers, including the Playwright Chromium suite, are not
 valid evidence: check `renderer` for a real GPU. Record results in
 `docs/superpowers/reports/`.

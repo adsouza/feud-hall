@@ -57,6 +57,8 @@ function appearance(service: number): Appearance {
 }
 
 const host = document.getElementById("hall") as HTMLDivElement;
+const WARM_UP_MS = 2000;
+let measuring = false;
 const draws: number[] = [];
 const stamps: number[] = [];
 const scene = createHallScene(host, {
@@ -70,6 +72,7 @@ const scene = createHallScene(host, {
   collect: () => false,
   collected: () => {},
   frame: (drawMs) => {
+    if (!measuring) return;
     draws.push(drawMs);
     stamps.push(performance.now());
   },
@@ -104,28 +107,37 @@ function renderer() {
   }
 }
 
+// Discard a warm-up so the idle second before the first departure, and any
+// shader or buffer setup, stay outside the measured span.
 setTimeout(() => {
-  clearInterval(toggle);
-  const frames = draws.length;
-  const intervals = stamps.slice(1).map((at, i) => at - stamps[i]);
-  const late = intervals.filter((gap) => gap > 40).length;
-  const sorted = [...draws].sort((a, b) => a - b);
-  const span = frames > 1 ? (stamps[frames - 1] - stamps[0]) / 1000 : 0;
-  const round = (value: number) => Math.round(value * 100) / 100;
-  const result = {
-    stalls: count,
-    detail: detail ? 1 : 0,
-    seconds,
-    frames,
-    fps: span > 0 ? round((frames - 1) / span) : 0,
-    lateShare: intervals.length ? round(late / intervals.length) : 0,
-    meanDrawMs: frames ? round(draws.reduce((a, b) => a + b, 0) / frames) : 0,
-    p95DrawMs: round(percentile(sorted, 0.95)),
-    renderer: renderer(),
-  };
-  const out = document.createElement("pre");
-  out.setAttribute("data-bench-result", "");
-  out.textContent = JSON.stringify(result);
-  document.body.append(out);
-  scene.dispose();
-}, seconds * 1000);
+  measuring = true;
+}, WARM_UP_MS);
+
+setTimeout(
+  () => {
+    clearInterval(toggle);
+    const frames = draws.length;
+    const intervals = stamps.slice(1).map((at, i) => at - stamps[i]);
+    const late = intervals.filter((gap) => gap > 40).length;
+    const sorted = [...draws].sort((a, b) => a - b);
+    const span = frames > 1 ? (stamps[frames - 1] - stamps[0]) / 1000 : 0;
+    const round = (value: number) => Math.round(value * 100) / 100;
+    const result = {
+      stalls: count,
+      detail: detail ? 1 : 0,
+      seconds,
+      frames,
+      fps: span > 0 ? round((frames - 1) / span) : 0,
+      lateShare: intervals.length ? round(late / intervals.length) : 0,
+      meanDrawMs: frames ? round(draws.reduce((a, b) => a + b, 0) / frames) : 0,
+      p95DrawMs: round(percentile(sorted, 0.95)),
+      renderer: renderer(),
+    };
+    const out = document.createElement("pre");
+    out.setAttribute("data-bench-result", "");
+    out.textContent = JSON.stringify(result);
+    document.body.append(out);
+    scene.dispose();
+  },
+  WARM_UP_MS + seconds * 1000,
+);
