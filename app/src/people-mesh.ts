@@ -13,9 +13,11 @@ export type People = {
   begin(): void; // start a frame: nobody drawn yet
   add(look: Look, pose: Pose, detail: Detail, opacity?: number): void; // opacity defaults to 1
   end(): void; // flag buffers for upload
-  readonly count: number; // people accepted since begin()
-  mesh(kind: PartKind): T.InstancedMesh;
-  readonly meshes: readonly T.InstancedMesh[]; // one per PartKind
+  readonly count: number; // people accepted since begin(), solid and fading
+  mesh(kind: PartKind): T.InstancedMesh; // solid people
+  fadingMesh(kind: PartKind): T.InstancedMesh; // fading people, colour pass
+  fadingDepthMesh(kind: PartKind): T.InstancedMesh; // fading people, depth pre-pass
+  readonly meshes: readonly T.InstancedMesh[]; // every mesh to add to the scene
   dispose(): void;
 };
 
@@ -108,13 +110,30 @@ const SHAPES: Record<
 
 const SCRATCH = new T.Color();
 
-export function createPeople(
+// One instanced batch per part kind. A fading batch also has a depth-only
+// twin sharing its geometry and matrices: drawn last in the opaque pass, it
+// lays down the fading person's nearest surface, so the transparent colour
+// pass shades only that surface and limbs do not show through the body.
+type Batch = {
+  meshes: Map<PartKind, T.InstancedMesh>;
+  depth: Map<PartKind, T.InstancedMesh>;
+  colours: Map<PartKind, T.InstancedBufferAttribute>;
+  capacity: number;
+  people: number;
+};
+
+function createBatch(
   capacity: number,
   faces: T.Texture | null,
-): People {
-  const byKind = new Map<PartKind, T.InstancedMesh>();
-  const colours = new Map<PartKind, T.InstancedBufferAttribute>();
-  const meshes: T.InstancedMesh[] = [];
+  fading: boolean,
+): Batch {
+  const batch: Batch = {
+    meshes: new Map(),
+    depth: new Map(),
+    colours: new Map(),
+    capacity,
+    people: 0,
+  };
   for (const kind of PART_KINDS) {
     const shape = SHAPES[kind];
     const slots = shape.paired ? capacity * 2 : capacity;
@@ -125,29 +144,64 @@ export function createPeople(
     ).setUsage(T.DynamicDrawUsage);
     // Three.js reads the instanced RGBA attribute as vertex colors, including alpha.
     geometry.setAttribute("color", attribute);
-    const material = new T.MeshStandardMaterial({
+    const options = {
       map: kind === "head" ? faces : null,
       roughness: 0.9,
       vertexColors: true,
-      alphaHash: true,
-    });
+    };
+    const material = fading
+      ? new T.MeshStandardMaterial({
+          ...options,
+          transparent: true,
+          depthWrite: false,
+        })
+      : new T.MeshStandardMaterial(options);
     const mesh = new T.InstancedMesh(geometry, material, slots);
     mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
     mesh.frustumCulled = false;
     mesh.count = 0;
-    byKind.set(kind, mesh);
-    colours.set(kind, attribute);
-    meshes.push(mesh);
+    batch.meshes.set(kind, mesh);
+    batch.colours.set(kind, attribute);
+    if (fading) {
+      const depth = new T.InstancedMesh(
+        geometry,
+        new T.MeshStandardMaterial({ ...options, colorWrite: false }),
+        slots,
+      );
+      depth.instanceMatrix = mesh.instanceMatrix;
+      depth.frustumCulled = false;
+      depth.count = 0;
+      // After every other opaque object, so it never hides what lies behind.
+      depth.renderOrder = 1;
+      batch.depth.set(kind, depth);
+    }
   }
+  return batch;
+}
 
-  let people = 0;
+export function createPeople(
+  capacity: number,
+  faces: T.Texture | null,
+  fadingCapacity: number = capacity,
+): People {
+  const solid = createBatch(capacity, faces, false);
+  const fading = createBatch(fadingCapacity, faces, true);
+  const meshes = [
+    ...solid.meshes.values(),
+    ...fading.meshes.values(),
+    ...fading.depth.values(),
+  ];
+
+  let target = solid;
   let alpha = 1;
   const emit = (kind: PartKind, matrix: T.Matrix4, colour: number): void => {
-    const mesh = byKind.get(kind) as T.InstancedMesh;
+    const mesh = target.meshes.get(kind) as T.InstancedMesh;
     const index = mesh.count++;
+    const depth = target.depth.get(kind);
+    if (depth) depth.count = mesh.count;
     mesh.setMatrixAt(index, matrix);
     SCRATCH.setHex(colour);
-    (colours.get(kind) as T.InstancedBufferAttribute).setXYZW(
+    (target.colours.get(kind) as T.InstancedBufferAttribute).setXYZW(
       index,
       SCRATCH.r,
       SCRATCH.g,
@@ -158,40 +212,57 @@ export function createPeople(
 
   return {
     begin() {
-      people = 0;
+      solid.people = fading.people = 0;
       for (const mesh of meshes) mesh.count = 0;
     },
     add(look, pose, detail, opacity = 1) {
       // Decide before writing any part: every kind has a slot per person.
-      if (people >= capacity || !(opacity > 0)) return;
-      people++;
+      if (!(opacity > 0)) return;
+      const batch = opacity >= 1 ? solid : fading;
+      if (batch.people >= batch.capacity) return;
+      batch.people++;
+      target = batch;
       alpha = Math.min(1, opacity);
       posePerson(look, pose, detail, emit);
     },
     end() {
       // Upload only the slots in use: whole buffers sized for every stall
       // are megabytes per frame. A zero count uploads nothing (WebGL2 reads
-      // a zero-length range as "to the end of the array").
-      for (const kind of PART_KINDS) {
-        const mesh = byKind.get(kind) as T.InstancedMesh;
-        if (mesh.count === 0) continue;
-        const colour = colours.get(kind) as T.InstancedBufferAttribute;
-        mesh.instanceMatrix.addUpdateRange(0, mesh.count * 16);
-        mesh.instanceMatrix.needsUpdate = true;
-        colour.addUpdateRange(0, mesh.count * 4);
-        colour.needsUpdate = true;
-      }
+      // a zero-length range as "to the end of the array"). A fading pair
+      // shares one matrix buffer, flagged once through its colour mesh.
+      for (const batch of [solid, fading])
+        for (const kind of PART_KINDS) {
+          const mesh = batch.meshes.get(kind) as T.InstancedMesh;
+          if (mesh.count === 0) continue;
+          const colour = batch.colours.get(kind) as T.InstancedBufferAttribute;
+          for (const [buffer, size] of [
+            [mesh.instanceMatrix, 16],
+            [colour, 4],
+          ] as const) {
+            buffer.clearUpdateRanges();
+            buffer.addUpdateRange(0, mesh.count * size);
+            buffer.needsUpdate = true;
+          }
+        }
     },
     get count() {
-      return people;
+      return solid.people + fading.people;
     },
     mesh(kind) {
-      return byKind.get(kind) as T.InstancedMesh;
+      return solid.meshes.get(kind) as T.InstancedMesh;
+    },
+    fadingMesh(kind) {
+      return fading.meshes.get(kind) as T.InstancedMesh;
+    },
+    fadingDepthMesh(kind) {
+      return fading.depth.get(kind) as T.InstancedMesh;
     },
     meshes,
     dispose() {
+      // The depth twins share their colour mesh's geometry: dispose it once.
+      const twins = new Set(fading.depth.values());
       for (const mesh of meshes) {
-        mesh.geometry.dispose();
+        if (!twins.has(mesh)) mesh.geometry.dispose();
         (mesh.material as T.Material).dispose();
         mesh.dispose();
       }

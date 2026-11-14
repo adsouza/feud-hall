@@ -745,7 +745,12 @@ export function createHallScene(
   }
 
   const faces = faceTexture();
-  const people = createPeople(ACTOR_LIMIT + QUEUE_LIMIT * 2, faces);
+  // Walkers are the only people who fade.
+  const people = createPeople(
+    ACTOR_LIMIT + QUEUE_LIMIT * 2,
+    faces,
+    QUEUE_LIMIT * 2,
+  );
   const carriedGeometry = pickupGeometry.clone();
   const trayOpacity = new T.InstancedBufferAttribute(
     new Float32Array(QUEUE_LIMIT),

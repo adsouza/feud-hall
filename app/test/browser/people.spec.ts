@@ -9,6 +9,7 @@ import {
   posePerson,
   type Detail,
   type Look,
+  PART_KINDS,
   type PartKind,
   type Pose,
   type Role,
@@ -266,8 +267,9 @@ test("people: every pose is finite, and no look is wider than the stated span", 
 });
 
 test("people: each person fills one batch slot per part, and a frame starts empty", () => {
-  expect(createPeople(1, null).meshes.length).toBe(15);
-  expect(createPeople(500, null).meshes.length).toBe(15);
+  // Solid, fading colour and fading depth: one of each per part kind.
+  expect(createPeople(1, null).meshes.length).toBe(45);
+  expect(createPeople(500, null, 3).meshes.length).toBe(45);
   const people = createPeople(4, null);
   people.begin();
   people.add(lookWith({ hairStyle: "short", skirt: false }), stand, "full");
@@ -293,6 +295,23 @@ test("people: someone who does not fit, or has faded out, is skipped whole", () 
   expect(people.count).toBe(1);
   expect(people.mesh("head").count).toBe(1);
   expect(people.mesh("hand").count).toBe(2);
+
+  // A fading person who does not fit the fading capacity is skipped whole,
+  // while solid people still fit.
+  const mixed = createPeople(2, null, 1);
+  mixed.begin();
+  mixed.add(personLook(3, "diner"), stand, "full", 0.5);
+  mixed.add(personLook(4, "diner"), stand, "full", 0.5);
+  expect(mixed.count).toBe(1);
+  mixed.add(personLook(5, "diner"), stand, "full");
+  mixed.add(personLook(6, "diner"), stand, "full");
+  mixed.end();
+  expect(mixed.count).toBe(3);
+  expect(mixed.fadingMesh("head").count).toBe(1);
+  expect(mixed.fadingDepthMesh("head").count).toBe(1);
+  expect(mixed.fadingMesh("hand").count).toBe(2);
+  expect(mixed.mesh("head").count).toBe(2);
+  expect(mixed.mesh("hand").count).toBe(4);
 });
 
 test("people: colour and opacity are written per person", () => {
@@ -301,23 +320,48 @@ test("people: colour and opacity are written per person", () => {
   people.begin();
   people.add(look, stand, "full", 0.4);
   people.end();
-  const colour = people.mesh("head").geometry.getAttribute("color");
   const skin = new T.Color(look.skin);
+  const fading = people.fadingMesh("head");
+  const colour = fading.geometry.getAttribute("color");
   expect(colour.getX(0)).toBeCloseTo(skin.r, 5);
   expect(colour.getY(0)).toBeCloseTo(skin.g, 5);
   expect(colour.getZ(0)).toBeCloseTo(skin.b, 5);
   expect(colour.getW(0)).toBeCloseTo(0.4, 5);
+  expect(fading.count).toBe(1);
+  expect(people.fadingDepthMesh("head").count).toBe(fading.count);
+  expect(people.mesh("head").count).toBe(0);
+
+  people.begin();
+  people.add(look, stand, "full", 1);
+  people.end();
+  const solid = people.mesh("head");
+  const solidColour = solid.geometry.getAttribute("color");
+  expect(solid.count).toBe(1);
+  expect(solidColour.getX(0)).toBeCloseTo(skin.r, 5);
+  expect(solidColour.getW(0)).toBe(1);
+  expect(people.fadingMesh("head").count).toBe(0);
+  expect(people.fadingDepthMesh("head").count).toBe(0);
 });
 
 test("people: disposing releases every geometry and material once", () => {
   const people = createPeople(2, null);
-  let released = 0;
+  const released = new Map<object, number>();
+  const watch = (target: T.EventDispatcher<{ dispose: object }>) => {
+    if (released.has(target)) return; // a shared geometry is watched once
+    released.set(target, 0);
+    target.addEventListener("dispose", () =>
+      released.set(target, (released.get(target) ?? 0) + 1),
+    );
+  };
   for (const mesh of people.meshes) {
-    mesh.geometry.addEventListener("dispose", () => released++);
-    (mesh.material as T.Material).addEventListener("dispose", () => released++);
+    watch(mesh.geometry);
+    watch(mesh.material as T.Material);
   }
   people.dispose();
-  expect(released).toBe(30);
+  // 15 kinds x (solid geometry + solid material + shared fading geometry
+  // + fading colour material + fading depth material) = 75.
+  expect(released.size).toBe(75);
+  for (const count of released.values()) expect(count).toBe(1);
 });
 
 test("people: feet rest on the floor and do not sink through it", () => {
@@ -376,6 +420,37 @@ test("people: a frame uploads only the slots in use", () => {
   expect(hands.count).toBe(4);
   expect(hands.instanceMatrix.updateRanges).toEqual([{ start: 0, count: 64 }]);
   expect(colours.updateRanges).toEqual([{ start: 0, count: 16 }]);
+  // Fewer people next frame: the ranges shrink to the slots now in use.
+  people.begin();
+  people.add(personLook(1, "diner"), stand, "full");
+  people.end();
+  expect(hands.instanceMatrix.updateRanges).toEqual([{ start: 0, count: 32 }]);
+  expect(colours.updateRanges).toEqual([{ start: 0, count: 8 }]);
+
+  // The fading set: one shared matrix buffer, flagged with its own range.
+  const fadingHands = people.fadingMesh("hand");
+  const fadingColours = fadingHands.geometry.getAttribute(
+    "color",
+  ) as T.InstancedBufferAttribute;
+  people.begin();
+  for (const serial of [3, 4, 5])
+    people.add(personLook(serial, "diner"), stand, "full", 0.5);
+  people.end();
+  expect(fadingHands.instanceMatrix.updateRanges).toEqual([
+    { start: 0, count: 96 },
+  ]);
+  expect(fadingColours.updateRanges).toEqual([{ start: 0, count: 24 }]);
+  people.begin();
+  people.add(personLook(3, "diner"), stand, "full", 0.5);
+  people.end();
+  expect(fadingHands.instanceMatrix.updateRanges).toEqual([
+    { start: 0, count: 32 },
+  ]);
+  expect(fadingColours.updateRanges).toEqual([{ start: 0, count: 8 }]);
+  expect(people.fadingDepthMesh("hand").instanceMatrix.updateRanges).toEqual([
+    { start: 0, count: 32 },
+  ]);
+
   // An empty kind is not flagged for upload at all.
   const bun = people.mesh("hairBun").instanceMatrix;
   bun.clearUpdateRanges();
@@ -384,4 +459,29 @@ test("people: a frame uploads only the slots in use", () => {
   people.end();
   expect(bun.version).toBe(version);
   expect(bun.updateRanges).toEqual([]);
+});
+
+test("people: fading people are drawn with a depth pre-pass", () => {
+  const people = createPeople(2, null);
+  for (const kind of PART_KINDS) {
+    const solid = people.mesh(kind);
+    const colour = people.fadingMesh(kind);
+    const depth = people.fadingDepthMesh(kind);
+    expect(depth.geometry).toBe(colour.geometry);
+    expect(depth.instanceMatrix).toBe(colour.instanceMatrix);
+    const depthMaterial = depth.material as T.Material;
+    expect(depthMaterial.colorWrite).toBe(false);
+    expect(depthMaterial.depthWrite).toBe(true);
+    expect(depthMaterial.transparent).toBe(false);
+    // Laid down after every other opaque object, so it hides nothing behind.
+    expect(depth.renderOrder).toBeGreaterThan(solid.renderOrder);
+    const colourMaterial = colour.material as T.Material;
+    expect(colourMaterial.transparent).toBe(true);
+    expect(colourMaterial.depthWrite).toBe(false);
+    const solidMaterial = solid.material as T.Material;
+    expect(solidMaterial.transparent).toBe(false);
+    expect(solidMaterial.alphaHash).toBe(false);
+    for (const mesh of [solid, colour, depth])
+      expect(people.meshes).toContain(mesh);
+  }
 });
