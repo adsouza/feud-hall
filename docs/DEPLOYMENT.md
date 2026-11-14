@@ -360,6 +360,11 @@ standard. Existing leases keep their spot and rent, and every room up to the
 highest lease stays open. See
 [rooms and lease quotes](ARCHITECTURE.md#rooms-and-lease-quotes).
 
+This upgrade cannot be rolled back: older code cannot decode the stored
+version 3 catalog. Before the first start on this code, stop the hall's server
+and take a dump of its database with `pg_dump`, so the hall can be restored
+together with the older release if needed.
+
 If that expansion is ever rejected, for example because a pinned spot ID is
 outside the launch layout, the rejection is recorded under
 `web-launch-catalog:3`. Every restart then replays the same rejected receipt
@@ -367,7 +372,7 @@ and the server refuses to start. Only a later catalog version, with a new
 command ID, gets out of that state. Before restarting a real hall on a new
 catalog version, try the upgrade on a copy of its database first: create one
 with `createdb -T <hall database> <copy name>` while the hall's server is
-stopped, start the server against the copy on another port with the same
+stopped, or restore a `pg_dump` of the hall into a new database, start the server against the copy on another port with the same
 secret, check the log for one `hall_catalog_expanded` and the hall page for
 Hall 1, and then drop only the copy. The version 3 change is tried this way
 before it reaches a real hall; the result is recorded in the
