@@ -258,7 +258,7 @@ Odd rooms have three busy spots, so position 13 holds a standard spot there. Eve
 
 **Interfaces:**
 - Consumes: Task 6's layout module; `Stall.room`/`position`, `hall.rooms`, `hall.vacancies` from Task 5.
-- Produces in `hall-shell.ts`: `createHallShell(scene, redraw)` returns `{ show(rooms: { room: number; detail: "full" | "simple" }[], openRooms: number), update(camera), dispose() }`. Each shown room has four walls with a gap of `ENTRANCE_WIDTH` in the south wall and `DOOR_WIDTH` gaps toward neighbours that exist; a gap toward a closed room, and the entrance, is filled with a shut door. End rooms have a blank wall in place of the missing doorway. `resize` is removed.
+- Produces in `hall-shell.ts`: `createHallShell(scene, redraw)` returns `{ show(rooms: { room: number; detail: "full" | "simple" }[], openRooms: number), update(camera), dispose() }`. Each shown room has four walls with a gap of `ENTRANCE_WIDTH` in the south wall and `DOOR_WIDTH` gaps toward neighbours that exist; a gap toward a closed room is filled with a shut door. The outside entrance is an open doorway onto the street (the same dusk street the windows show), because Project 3 walks diners in and out through it; the viewer cannot walk out through it. End rooms have a blank wall in place of the missing doorway. `resize` is removed.
 - Produces in `hall-scene.ts`:
   - `Appearance` gains `rooms: { count: number; open: number }` and `vacancies: { stall_id: string; tier: string; room: number; position: number }[]`.
   - `Counter.placement` comes from `spotPlacement(assignSpots(...))`; the "first free scene slot" logic, `floorSignature` rescaling and island floors are removed. `Counter.index` stays as a stable per-stall number for animation phase only.
@@ -282,7 +282,7 @@ Odd rooms have three busy spots, so position 13 holds a standard spot there. Eve
 - [ ] **Step 3: Run** `hall-rooms.spec.ts` after a build — fails.
 - [ ] **Step 4: Implement** shell, scene and bench. The bench gives stall *i* `room` and `position` through the fallback and gains a `room=<1..10>` parameter (default 1) and `rooms=<1..10>` open count (default 10); its result JSON gains `room`.
 - [ ] **Step 5: Run**, one at a time after `NODE_OPTIONS=--max-old-space-size=1536 bun run --bun build`: `hall-rooms`, `hall-layout`, `hall-navigation`, `people-scene`, `people`, `tray-pickup`, `hall-interactions`, `owner-view`, `visitor-play`, `phone-layout`, `launch` spec files. Fix what this task broke; report anything else.
-- [ ] **Step 6: Look at it.** With the dev server and the screenshot driver from Project 1's report, capture room 1 of a new hall, a full room, and the doorway view into an open and a closed neighbour. Confirm by eye: walls, doors, entrance, bays with signs, tables, no stall in a doorway.
+- [ ] **Step 6: Look at it.** With the dev server and the screenshot driver from Project 1's report, capture room 1 of a new hall, a full room, and the doorway view into an open and a closed neighbour. Confirm by eye: walls, shut doors toward closed rooms, an open entrance onto the street, bays with signs, tables, no stall in a doorway.
 - [ ] **Step 7: Commit** — "Draw the hall as a row of rooms".
 
 ### Task 8: Room control, selection and the grouped list
