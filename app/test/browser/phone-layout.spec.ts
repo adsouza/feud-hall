@@ -156,3 +156,41 @@ test("phone stall details support Back, preserve comparison drafts and keep the 
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
 });
+
+test("phone hall reaches the Halls control and the grouped picker", async ({
+  page,
+  hall,
+}) => {
+  await page.goto(hall.origin);
+  await expect(page.locator("[data-hall-canvas] canvas")).toBeVisible();
+  const halls = page.getByRole("group", { name: "Halls", exact: true });
+  await halls.scrollIntoViewIfNeeded();
+  await expect(halls).toBeInViewport();
+  const buttons = halls.getByRole("button");
+  await expect(buttons).toHaveCount(10);
+  for (const button of await buttons.all()) {
+    await button.scrollIntoViewIfNeeded();
+    const box = (await button.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  await expect(
+    halls.getByRole("button", { name: "Hall 1", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  const picker = page.getByRole("combobox", { name: "Location", exact: true });
+  await picker.scrollIntoViewIfNeeded();
+  await expect(picker).toBeInViewport();
+  const stalls = (await state(page)).hall.stalls;
+  await expect(picker.locator('optgroup[label="Hall 1"] option')).toHaveText(
+    stalls.map(
+      (stall: { name: string; stall_id: string }) =>
+        `${stall.name} · ${stall.stall_id}`,
+    ),
+  );
+  await picker.selectOption(stalls[0].stall_id);
+  await expect(
+    page.getByRole("region", { name: "Menu", exact: true }),
+  ).toBeFocused();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+});

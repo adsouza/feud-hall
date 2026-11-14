@@ -16,6 +16,8 @@
     stalls,
     rooms,
     vacancies,
+    room = $bindable(saved?.room ?? 1),
+    onVacancy,
     ownedStalls,
     selected,
     pickup,
@@ -38,6 +40,8 @@
     stalls: Stall[];
     rooms?: { count: number; open: number };
     vacancies?: HallVacancy[];
+    room?: number;
+    onVacancy: (stallId: string) => void;
     ownedStalls: Stall[];
     selected: string;
     pickup: string;
@@ -114,8 +118,8 @@
                 lastSelection = id;
                 select(id);
               },
-              room: () => {},
-              vacancy: () => {},
+              room: (next) => (room = next),
+              vacancy: (id) => onVacancy(id),
             },
             saved,
           );
@@ -203,6 +207,20 @@
     </p>
   {/if}
 </div>
+{#if rooms}
+  <div class="controls hall-rooms" role="group" aria-label={t("hallRooms")}>
+    {#each Array.from({ length: rooms.count }, (_, i) => i + 1) as n (n)}
+      <button
+        aria-pressed={n === room}
+        disabled={n > rooms.open}
+        aria-describedby={n > rooms.open ? "hall-room-closed" : undefined}
+        onclick={() => hall?.showRoom(n)}
+        >{t("hallRoom").replace("{n}", String(n))}</button
+      >
+    {/each}
+  </div>
+  <p id="hall-room-closed" class="sr-only">{t("hallRoomClosed")}</p>
+{/if}
 <div class="controls" role="group" aria-label={t("hallActions")}>
   <button aria-pressed={immersive} onclick={toggleImmersive}
     >{t(immersive ? "leaveImmersiveHall" : "enterImmersiveHall")}</button

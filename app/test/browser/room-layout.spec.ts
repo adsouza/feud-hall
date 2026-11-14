@@ -331,6 +331,59 @@ test("rooms: a walking entrance is clear, in the room and in front of a counter"
     }
 });
 
+test("rooms: a walking entrance faces an open counter, the selected one, or the room", () => {
+  for (const room of rooms) {
+    const at = (id: string, position: number, open: boolean) => ({
+      id,
+      open,
+      placement: spotPlacement(room, position),
+    });
+    // An open counter is preferred over a closed one, even a selected one.
+    const mixed = [at("closed", 3, false), at("open", 8, true)];
+    for (const selected of ["", "closed", "open"])
+      expect(walkingEntrance(mixed, selected, room).stall).toBe("open");
+    // With nothing open, the selected stall is faced.
+    const shut = [at("a", 3, false), at("b", 8, false), at("c", 13, false)];
+    for (const selected of ["a", "b", "c"])
+      expect(walkingEntrance(shut, selected, room).stall).toBe(selected);
+    // Stalls of other rooms do not count: an empty room uses its default.
+    const elsewhere = [
+      {
+        id: "next",
+        open: true,
+        placement: spotPlacement(room === 1 ? 2 : room - 1, 3),
+      },
+    ];
+    for (const stalls of [[], elsewhere]) {
+      const e = walkingEntrance(stalls, "next", room);
+      const centre = roomCentre(room);
+      expect(e).toEqual({
+        stall: "",
+        position: centre,
+        target: { x: centre.x, z: centre.z - 6 },
+      });
+      expect(roomAt(e.position.x, e.position.z)).toBe(room);
+      expect(walkable(e.position.x, e.position.z, room, [])).toBe(true);
+    }
+    // The entrance stands in line with the counter it faces.
+    for (let n = 1; n <= SPOTS_PER_ROOM; n++) {
+      const stalls = positions
+        .slice(0, n)
+        .map((position) => at(`s${position}`, position, position % 3 !== 0));
+      for (const selected of ["", "s0", "s1", "s4"]) {
+        const e = walkingEntrance(stalls, selected, room);
+        const found = stalls.find((s) => s.id === e.stall)!;
+        expect(Math.abs(toLocal(found.placement, e.position).x)).toBeLessThan(
+          1 + 1e-9,
+        );
+        expect(Math.abs(toLocal(found.placement, e.target).x)).toBeLessThan(
+          1e-9,
+        );
+      }
+    }
+  }
+});
+
 function toLocal(pose: SpotPlacement, p: P) {
   const c = Math.cos(pose.yaw),
     s = Math.sin(pose.yaw),

@@ -265,8 +265,26 @@ textarea {
   gap: 0.5rem;
   margin-block: 0.65rem;
 }
-.hall-mode button[aria-pressed="true"] {
+.hall-mode button[aria-pressed="true"],
+.hall-rooms button[aria-pressed="true"] {
   border-color: var(--accent, #ffc96d);
+}
+.hall-room {
+  margin-block: 1rem;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+.hall-room > h2 {
+  margin: 0 0 0.65rem;
+}
+.stall.vacancy {
+  border-top-style: dashed;
+  border-top-color: var(--line);
+}
+.stall[aria-current="true"] {
+  outline: 2px solid var(--accent, #ffc96d);
+  outline-offset: 2px;
 }
 .hall-layout {
   position: relative;

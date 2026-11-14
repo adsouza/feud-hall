@@ -9,6 +9,7 @@
   import type { CameraState, HallTarget } from "./hall-scene";
   import { splitTabletMessage } from "./tablet-text";
   import { servedTrays } from "./diner-pickup";
+  import { assignSpots } from "./room-layout";
   import type { TabletView, TabletAction, TabletRow } from "./hall-tablet";
   import {
     ApiError,
@@ -442,6 +443,34 @@
   let hallStall = $derived(
     view?.hall.stalls.find((stall) => stall.stall_id === hallSelection),
   );
+  /** The vacant spot being viewed; exclusive with a selected stall. */
+  let hallVacancy = $state("");
+  /**
+   * Stalls and vacant spots of each open room, for halls with the room rule;
+   * stalls without room data take the scene's fallback rooms.
+   */
+  let hallGroups = $derived.by(() => {
+    const hall = view?.hall;
+    if (!hall?.rooms) return null;
+    const spots = assignSpots(hall.stalls);
+    return Array.from({ length: hall.rooms.open }, (_, i) => i + 1).map(
+      (room) => ({
+        room,
+        stalls: hall.stalls.filter(
+          (stall) => spots.get(stall.stall_id)?.room === room,
+        ),
+        vacancies: (hall.vacancies ?? []).filter(
+          (vacancy) => vacancy.room === room,
+        ),
+      }),
+    );
+  });
+  const hallRoomLabel = (room: number) =>
+    t("hallRoom").replace("{n}", String(room));
+  function viewSpot(id: string) {
+    hallSelection = "";
+    hallVacancy = id;
+  }
   let recentPickup = $derived.by(() => {
     const newest = receipts?.receipts[0];
     if (!newest || !view || view.hall.now - newest.at > 720_000) return "";
@@ -959,6 +988,18 @@
 
   $effect(() => {
     if (tabletStall && hallSelection !== tabletStall) tabletStall = "";
+  });
+
+  $effect(() => {
+    if (hallSelection) hallVacancy = "";
+  });
+
+  $effect(() => {
+    if (
+      hallVacancy &&
+      !view?.hall.vacancies?.some((vacancy) => vacancy.stall_id === hallVacancy)
+    )
+      hallVacancy = "";
   });
 
   $effect(() => {
@@ -2241,6 +2282,23 @@
   {#if !view}
     <p>{t("loading")}</p>
   {:else if page === "hall"}
+    {#snippet stallOptions()}
+      {#if hallGroups}
+        {#each hallGroups as group (group.room)}
+          {#if group.stalls.length}
+            <optgroup label={hallRoomLabel(group.room)}>
+              {#each group.stalls as stall (stall.stall_id)}<option
+                  value={stall.stall_id}>{stall.name} · {stall.stall_id}</option
+                >{/each}
+            </optgroup>
+          {/if}
+        {/each}
+      {:else}
+        {#each view?.hall.stalls ?? [] as stall (stall.stall_id)}<option
+            value={stall.stall_id}>{stall.name} · {stall.stall_id}</option
+          >{/each}
+      {/if}
+    {/snippet}
     <div class:phone-section-hidden={phoneDetail}>
       <h1>{t("hall")}</h1>
       {#if !profile}<p>
@@ -2278,9 +2336,7 @@
                 )}
             >
               <option value="">—</option>
-              {#each view.hall.stalls as stall (stall.stall_id)}<option
-                  value={stall.stall_id}>{stall.name} · {stall.stall_id}</option
-                >{/each}
+              {@render stallOptions()}
             </select></label
           >
           <button onclick={() => openStallDetails(hallSelection)}
@@ -2311,6 +2367,7 @@
               stalls={view.hall.stalls}
               rooms={view.hall.rooms}
               vacancies={view.hall.vacancies}
+              onVacancy={viewSpot}
               ownedStalls={view.hall.stalls.filter((stall) =>
                 restaurant?.stalls.some((owned) => owned.id === stall.stall_id),
               )}
@@ -2357,11 +2414,7 @@
             >{t("location")}
             <select bind:value={hallSelection}>
               <option value="">—</option>
-              {#each view.hall.stalls as stall (stall.stall_id)}
-                <option value={stall.stall_id}
-                  >{stall.name} · {stall.stall_id}</option
-                >
-              {/each}
+              {@render stallOptions()}
             </select>
           </label>
           {#if hallStall}
@@ -2425,44 +2478,84 @@
         </section>
       </div>
     {/if}
+    {#snippet stallCard(stall: Stall, heading: "h2" | "h3")}
+      <article class="stall">
+        <p class="eyebrow">{stall.stall_id} · {title(stall.tier)}</p>
+        <svelte:element this={heading}>{stall.name}</svelte:element>
+        <p>
+          {title(stall.cuisine)}{stall.npc
+            ? " · " + t("npcOperator")
+            : ""}{stall.retiring ? " · " + t("npcRetiring") : ""}
+        </p>
+        {#each stall.awards ?? [] as award}
+          {#if !award.cuisine || award.cuisine === stall.cuisine}
+            <small>{title(award.distinction)}</small>
+          {/if}
+        {/each}
+        <span class:good={stall["open?"] && view?.hall.access === "open"}
+          >{t(
+            stall["open?"] && view?.hall.access === "open" ? "open" : "closed",
+          )}</span
+        >
+        {#if !stall["open?"]}
+          <p>{t("reopeningExpected")} · {reopeningTime(stall)}</p>
+        {/if}
+        <p>{t("hallQueue")} {stall.activity?.waiting ?? 0}</p>
+        <button
+          onclick={() =>
+            view?.hall.visitor_play
+              ? openStallDetails(stall.stall_id)
+              : inspect(stall.stall_id)}
+        >
+          {t("viewMenu")}
+        </button>
+      </article>
+    {/snippet}
     {#if !view.hall.visitor_play || hallMode === "list"}
-      <div class="cards" class:phone-section-hidden={phoneDetail}>
-        {#each view.hall.stalls as stall (stall.stall_id)}
-          <article class="stall">
-            <p class="eyebrow">{stall.stall_id} · {title(stall.tier)}</p>
-            <h2>{stall.name}</h2>
-            <p>
-              {title(stall.cuisine)}{stall.npc
-                ? " · " + t("npcOperator")
-                : ""}{stall.retiring ? " · " + t("npcRetiring") : ""}
-            </p>
-            {#each stall.awards ?? [] as award}
-              {#if !award.cuisine || award.cuisine === stall.cuisine}
-                <small>{title(award.distinction)}</small>
-              {/if}
-            {/each}
-            <span class:good={stall["open?"] && view.hall.access === "open"}
-              >{t(
-                stall["open?"] && view.hall.access === "open"
-                  ? "open"
-                  : "closed",
-              )}</span
+      {#if hallGroups}
+        <div class:phone-section-hidden={phoneDetail}>
+          {#each hallGroups as group (group.room)}
+            <section
+              class="hall-room"
+              aria-labelledby={"hall-room-" + group.room}
             >
-            {#if !stall["open?"]}
-              <p>{t("reopeningExpected")} · {reopeningTime(stall)}</p>
-            {/if}
-            <p>{t("hallQueue")} {stall.activity?.waiting ?? 0}</p>
-            <button
-              onclick={() =>
-                view?.hall.visitor_play
-                  ? openStallDetails(stall.stall_id)
-                  : inspect(stall.stall_id)}
-            >
-              {t("viewMenu")}
-            </button>
-          </article>
-        {:else}<p>{t("emptyHall")}</p>{/each}
-      </div>
+              <h2 id={"hall-room-" + group.room}>
+                {hallRoomLabel(group.room)} · {t(
+                  group.stalls.length === 1
+                    ? "hallRoomStall"
+                    : "hallRoomStalls",
+                ).replace("{count}", String(group.stalls.length))}
+              </h2>
+              <div class="cards">
+                {#each group.stalls as stall (stall.stall_id)}
+                  {@render stallCard(stall, "h3")}
+                {/each}
+                {#each group.vacancies as spot (spot.stall_id)}
+                  <article
+                    class="stall vacancy"
+                    aria-current={hallVacancy === spot.stall_id
+                      ? "true"
+                      : undefined}
+                  >
+                    <p class="eyebrow">{spot.stall_id} · {title(spot.tier)}</p>
+                    <h3>{t("toLet")}</h3>
+                    <p>{t("rent")} {cash(spot.rent)}</p>
+                    <button onclick={() => viewSpot(spot.stall_id)}
+                      >{t("viewSpot")}</button
+                    >
+                  </article>
+                {/each}
+              </div>
+            </section>
+          {/each}
+        </div>
+      {:else}
+        <div class="cards" class:phone-section-hidden={phoneDetail}>
+          {#each view.hall.stalls as stall (stall.stall_id)}
+            {@render stallCard(stall, "h2")}
+          {:else}<p>{t("emptyHall")}</p>{/each}
+        </div>
+      {/if}
     {/if}
     {#if view.hall.failed_ventures?.length}
       <details class:phone-section-hidden={phoneDetail}>

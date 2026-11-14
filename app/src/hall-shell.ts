@@ -470,6 +470,10 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
         camera.x < shownSpan.east;
       for (const ceiling of ceilings) ceiling.visible = inside;
     },
+    /** The walls drawn now, with their shut doors and street views. */
+    occluders(): T.Object3D[] {
+      return edges.filter(({ wall }) => wall.visible).map(({ wall }) => wall);
+    },
     dispose() {
       disposed = true;
       clearLayout();

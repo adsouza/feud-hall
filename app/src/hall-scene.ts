@@ -47,6 +47,8 @@ type CameraPose = {
   walk?: { stall: string };
 };
 export type CameraState = CameraPose & {
+  /** The room the viewer was in. */
+  room?: number;
   inside?: { stall: string; hall: CameraPose };
   menu?: { stall: string; hall: CameraPose };
 };
@@ -1122,7 +1124,10 @@ export function createHallScene(
   };
   let hover = "";
   // The room the viewer is in, the open rooms, and how each drawn room is drawn.
-  let currentRoom = 1;
+  let currentRoom =
+    saved?.room && Number.isInteger(saved.room)
+      ? T.MathUtils.clamp(saved.room, 1, ROOM_COUNT)
+      : 1;
   let openRooms = 1;
   const shown = new Map<number, "full" | "simple">([[1, "full"]]);
   let drawnBays = -1;
@@ -1810,8 +1815,10 @@ export function createHallScene(
   const ray = new T.Raycaster();
   const cursor = new T.Vector2();
   let press: [number, number] | null = null;
-  // How far along the last pointer ray the stall it found was.
+  // How far along the last pointer ray the stall it found, and the first
+  // wall, were.
   let stallDistance = Infinity;
+  let wallDistance = Infinity;
   function hit(event: PointerEvent) {
     const bounds = renderer.domElement.getBoundingClientRect();
     cursor.set(
@@ -1819,14 +1826,22 @@ export function createHallScene(
       (-(event.clientY - bounds.top) / bounds.height) * 2 + 1,
     );
     ray.setFromCamera(cursor, camera);
-    const match = ray.intersectObjects(
+    // Walls, shut doors and the street view stop the pointer.
+    wallDistance =
+      ray.intersectObjects(hallShell.occluders(), true)[0]?.distance ??
+      Infinity;
+    const match = nearest(
       [...stalls.values()]
         .filter((stall) => stall.root.visible)
         .map((stall) => stall.hit),
-      false,
-    )[0];
+    );
     stallDistance = match?.distance ?? Infinity;
     return (match?.object.userData.stall as string | undefined) ?? "";
+  }
+  /** The first of these meshes along the pointer ray, unless a wall is nearer. */
+  function nearest(meshes: T.Object3D[]) {
+    const match = ray.intersectObjects(meshes, false)[0];
+    return match && match.distance < wallDistance ? match : undefined;
   }
   function down(event: PointerEvent) {
     host.focus({ preventScroll: true });
@@ -1842,18 +1857,19 @@ export function createHallScene(
     if (pickupHands.active) return;
     // Test the real tray and screen meshes before the coarse stall hit box.
     const selected = hit(event);
-    const screen = ray.intersectObjects(
+    const screen = nearest(
       [...stalls.values()]
         .filter((model) => model.root.visible)
         .map((model) => model.tablet),
-      false,
-    )[0];
-    const food = ray.intersectObjects(
+    );
+    // A tray is taken only from a stall in a room that is drawn.
+    const food = nearest(
       [...personalPickups.values()]
-        .filter((item) => item.mesh.visible)
+        .filter(
+          (item) => item.mesh.visible && stalls.get(item.stall)?.root.visible,
+        )
         .map((item) => item.mesh),
-      false,
-    )[0];
+    );
     if (food && (!screen || food.distance < screen.distance)) {
       const id = food.object.userData.pickupId as string;
       if (!selected || selected === personalPickups.get(id)?.stall) {
@@ -1873,12 +1889,11 @@ export function createHallScene(
       }
       return;
     }
-    const bay = ray.intersectObjects(
+    const bay = nearest(
       [...bays.values()]
         .filter((item) => item.root.visible)
         .map((item) => item.hit),
-      false,
-    )[0];
+    );
     if (bay && bay.distance < stallDistance) {
       actions.vacancy(bay.object.userData.vacancy as string);
       return;
@@ -2128,8 +2143,14 @@ export function createHallScene(
           Math.min(window.devicePixelRatio, next.detail ? 1.65 : 1),
         );
       if (!initialized) {
+        // A first view: an owner's first stall's room, otherwise Hall 1.
         initialized = true;
-        reset();
+        const first = next.ownedStalls
+          .map((id) => spots.get(id)?.room)
+          .find((room) => room !== undefined);
+        readMenu("");
+        setInside("");
+        frameRoom(Math.min(first ?? 1, openRooms));
       }
       schedule();
       draw(now);
@@ -2188,6 +2209,7 @@ export function createHallScene(
     camera(): CameraState {
       return {
         ...pose(),
+        room: currentRoom,
         ...(readingMenu && menuReturn
           ? { menu: { stall: readingMenu, hall: menuReturn } }
           : {}),
