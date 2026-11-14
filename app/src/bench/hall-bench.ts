@@ -15,7 +15,7 @@ const count = number("stalls", 150, 1, 150);
 const detail = number("detail", 0, 0, 1) === 1;
 const seconds = number("seconds", 20, 1, 600);
 
-function stall(index: number, waiting: number): Stall {
+function stall(index: number, service: number): Stall {
   return {
     stall_id: `bench-${index}`,
     restaurant_id: `bench-restaurant-${index}`,
@@ -24,8 +24,9 @@ function stall(index: number, waiting: number): Stall {
     cuisine: "italian",
     menu: {},
     "open?": true,
+    last_service: `bench-service-${service}`,
     activity: {
-      waiting,
+      waiting: 4,
       cooking: 2,
       handover: false,
       staffed: true,
@@ -36,9 +37,9 @@ function stall(index: number, waiting: number): Stall {
   };
 }
 
-function appearance(waiting: number): Appearance {
+function appearance(service: number): Appearance {
   return {
-    stalls: Array.from({ length: count }, (_, index) => stall(index, waiting)),
+    stalls: Array.from({ length: count }, (_, index) => stall(index, service)),
     ownedStalls: [],
     selected: "",
     pickup: "",
@@ -74,13 +75,16 @@ const scene = createHallScene(host, {
   },
 });
 
-// Alternate the queue length so departures keep the scene animating even with
-// detail off, where it would otherwise settle and stop drawing.
-let waiting = 4;
-scene.update(appearance(waiting));
+// Give every stall a new last_service each second. The scene reads a changed
+// value as a served order and sends one diner per stall off carrying a tray.
+// A departure walk lasts 1500 ms, so a 1000 ms cadence always has walkers in
+// flight and the scene keeps drawing in both detail modes. The first update
+// only sets the initial value; the second is the first to count as served.
+let service = 0;
+scene.update(appearance(service));
 const toggle = setInterval(() => {
-  waiting = waiting === 4 ? 3 : 4;
-  scene.update(appearance(waiting));
+  service++;
+  scene.update(appearance(service));
 }, 1000);
 
 function percentile(sorted: number[], share: number) {
