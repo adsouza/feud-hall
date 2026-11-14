@@ -87,6 +87,18 @@ on the table top.
 
 Not measured: other hardware, a real hall's workload, the packaged native app.
 
+### After the final review's fixes
+
+Re-measured at commit `63fd867`, on the same machine with the same method, 40 seconds per row, one run each. The room overview now draws whole queues in the viewer's room, so more people are drawn than in the rows above.
+
+| Row | People drawn (max) | Walking (max) | Seated (max) | fps | Late frames | Mean draw ms | p95 draw ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `detail=0&floor=1` | 598 | 292 | 96 | 30.93 | 0% | 4.90 | 7.7 |
+| `detail=1&floor=1` | 636 | 346 | 94 | 30.88 | 0% | 5.16 | 7.4 |
+| `near=1&detail=1&floor=1` | 700 | 346 | 94 | 30.88 | 0% | 4.60 | 6.7 |
+
+The bar is met. Mean draw time is lower than before the fixes although more people are drawn. These are single runs, so part of that difference may be run-to-run variation.
+
 ## Checks run
 
 One file at a time, never a whole suite at once, as each task's implementer
