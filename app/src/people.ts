@@ -1,3 +1,5 @@
+import * as T from "three";
+
 export type Role = "diner" | "owner" | "worker";
 export type HairStyle = "short" | "long" | "bun" | "cap";
 export type Look = {
@@ -63,5 +65,375 @@ export function personLook(serial: number, role: Role): Look {
     apron: role === "owner",
     height: 1.5 * (0.92 + (0.16 * field(bits, 20, 4)) / 15),
     width: 0.9 + (0.2 * field(bits, 24, 4)) / 15,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Proportions. A figure is authored one unit tall; the root scales it by
+// (height x width, height, height x width). Forward is +Z at yaw 0.
+// ---------------------------------------------------------------------------
+
+export const FIGURE = {
+  hipY: 0.44,
+  hipX: 0.065,
+  thighLen: 0.22,
+  shinLen: 0.2,
+  thighR: 0.052,
+  shinR: 0.043,
+  torsoY: 0.6,
+  torsoR: 0.115,
+  torsoStraight: 0.17,
+  torsoWide: 1.12,
+  torsoDeep: 0.78,
+  neckY: 0.82,
+  headY: 0.92,
+  headR: 0.1,
+  headTall: 1.1,
+  shoulderY: 0.745,
+  shoulderX: 0.165,
+  armOut: 0.12,
+  upperArmLen: 0.18,
+  forearmLen: 0.185,
+  upperArmR: 0.04,
+  forearmR: 0.034,
+  handR: 0.04,
+  hipSwing: 0.55,
+  kneeBend: 0.9,
+  armSwing: 0.5,
+  bob: 0.015,
+  // Parts the brief leaves unplaced.
+  skirtY: 0.45,
+  apronY: 0.56,
+  apronZ: 0.09,
+  footForward: 0.03,
+  // Carrying: the upper arm hangs a little forward, the forearm points ahead.
+  carryUpper: -0.35,
+  carryFore: -1.45,
+} as const;
+
+const F = FIGURE;
+const TALLEST = 1.62;
+const WIDEST = 1.1;
+
+// Outer shoulder-to-shoulder width of the tallest, widest look: the arms hang
+// out by `armOut`, so the hands sit further from the body than the shoulders.
+export const FIGURE_MAX_SPAN: number =
+  2 *
+  (F.shoulderX +
+    F.upperArmR +
+    (F.upperArmLen + F.forearmLen) * Math.sin(F.armOut)) *
+  TALLEST *
+  WIDEST;
+
+export type PartKind =
+  | "torso"
+  | "skirt"
+  | "apron"
+  | "neck"
+  | "head"
+  | "hairCap"
+  | "hairLong"
+  | "hairBun"
+  | "hairBrim"
+  | "upperLeg"
+  | "lowerLeg"
+  | "foot"
+  | "upperArm"
+  | "forearm"
+  | "hand";
+export const PART_KINDS: readonly PartKind[] = [
+  "torso",
+  "skirt",
+  "apron",
+  "neck",
+  "head",
+  "hairCap",
+  "hairLong",
+  "hairBun",
+  "hairBrim",
+  "upperLeg",
+  "lowerLeg",
+  "foot",
+  "upperArm",
+  "forearm",
+  "hand",
+];
+export type Detail = "full" | "simple";
+export type Pose = {
+  x: number;
+  z: number; // hall position of the feet
+  yaw: number; // body heading; forward is +Z at yaw 0
+  faceYaw: number; // extra head turn
+  stride: number; // -1..1, sign picks the leading leg (positive: left leads)
+  walking: boolean;
+  carrying: boolean; // both hands hold a tray in front
+};
+type Emit = (kind: PartKind, matrix: T.Matrix4, colour: number) => void;
+
+const APRON = 0xf3e6d0;
+const SHOES = 0x2b2623;
+
+// Scratch objects: posePerson allocates nothing per call.
+const ROOT = new T.Matrix4();
+const LOCAL = new T.Matrix4();
+const OUT = new T.Matrix4();
+const POS = new T.Vector3();
+const SCALE = new T.Vector3();
+const QUAT = new T.Quaternion();
+const EULER = new T.Euler();
+const REACH = { angle: 0, length: 0 };
+const NOOP: Emit = () => {};
+let sink: Emit = NOOP;
+
+// Emits a part whose reference point is (px, py, pz) in the unit figure,
+// turned about X then Z (limb swing, then arms-out), then about Y (head).
+function place(
+  kind: PartKind,
+  colour: number,
+  px: number,
+  py: number,
+  pz: number,
+  rx: number,
+  ry: number,
+  rz: number,
+  sx: number,
+  sy: number,
+  sz: number,
+): void {
+  LOCAL.compose(
+    POS.set(px, py, pz),
+    QUAT.setFromEuler(EULER.set(rx, ry, rz, "ZXY")),
+    SCALE.set(sx, sy, sz),
+  );
+  OUT.multiplyMatrices(ROOT, LOCAL);
+  sink(kind, OUT, colour);
+}
+
+// A limb hangs down at angle 0 and swings backward (towards -Z) as the angle
+// grows. Two segments at angles a1, a2 reach the point a single straight
+// segment of REACH.length at REACH.angle would; used for the simple figure.
+function reach(a1: number, l1: number, a2: number, l2: number): void {
+  const down = l1 * Math.cos(a1) + l2 * Math.cos(a2);
+  const back = l1 * Math.sin(a1) + l2 * Math.sin(a2);
+  REACH.length = Math.hypot(down, back);
+  REACH.angle = Math.atan2(back, down);
+}
+
+function bobFor(stride: number): number {
+  return -F.bob * Math.abs(stride); // the body dips as the legs spread
+}
+
+function poseParts(look: Look, pose: Pose, detail: Detail): void {
+  const full = detail === "full";
+  const stride = pose.walking ? T.MathUtils.clamp(pose.stride, -1, 1) : 0;
+  const bob = bobFor(stride);
+  const cap = look.hairStyle === "cap";
+
+  place(
+    "torso",
+    look.shirt,
+    0,
+    F.torsoY + bob,
+    0,
+    0,
+    0,
+    0,
+    F.torsoWide,
+    1,
+    F.torsoDeep,
+  );
+  if (look.skirt)
+    place("skirt", look.shirt, 0, F.skirtY + bob, 0, 0, 0, 0, 1, 1, 1);
+  if (look.apron)
+    place("apron", APRON, 0, F.apronY + bob, F.apronZ, 0, 0, 0, 1, 1, 1);
+  if (full) place("neck", look.skin, 0, F.neckY + bob, 0, 0, 0, 0, 1, 1, 1);
+
+  const headY = F.headY + bob;
+  place("head", look.skin, 0, headY, 0, 0, pose.faceYaw, 0, 1, F.headTall, 1);
+  place(
+    "hairCap",
+    cap ? look.hat : look.hair,
+    0,
+    headY,
+    0,
+    0,
+    pose.faceYaw,
+    0,
+    1,
+    F.headTall,
+    1,
+  );
+  if (full) {
+    if (look.hairStyle === "long")
+      place(
+        "hairLong",
+        look.hair,
+        0,
+        headY,
+        0,
+        0,
+        pose.faceYaw,
+        0,
+        1,
+        F.headTall,
+        1,
+      );
+    else if (look.hairStyle === "bun")
+      place(
+        "hairBun",
+        look.hair,
+        0,
+        headY,
+        0,
+        0,
+        pose.faceYaw,
+        0,
+        1,
+        F.headTall,
+        1,
+      );
+    else if (cap)
+      place(
+        "hairBrim",
+        look.hat,
+        0,
+        headY,
+        0,
+        0,
+        pose.faceYaw,
+        0,
+        1,
+        F.headTall,
+        1,
+      );
+  }
+
+  const legColour = look.skirt ? look.skin : look.trousers;
+  const sleeveColour = look.shortSleeves ? look.skin : look.shirt;
+  for (let side = 0; side < 2; side++) {
+    const sx = side === 0 ? -1 : 1; // left (-X) first
+    const lead = side === 0 ? stride : -stride; // the left leg leads for positive stride
+
+    // Leg: the hip swings forward when leading; the trailing knee bends.
+    const hip = -F.hipSwing * lead;
+    const shin = hip + F.kneeBend * Math.max(0, -lead);
+    const hx = sx * F.hipX;
+    const hy = F.hipY + bob;
+    if (full) {
+      place("upperLeg", legColour, hx, hy, 0, hip, 0, 0, 1, 1, 1);
+      const ky = hy - F.thighLen * Math.cos(hip);
+      const kz = -F.thighLen * Math.sin(hip);
+      place("lowerLeg", legColour, hx, ky, kz, shin, 0, 0, 1, 1, 1);
+      place(
+        "foot",
+        SHOES,
+        hx,
+        ky - F.shinLen * Math.cos(shin),
+        kz - F.shinLen * Math.sin(shin) + F.footForward,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+      );
+    } else {
+      reach(hip, F.thighLen, shin, F.shinLen);
+      place(
+        "upperLeg",
+        legColour,
+        hx,
+        hy,
+        0,
+        REACH.angle,
+        0,
+        0,
+        1,
+        REACH.length / F.thighLen,
+        1,
+      );
+    }
+
+    // Arm: counter-swings against the same-side leg, or holds the tray.
+    const upper = pose.carrying ? F.carryUpper : F.armSwing * lead;
+    const fore = pose.carrying ? F.carryFore : upper;
+    const out = sx * F.armOut;
+    const ax = sx * F.shoulderX;
+    const ay = F.shoulderY + bob;
+    const cos = Math.cos(out);
+    const sin = Math.sin(out);
+    if (full) {
+      place("upperArm", look.shirt, ax, ay, 0, upper, 0, out, 1, 1, 1);
+      const down = F.upperArmLen * Math.cos(upper);
+      const ex = ax + down * sin;
+      const ey = ay - down * cos;
+      const ez = -F.upperArmLen * Math.sin(upper);
+      place("forearm", sleeveColour, ex, ey, ez, fore, 0, out, 1, 1, 1);
+      const lower = F.forearmLen * Math.cos(fore);
+      place(
+        "hand",
+        look.skin,
+        ex + lower * sin,
+        ey - lower * cos,
+        ez - F.forearmLen * Math.sin(fore),
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+      );
+    } else {
+      reach(upper, F.upperArmLen, fore, F.forearmLen);
+      place(
+        "upperArm",
+        look.shirt,
+        ax,
+        ay,
+        0,
+        REACH.angle,
+        0,
+        out,
+        1,
+        REACH.length / F.upperArmLen,
+        1,
+      );
+    }
+  }
+}
+
+export function posePerson(
+  look: Look,
+  pose: Pose,
+  detail: Detail,
+  emit: Emit,
+): void {
+  sink = emit;
+  const scale = look.height * look.width;
+  ROOT.compose(
+    POS.set(pose.x, 0, pose.z),
+    QUAT.setFromEuler(EULER.set(0, pose.yaw, 0, "XYZ")),
+    SCALE.set(scale, look.height, scale),
+  );
+  poseParts(look, pose, detail);
+  sink = NOOP;
+}
+
+// Where the midpoint between the carrying hands sits at this stride, in world
+// units from the feet (the walking bob included, so a tray stays in the hands).
+export function carryPoint(
+  look: Look,
+  stride = 0,
+): { y: number; forward: number } {
+  const s = T.MathUtils.clamp(stride, -1, 1);
+  const down =
+    F.upperArmLen * Math.cos(F.carryUpper) +
+    F.forearmLen * Math.cos(F.carryFore);
+  const back =
+    F.upperArmLen * Math.sin(F.carryUpper) +
+    F.forearmLen * Math.sin(F.carryFore);
+  return {
+    y: (F.shoulderY + bobFor(s) - down * Math.cos(F.armOut)) * look.height,
+    forward: -back * look.height * look.width,
   };
 }
