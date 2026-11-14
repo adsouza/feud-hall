@@ -10,7 +10,7 @@ import {
   type FloorInput,
   type FloorStall,
 } from "../../src/diner-floor";
-import { stallBlocks } from "../../src/hall-layout";
+import { queueSpot, stallBlocks, toHall } from "../../src/hall-layout";
 import {
   entrance,
   roomAt,
@@ -94,9 +94,17 @@ function queueRises(previous: FloorInput, step: FloorInput) {
   let rises = 0;
   for (const stall of step.stalls) {
     const before = previous.stalls.find((s) => s.id === stall.id)!;
+    // A service (with someone there to serve) takes one off the old count.
+    const served =
+      stall.lastService !== null &&
+      stall.lastService !== before.lastService &&
+      before.waiting > 0;
+    const afterService = served
+      ? Math.max(0, before.waiting - 1)
+      : before.waiting;
     rises += Math.max(
       0,
-      Math.min(stall.waiting, cap) - Math.min(before.waiting, cap),
+      Math.min(stall.waiting, cap) - Math.min(afterService, cap),
     );
   }
   return rises;
@@ -209,6 +217,104 @@ test("floor: figures created equal the count changes received", () => {
   expect(runsWithRise).toBeGreaterThanOrEqual(100);
   expect(runsWithWalkOut).toBeGreaterThanOrEqual(100);
   expect(runsWithCollect).toBeGreaterThanOrEqual(50);
+});
+
+/** Applies `waiting` for s01 at 0, then `next` for s01 at STEP. */
+function serviceStep(
+  from: { waiting: number; queueLimit?: number },
+  next: { waiting: number; queueLimit?: number; served: boolean },
+  extra: Over = {},
+) {
+  const floor = createDinerFloor();
+  floor.apply(
+    input({
+      ...extra,
+      waiting: { s01: from.waiting },
+      queueLimit: from.queueLimit ?? 6,
+    }),
+  );
+  floor.apply(
+    input({
+      ...extra,
+      now: STEP,
+      waiting: { s01: next.waiting },
+      queueLimit: next.queueLimit ?? 6,
+      served: next.served ? { s01: "x" } : {},
+    }),
+  );
+  return floor;
+}
+
+test("floor: a service with an unchanged count stages one joiner", () => {
+  const floor = serviceStep({ waiting: 3 }, { waiting: 3, served: true });
+  const figures = all(floor, STEP);
+  expect(figures.filter((f) => f.activity === "collecting")).toHaveLength(1);
+  expect(figures.filter((f) => f.activity === "walking")).toHaveLength(1);
+  expect(figures.filter((f) => f.activity === "queued")).toHaveLength(2);
+  expect(figures).toHaveLength(4);
+  expect(floor.tally.toQueue).toBe(1);
+  expect(floor.boundFor("s01")).toBe(3);
+});
+
+test("floor: an unchanged count without a service creates nothing", () => {
+  const floor = serviceStep({ waiting: 3 }, { waiting: 3, served: false });
+  expect(floor.count(STEP)).toBe(3);
+  expect(floor.moving(STEP)).toBe(false);
+  expect(floor.tally).toEqual({
+    toQueue: 0,
+    walkOut: 0,
+    fromSeat: 0,
+    thinned: 0,
+  });
+});
+
+for (const next of [6, 8])
+  test(`floor: a service above the cap moves the hidden queue up (8 -> ${next})`, () => {
+    const floor = serviceStep({ waiting: 8 }, { waiting: next, served: true });
+    const figures = all(floor, STEP);
+    expect(figures.filter((f) => f.activity === "collecting")).toHaveLength(1);
+    expect(figures.filter((f) => f.activity === "walking")).toHaveLength(0);
+    expect(figures.filter((f) => f.activity === "queued")).toHaveLength(6);
+    expect(floor.tally.toQueue).toBe(0);
+    expect(floor.boundFor("s01")).toBe(6);
+  });
+
+test("floor: a raised queue limit shows waiting diners standing, not desserts", () => {
+  const floor = createDinerFloor();
+  const today = { arrivals: 10, admitted: 10, left: 0 };
+  floor.apply(input({ queueLimit: 4, waiting: { s01: 6, s02: 1 }, today }));
+  const served = input({
+    now: STEP,
+    queueLimit: 4,
+    waiting: { s01: 6 },
+    served: { s02: "a" },
+    today,
+  });
+  hold(floor, served, STEP, 30 * STEP);
+  const now = 31 * STEP;
+  expect(
+    all(floor, now - STEP).filter((f) => f.activity === "seated"),
+  ).toHaveLength(1);
+  expect(floor.boundFor("s01")).toBe(4);
+  const before = floor.count(now - STEP);
+  const tally = { ...floor.tally };
+  floor.apply({ ...served, now, queueLimit: 6 });
+  expect(floor.tally).toEqual(tally);
+  expect(floor.boundFor("s01")).toBe(6);
+  expect(floor.count(now)).toBe(before + 2);
+  const figures = all(floor, now);
+  expect(figures.filter((f) => f.activity === "seated")).toHaveLength(1);
+  expect(figures.filter((f) => f.activity === "walking")).toHaveLength(0);
+  const placement = spotPlacement(1, 0);
+  for (const n of [4, 5]) {
+    const at = toHall(placement, ...queueSpot(n));
+    expect(
+      figures.filter(
+        (f) =>
+          f.activity === "queued" && Math.hypot(f.x - at.x, f.z - at.z) < 1e-6,
+      ),
+    ).toHaveLength(1);
+  }
 });
 
 test("floor: nothing appears without a change", () => {

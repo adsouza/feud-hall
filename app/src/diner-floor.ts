@@ -66,7 +66,12 @@ export type FloorFigure = {
   stride: number;
   activity: FloorActivity;
   carrying: boolean; // tray in hands
-  /** 0..1 while the tray passes from the counter to the hands; else absent. */
+  /**
+   * Present for the whole collect, from the call to the counter until the tray
+   * is in the hands: 0 while the tray is still on the counter (including the
+   * walk to the pickup spot), rising to 1 as it passes into the hands; else
+   * absent.
+   */
   take?: number;
   /** The stall whose counter the tray comes from, while `take` is present. */
   stall?: string;
@@ -140,8 +145,8 @@ type StallState = {
   room: number;
   position: number;
   placement: SpotPlacement;
-  /** min(waiting, cap) at the last snapshot. */
-  target: number;
+  /** The raw waiting count at the last snapshot. */
+  waiting: number;
   lastService: string | null;
   /** Figures bound for the queue, by spot; the last is the one served. */
   queue: Figure[];
@@ -695,14 +700,16 @@ export function createDinerFloor(): {
   ) {
     while (state.queue.length > target) remove(state.queue.pop()!);
     state.queue.forEach((f, n) => plan(f, [standAt(state.placement, n, now)]));
-    while (state.queue.length < target) {
-      const figure = newFigure(state.room);
-      figure.stall = id;
-      figure.spot = state.queue.length;
-      state.queue.push(figure);
-      plan(figure, [standAt(state.placement, figure.spot, now)]);
-    }
-    state.target = target;
+    while (state.queue.length < target) standing(state, id, now);
+  }
+
+  /** A figure standing at the next spot of a queue at once, with no walk. */
+  function standing(state: StallState, id: string, now: number) {
+    const figure = newFigure(state.room);
+    figure.stall = id;
+    figure.spot = state.queue.length;
+    state.queue.push(figure);
+    plan(figure, [standAt(state.placement, figure.spot, now)]);
   }
 
   function addState(stall: FloorStall): StallState {
@@ -710,7 +717,7 @@ export function createDinerFloor(): {
       room: stall.room,
       position: stall.position,
       placement: spotPlacement(stall.room, stall.position),
-      target: 0,
+      waiting: 0,
       lastService: stall.lastService,
       queue: [],
     };
@@ -744,7 +751,7 @@ export function createDinerFloor(): {
   function clearFloor(now: number, animate: boolean) {
     for (const state of stalls.values()) {
       state.queue.length = 0;
-      state.target = 0;
+      state.waiting = 0;
     }
     for (const figure of figures) {
       if (figure.end <= now) continue;
@@ -814,6 +821,7 @@ export function createDinerFloor(): {
       for (const s of open) {
         const state = stalls.get(s.id) ?? addState(s);
         settleQueue(state, s.id, Math.min(s.waiting, cap), now);
+        state.waiting = s.waiting;
         state.lastService = s.lastService;
       }
     } else {
@@ -845,63 +853,75 @@ export function createDinerFloor(): {
       today.left >= before.left
         ? { before, today }
         : null;
-    // Queue rises, against the last snapshot's counts.
-    const rises = new Map<string, number>();
+    // Each stall's change, from the raw waiting counts: a service takes one
+    // diner off the old count; the rest of the change is joiners or falls.
+    const changes = new Map<
+      string,
+      { served: boolean; afterService: number; joined: number }
+    >();
     let risen = 0;
     for (const s of open) {
-      const target = Math.min(s.waiting, cap);
       const state = stalls.get(s.id);
       if (!state) {
         // A stall new to the floor starts standing, like a first snapshot.
-        settleQueue(addState(s), s.id, target, now);
+        const added = addState(s);
+        settleQueue(added, s.id, Math.min(s.waiting, cap), now);
+        added.waiting = s.waiting;
         continue;
       }
-      const rise = Math.max(0, target - state.target);
-      rises.set(s.id, rise);
-      risen += rise;
+      const served =
+        s.lastService !== null &&
+        s.lastService !== state.lastService &&
+        state.queue.length > 0;
+      const afterService = served
+        ? Math.max(0, state.waiting - 1)
+        : state.waiting;
+      const joined = Math.max(
+        0,
+        Math.min(s.waiting, cap) - Math.min(afterService, cap),
+      );
+      changes.set(s.id, { served, afterService, joined });
+      risen += joined;
     }
-    // Rule 4: rises beyond the new admissions are desserts, in stall-ID order.
+    // Rule 4: joiners beyond the new admissions are desserts, in stall-ID order.
     let desserts = totals
       ? Math.max(0, risen - (totals.today.admitted - totals.before.admitted))
       : 0;
     const dessertsAt = new Map<string, number>();
-    for (const id of [...rises.keys()].sort()) {
-      const d = Math.min(desserts, rises.get(id)!);
+    for (const id of [...changes.keys()].sort()) {
+      const d = Math.min(desserts, changes.get(id)!.joined);
       dessertsAt.set(id, d);
       desserts -= d;
     }
-    // Rules 5 and 6.
+    // Rule 5, then the tail advance, then rule 6.
     for (const s of open) {
-      if (!rises.has(s.id)) continue;
+      const change = changes.get(s.id);
+      if (!change) continue;
       const state = stalls.get(s.id)!;
-      const target = Math.min(s.waiting, cap);
-      if (
-        s.lastService !== null &&
-        s.lastService !== state.lastService &&
-        state.queue.length > 0
-      )
-        serve(state.queue.pop()!, state, s.id, now, input);
-      while (state.queue.length > target)
+      if (change.served) serve(state.queue.pop()!, state, s.id, now, input);
+      // Diners already waiting beyond the drawn queue (or newly drawable under
+      // a raised limit) move up into view: standing at their spots, untallied.
+      while (state.queue.length < Math.min(change.afterService, cap))
+        standing(state, s.id, now);
+      while (state.queue.length > Math.min(s.waiting, cap))
         leave(state.queue.pop()!, now, input.animate);
     }
-    // Rules 3, 4 and 8. A service with an unchanged count also refills the
-    // queue: someone joined as someone was served.
+    // Rules 3, 4 and 8: the joiners.
     const load = walkingLoad(now);
     for (const s of open) {
-      const rise = rises.get(s.id);
-      if (rise === undefined) continue;
+      const change = changes.get(s.id);
+      if (!change) continue;
       const state = stalls.get(s.id)!;
-      const target = Math.min(s.waiting, cap);
       const dessert = dessertsAt.get(s.id)!;
-      for (let i = 0; state.queue.length < target; i++) {
+      for (let i = 0; i < change.joined; i++) {
         if (i < dessert && requeue(state, s.id, now, input)) {
           tally.fromSeat++;
           continue;
         }
-        if (i < rise) tally.toQueue++;
+        tally.toQueue++;
         enqueue(state, s.id, now, input, load);
       }
-      state.target = target;
+      state.waiting = s.waiting;
       state.lastService = s.lastService;
     }
     // Rules 2 and 7.
