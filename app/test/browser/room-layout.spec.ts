@@ -1,0 +1,342 @@
+import { expect, test } from "./hall";
+import fc from "fast-check";
+import { QUEUE_SPOTS, toHall } from "../../src/hall-layout";
+import {
+  DOOR_WIDTH,
+  ENTRANCE_WIDTH,
+  ROOM_COUNT,
+  ROOM_SIDE,
+  SPOTS_PER_ROOM,
+  assignSpots,
+  positionKind,
+  roomAt,
+  roomCentre,
+  spotPlacement,
+  tableSpots,
+  walkable,
+  walkingEntrance,
+  type SpotPlacement,
+} from "../../src/room-layout";
+
+type P = { x: number; z: number };
+const rooms = Array.from({ length: ROOM_COUNT }, (_, i) => i + 1);
+const positions = Array.from({ length: SPOTS_PER_ROOM }, (_, i) => i);
+const all = rooms.flatMap((room) =>
+  positions.map((position) => spotPlacement(room, position)),
+);
+const inRoom = (room: number) => all.filter((p) => p.room === room);
+
+/** A booth's solid box, extended in front to the queue, as world corners. */
+function box(p: SpotPlacement, front = 2.9): P[] {
+  return [
+    toHall(p, -1.92, -1.27),
+    toHall(p, 1.92, -1.27),
+    toHall(p, 1.92, front),
+    toHall(p, -1.92, front),
+  ];
+}
+function overlap(a: P[], b: P[]): boolean {
+  for (const poly of [a, b])
+    for (let i = 0; i < 4; i++) {
+      const p = poly[i]!,
+        q = poly[(i + 1) % 4]!;
+      const nx = q.z - p.z,
+        nz = p.x - q.x;
+      const range = (shape: P[]) => {
+        const d = shape.map((v) => v.x * nx + v.z * nz);
+        return [Math.min(...d), Math.max(...d)] as const;
+      };
+      const [a0, a1] = range(a),
+        [b0, b1] = range(b);
+      if (a1 <= b0 + 1e-9 || b1 <= a0 + 1e-9) return false;
+    }
+  return true;
+}
+function segDist(p: P, a: P, b: P): number {
+  const dx = b.x - a.x,
+    dz = b.z - a.z;
+  const t = Math.max(
+    0,
+    Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / (dx * dx + dz * dz)),
+  );
+  return Math.hypot(p.x - a.x - t * dx, p.z - a.z - t * dz);
+}
+function inside(poly: P[], p: P): boolean {
+  return poly.every((v, i) => {
+    const w = poly[(i + 1) % 4]!;
+    return (w.x - v.x) * (p.z - v.z) - (w.z - v.z) * (p.x - v.x) >= 0;
+  });
+}
+/** Distance between a convex box and a line segment. */
+function boxToSegment(poly: P[], a: P, b: P): number {
+  const cw = poly.slice().reverse();
+  if (inside(poly, a) || inside(cw, a) || inside(poly, b) || inside(cw, b))
+    return 0;
+  let best = Infinity;
+  for (let i = 0; i < 4; i++) {
+    const p = poly[i]!,
+      q = poly[(i + 1) % 4]!;
+    best = Math.min(best, segDist(a, p, q), segDist(b, p, q));
+    best = Math.min(best, segDist(p, a, b), segDist(q, a, b));
+    const o = (u: P, v: P, w: P) =>
+      Math.sign((v.x - u.x) * (w.z - u.z) - (v.z - u.z) * (w.x - u.x));
+    if (o(p, q, a) !== o(p, q, b) && o(a, b, p) !== o(a, b, q)) return 0;
+  }
+  return best;
+}
+
+test("rooms: 150 spots have 150 distinct placements inside their own room", () => {
+  const keys = new Set(
+    all.map((p) => `${p.x.toFixed(3)},${p.z.toFixed(3)},${p.yaw.toFixed(3)}`),
+  );
+  expect(keys.size).toBe(150);
+  for (const p of all) {
+    expect(roomAt(p.x, p.z)).toBe(p.room);
+    for (const corner of box(p, 1.44))
+      expect(roomAt(corner.x, corner.z)).toBe(p.room);
+  }
+});
+
+test("rooms: no two booths or queues overlap", () => {
+  for (const room of rooms) {
+    const here = inRoom(room);
+    for (let i = 0; i < here.length; i++)
+      for (let j = i + 1; j < here.length; j++)
+        expect(
+          overlap(box(here[i]!), box(here[j]!)),
+          `room ${room}: ${i} and ${j}`,
+        ).toBe(false);
+  }
+});
+
+test("rooms: doorways and the entrance are clear", () => {
+  const c = roomCentre(1);
+  const half = ROOM_SIDE / 2;
+  const lines: [P, P, number][] = [
+    [{ x: c.x - half, z: 0 }, c, DOOR_WIDTH / 2],
+    [c, { x: c.x + half, z: 0 }, DOOR_WIDTH / 2],
+    [c, { x: 0, z: half }, ENTRANCE_WIDTH / 2],
+  ];
+  for (const p of inRoom(1))
+    for (const [a, b, clear] of lines)
+      expect(
+        boxToSegment(box(p), a, b),
+        `position ${p.position}`,
+      ).toBeGreaterThanOrEqual(clear);
+});
+
+test("rooms: every counter faces into its room", () => {
+  for (const p of all) {
+    const c = roomCentre(p.room);
+    const front = toHall(p, 0, 3);
+    expect(Math.hypot(front.x - c.x, front.z - c.z)).toBeLessThan(
+      Math.hypot(p.x - c.x, p.z - c.z),
+    );
+  }
+});
+
+test("rooms: quality follows position", () => {
+  const table = (room: number) => positions.map((p) => positionKind(room, p));
+  const odd = [
+    "quiet",
+    "standard",
+    "standard",
+    "standard",
+    "standard",
+    "standard",
+    "quiet",
+    "busy",
+    "busy",
+    "quiet",
+    "prime",
+    "prime",
+    "quiet",
+    "standard",
+    "busy",
+  ];
+  const even = odd.slice();
+  even[11] = "standard";
+  even[13] = "busy";
+  for (const room of [1, 3, 5, 7, 9]) expect(table(room)).toEqual(odd);
+  for (const room of [2, 4, 6, 8, 10]) expect(table(room)).toEqual(even);
+  const nearest = (to: P, n: number) =>
+    inRoom(1)
+      .map((p) => [Math.hypot(p.x - to.x, p.z - to.z), p.position] as const)
+      .sort((a, b) => a[0] - b[0])
+      .slice(0, n)
+      .map((e) => e[1])
+      .sort((a, b) => a - b);
+  const half = ROOM_SIDE / 2;
+  expect(nearest({ x: 0, z: half }, 2)).toEqual([10, 11]);
+  expect(
+    nearest({ x: -half, z: 0 }, 2)
+      .concat(nearest({ x: half, z: 0 }, 2))
+      .sort((a, b) => a - b),
+  ).toEqual([7, 8, 13, 14]);
+  expect(
+    [-half, half]
+      .flatMap((x) => [-half, half].map((z) => nearest({ x, z }, 1)[0]!))
+      .sort((a, b) => a - b),
+  ).toEqual([0, 6, 9, 12]);
+});
+
+test("rooms: the room mix matches the catalog", () => {
+  const mix = (room: number) => {
+    const counts = { quiet: 0, standard: 0, busy: 0, prime: 0 };
+    for (const p of positions) counts[positionKind(room, p)]++;
+    return [counts.quiet, counts.standard, counts.busy, counts.prime];
+  };
+  expect(mix(1)).toEqual([4, 6, 3, 2]);
+  expect(mix(2)).toEqual([4, 6, 4, 1]);
+});
+
+test("rooms: stalls without room data are placed fifteen to a room in ID order", () => {
+  fc.assert(
+    fc.property(
+      fc.uniqueArray(fc.string({ minLength: 1, maxLength: 6 }), {
+        maxLength: 150,
+      }),
+      (ids) => {
+        const spots = assignSpots(ids.map((stall_id) => ({ stall_id })));
+        const keys = [...spots.values()].map((s) => `${s.room}:${s.position}`);
+        expect(new Set(keys).size).toBe(ids.length);
+        const counts = new Map<number, number>();
+        for (const s of spots.values())
+          counts.set(s.room, (counts.get(s.room) ?? 0) + 1);
+        for (const n of counts.values()) expect(n).toBeLessThanOrEqual(15);
+        const used = [...counts.keys()].sort((a, b) => a - b);
+        expect(used).toEqual(used.map((_, i) => i + 1));
+        const reversed = assignSpots(
+          ids
+            .slice()
+            .reverse()
+            .map((stall_id) => ({ stall_id })),
+        );
+        expect([...reversed].sort()).toEqual([...spots].sort());
+      },
+    ),
+  );
+  const given = [
+    { stall_id: "b", room: 3, position: 4 },
+    { stall_id: "a", room: 1, position: 0 },
+  ];
+  expect([...assignSpots(given)]).toEqual([
+    ["b", { room: 3, position: 4 }],
+    ["a", { room: 1, position: 0 }],
+  ]);
+});
+
+test("rooms: walking stays inside open rooms", () => {
+  const half = ROOM_SIDE / 2;
+  fc.assert(
+    fc.property(
+      fc.double({ min: -30, max: 400, noNaN: true }),
+      fc.double({ min: -40, max: 40, noNaN: true }),
+      fc.integer({ min: 1, max: ROOM_COUNT }),
+      (x, z, open) => {
+        const room = roomAt(x, z);
+        const result = walkable(
+          x,
+          z,
+          open,
+          inRoom(1).concat(...rooms.slice(1).map(inRoom)),
+        );
+        if (room === null && Math.abs(z) >= DOOR_WIDTH / 2)
+          expect(result).toBe(false);
+        if (room !== null && room > open) expect(result).toBe(false);
+      },
+    ),
+  );
+  for (const room of rooms) {
+    const c = roomCentre(room);
+    expect(walkable(c.x, c.z, room, all)).toBe(true);
+    if (room > 1) expect(walkable(c.x, c.z, room - 1, all)).toBe(false);
+  }
+  for (const p of all) {
+    expect(walkable(p.x, p.z, ROOM_COUNT, all)).toBe(false);
+    expect(walkable(p.x, p.z, 0, all)).toBe(false);
+  }
+  const door =
+    roomCentre(1).x +
+    ROOM_SIDE / 2 +
+    (roomCentre(2).x - roomCentre(1).x - ROOM_SIDE) / 2;
+  expect(walkable(door, 0, 2, all)).toBe(true);
+  expect(walkable(door, 0, 1, all)).toBe(false);
+  expect(walkable(door, DOOR_WIDTH, 2, all)).toBe(false);
+  expect(walkable(0, half + 1, ROOM_COUNT, all)).toBe(false);
+  expect(walkable(-half - 1, 0, ROOM_COUNT, all)).toBe(false);
+});
+
+test("rooms: tables stand clear", () => {
+  const half = ROOM_SIDE / 2;
+  for (const room of rooms) {
+    const c = roomCentre(room);
+    const tables = tableSpots(room);
+    expect(tables.length).toBeGreaterThanOrEqual(6);
+    for (const t of tables) {
+      expect(walkable(t.x, t.z, room, inRoom(room))).toBe(true);
+      for (const p of inRoom(room))
+        for (const [qx, qz] of QUEUE_SPOTS) {
+          const q = toHall(p, qx, qz);
+          expect(Math.hypot(q.x - t.x, q.z - t.z)).toBeGreaterThanOrEqual(2.5);
+        }
+      for (const [a, b] of [
+        [{ x: c.x - half, z: c.z }, c],
+        [c, { x: c.x + half, z: c.z }],
+        [c, { x: c.x, z: c.z + half }],
+      ] as [P, P][])
+        expect(segDist(t, a, b)).toBeGreaterThanOrEqual(2);
+    }
+  }
+});
+
+test("rooms: a walking entrance is clear, in the room and in front of a counter", () => {
+  for (const room of rooms)
+    for (let n = 0; n <= SPOTS_PER_ROOM; n++) {
+      const stalls = positions.slice(0, n).map((position) => ({
+        id: `s${position}`,
+        open: position % 2 === 0,
+        placement: spotPlacement(room, position),
+      }));
+      for (const selected of ["", "s1", "s2"]) {
+        const e = walkingEntrance(stalls, selected, room);
+        const placements = stalls.map((s) => s.placement);
+        expect(roomAt(e.position.x, e.position.z)).toBe(room);
+        expect(walkable(e.position.x, e.position.z, room, placements)).toBe(
+          true,
+        );
+        const found = stalls.find((s) => s.id === e.stall);
+        if (stalls.length) {
+          expect(found).toBeTruthy();
+          const local = toLocal(found!.placement, e.position);
+          expect(local.z).toBeGreaterThanOrEqual(4 - 1e-9);
+          expect(local.z).toBeLessThanOrEqual(6 + 1e-9);
+        } else expect(e.stall).toBe("");
+      }
+    }
+});
+
+function toLocal(pose: SpotPlacement, p: P) {
+  const c = Math.cos(pose.yaw),
+    s = Math.sin(pose.yaw),
+    dx = p.x - pose.x,
+    dz = p.z - pose.z;
+  return { x: c * dx - s * dz, z: s * dx + c * dz };
+}
+
+test("rooms: coordinates round trip", () => {
+  fc.assert(
+    fc.property(
+      fc.integer({ min: 1, max: ROOM_COUNT }),
+      fc.integer({ min: 0, max: 14 }),
+      fc.double({ min: -5, max: 5, noNaN: true }),
+      fc.double({ min: -5, max: 5, noNaN: true }),
+      (room, position, x, z) => {
+        const pose = spotPlacement(room, position);
+        const back = toLocal(pose, toHall(pose, x, z));
+        expect(back.x).toBeCloseTo(x, 6);
+        expect(back.z).toBeCloseTo(z, 6);
+      },
+    ),
+  );
+});
