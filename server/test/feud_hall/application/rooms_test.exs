@@ -103,6 +103,20 @@ defmodule FeudHall.Application.RoomsTest do
     assert rt.state.management.drafts[first].stall_id == "s005"
   end
 
+  test "a surrender that reopens a class closes the empty next room" do
+    {rt, [first]} = owners(boot(), ["first"])
+    rt = rt |> npc_lease("s136") |> npc_lease("s137")
+    assert Rooms.summary(rt.state).open == 2
+
+    rt = accepted(rt, {:npc, "npc-s137"}, :surrender_location, %{restaurant_id: "npc-s137", stall_id: "s137"})
+    refute Map.has_key?(rt.state.stalls, "s137")
+    assert Rooms.summary(rt.state).open == 1
+    assert rejected(rt, {:principal, first}, :reserve_stall, %{stall_id: "s138"}) == :slot_unavailable
+    assert rejected(rt, {:principal, first}, :reserve_stall, %{stall_id: "s005"}) == :slot_unavailable
+    rt = accepted(rt, {:principal, first}, :reserve_stall, %{stall_id: "s137"})
+    assert rt.state.management.drafts[first].stall_id == "s137"
+  end
+
   test "the lease records the rent it was quoted" do
     {rt, [first]} = owners(boot(), ["first"])
     assert Rooms.quote(Rooms.summary(rt.state), :prime).rent == 22_000
@@ -117,6 +131,99 @@ defmodule FeudHall.Application.RoomsTest do
     current = Rooms.quote(Rooms.summary(rt.state), :prime).rent
     assert current != 22_000
     assert HallManagement.lease_quote(rt.state, "s138").rent == current
+  end
+
+  describe "the rent an expansion expects" do
+    # A launch hall with the usual computer-run stalls and one owner who already trades from s002.
+    defp expanding_owner do
+      {rt, [first]} = owners(boot(), ["first"])
+      rt = Enum.reduce(~w(s001 s041 s042), rt, &npc_lease(&2, &1))
+      rt = accepted(rt, {:principal, first}, :reserve_stall, %{stall_id: "s002"})
+      rt = accepted(rt, {:principal, first}, :create_restaurant, location("first", "s002"))
+      {rt, first}
+    end
+
+    defp expand(sid, extra \\ %{}), do: Map.merge(%{restaurant_id: "first", stall_id: sid, cuisine: "levantine"}, extra)
+
+    defp leased_rents(rt), do: for(%{type: :stall_leased} = e <- last_events(rt), do: {e.stall_id, e.rent})
+
+    test "a rent that changed after the owner saw it is refused" do
+      {rt, first} = expanding_owner()
+      actor = {:principal, first}
+      assert HallManagement.lease_quote(rt.state, "s043").rent == 12_000
+      rt = npc_lease(rt, "s044")
+      assert HallManagement.lease_quote(rt.state, "s043").rent == 13_000
+
+      assert {:rejected, %{outcome: {:rejected, :quote_changed}}, after_refusal} =
+               command(rt, actor, :lease_location, expand("s043", %{expected_rent: 12_000}))
+
+      assert after_refusal.state == rt.state
+      refute Map.has_key?(after_refusal.state.management.leases, "s043")
+
+      rt = accepted(after_refusal, actor, :lease_location, expand("s043", %{expected_rent: 13_000}))
+      assert leased_rents(rt) == [{"s043", 13_000}]
+      assert rt.state.management.leases["s043"].rent == 13_000
+    end
+
+    test "the same command ID retried with the same expected rent returns the original receipt" do
+      {rt, first} = expanding_owner()
+      actor = {:principal, first}
+      payload = expand("s043", %{expected_rent: 12_000})
+
+      assert {:accepted, receipt, rt} = command(rt, actor, :lease_location, payload, "expand-once")
+      assert {:replayed, ^receipt, _} = command(rt, actor, :lease_location, payload, "expand-once")
+    end
+
+    test "without an expected rent the lease takes the current quote" do
+      {rt, first} = expanding_owner()
+      rt = npc_lease(rt, "s044")
+      rt = accepted(rt, {:principal, first}, :lease_location, expand("s043"))
+      assert leased_rents(rt) == [{"s043", 13_000}]
+    end
+
+    test "a lease priced from the owner's own draft ignores the expected rent" do
+      {rt, first} = expanding_owner()
+      actor = {:principal, first}
+      # With no stall left the owner may reserve again, and the draft holds its rent.
+      rt = accepted(rt, actor, :surrender_location, %{restaurant_id: "first", stall_id: "s002"})
+      rt = accepted(rt, actor, :reserve_stall, %{stall_id: "s043"})
+      assert rt.state.management.drafts[first].rent == 12_000
+      rt = npc_lease(rt, "s044")
+      assert HallManagement.lease_quote(rt.state, "s045").rent == 13_000
+
+      rt = accepted(rt, actor, :lease_location, expand("s043", %{expected_rent: 13_000}))
+      assert leased_rents(rt) == [{"s043", 12_000}]
+    end
+
+    test "an expected rent that is not a whole number of minor units is refused" do
+      {rt, first} = expanding_owner()
+
+      for bad <- ["12000", -1, 1.5] do
+        assert rejected(rt, {:principal, first}, :lease_location, expand("s043", %{expected_rent: bad})) ==
+                 :invalid_payload
+      end
+    end
+
+    test "the wire carries the expected rent as a canonical decimal string" do
+      wire = fn value ->
+        FeudHall.Web.Protocol.command(%{
+          "command_id" => "c1",
+          "kind" => "lease_location",
+          "payload" => %{
+            "restaurant_id" => "r",
+            "stall_id" => "s043",
+            "cuisine" => "levantine",
+            "expected_rent" => value
+          }
+        })
+      end
+
+      assert {:ok, %{command: {:lease_location, %{expected_rent: 12_000}}}} = wire.("12000")
+
+      for bad <- ["012000", "12000.0", "abc", 12_000, nil] do
+        assert wire.(bad) == {:error, :invalid_command}, "accepted #{inspect(bad)}"
+      end
+    end
   end
 
   test "an existing lease's rent is unchanged by later quotes" do
@@ -285,6 +392,14 @@ defmodule FeudHall.Application.RoomsTest do
                profile.draft
 
       assert %{room: 1, base_rent: "10000", class_total: 6} = Enum.find(profile.slots, &(&1.stall_id == "s044"))
+
+      # Another lease of the class raises new quotes; the draft keeps the rent it was quoted.
+      rt = npc_lease(rt, "s044")
+      assert {:ok, %{profile: profile}} = Management.view(rt, "first")
+      assert profile.draft.rent == "12000"
+      standard = for %{tier: :standard} = slot <- profile.slots, do: slot.rent
+      assert standard != []
+      assert Enum.all?(standard, &(&1 == "13000"))
     end
 
     test "the computer-run planner's view and the vacancies name the same spots" do

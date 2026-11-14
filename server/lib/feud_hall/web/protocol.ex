@@ -10,7 +10,7 @@ defmodule FeudHall.Web.Protocol do
     kind recipe_version variant lines carbs_mg line_id substituted penalty deadline visit_id tray_id
     enabled start_hour end_hour cash_floor expires_at quoted_at rate shift_id task_id selection_id item_id recipes present
     worker_id batch_id technique role target budget max_cost daily_budget min_price max_price markup_permille interval_hours
-    application_id decision reason motivation policy invitation_id code tiers)a
+    application_id decision reason motivation policy invitation_id code tiers expected_rent)a
   @by_key Map.new(@keys, &{Atom.to_string(&1), &1})
   @enums ~w(main drink dessert plant mineral meat fish dairy egg honey gelatin animal_rennet animal_fat_stock
     approved rejected prep_cook finish_cook counter quiet standard busy prime primary_only prefer_primary prefer_substitute)a
@@ -69,7 +69,8 @@ defmodule FeudHall.Web.Protocol do
               :budget,
               :daily_budget,
               :min_price,
-              :max_price
+              :max_price,
+              :expected_rent
             ],
        do: Money.parse(value)
 

@@ -69,7 +69,7 @@ defmodule FeudHall.Domain.Hall.Progression do
 
   def decide(_state, _command, _context), do: {:error, :invalid_payload}
 
-  defp decide_owned(state, restaurant, :lease_location, %{stall_id: sid, cuisine: cuisine}) do
+  defp decide_owned(state, restaurant, :lease_location, %{stall_id: sid, cuisine: cuisine} = data) do
     id = restaurant.id
     owner = restaurant.owner
     leased = stalls(state, id)
@@ -78,7 +78,14 @@ defmodule FeudHall.Domain.Hall.Progression do
     starter = Enum.find(Map.values(state.catalog.recipes), &(&1.cuisine == cuisine and &1.starter))
     quote = if reserved, do: own_draft, else: Management.lease_quote(state, sid)
 
+    # Optional: the rent the owner was shown. A fresh quote that differs is refused;
+    # a lease priced from the owner's own draft keeps the draft's rent.
+    expected = Map.get(data, :expected_rent)
+
     cond do
+      not (is_nil(expected) or (is_integer(expected) and expected >= 0)) ->
+        {:error, :invalid_payload}
+
       distressed?(state, id) ->
         {:error, :business_distressed}
 
@@ -93,6 +100,9 @@ defmodule FeudHall.Domain.Hall.Progression do
 
       own_draft && not reserved ->
         {:error, :slot_unavailable}
+
+      not reserved and not is_nil(expected) and expected != quote.rent ->
+        {:error, :quote_changed}
 
       is_nil(starter) ->
         {:error, :unknown_cuisine}
