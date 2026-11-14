@@ -560,6 +560,31 @@ Software-rendered browsers, including the Playwright Chromium suite, are not
 valid evidence: check `renderer` for a real GPU. Record results in
 `docs/superpowers/reports/`.
 
+The bench's `floor` knob (default `0`) chooses the diner workload. `floor=0`
+sends the stall inputs the bench always sent (four waiting, a new last-served
+order per stall each second) with no arrival totals or queue limit. The scene
+now turns that into served diners who collect a tray and walk to a seat, so its
+rows are not comparable with reports from before the floor existed. `floor=1`
+sends six waiting, a queue limit of six, and rising totals: every stall is
+admitted once a second and each open room has two walk-outs a second. The
+result gains `floor`, `walking` and `seated`: the most figures drawn walking
+(including collecting) or seated in one measured frame, not averages. Compare
+rows with the same `floor`, and use `detail=0&floor=1` for the frame bar.
+
+The floor has two spec files. `app/test/browser/diner-floor.spec.ts` tests the
+pure model: count-true staging (figures created equal the count changes, none
+without one, against an independent oracle in a seeded property), walk-outs from
+arrivals minus admitted, midnight and gaps, thinning, routes that stay on the
+floor, and the cleaning clear. `app/test/browser/visible-diners.spec.ts` drives
+the real page with a fake clock and a mocked state feed: a served diner sits,
+eats and leaves; a diner leaves without buying; the floor is empty during
+cleaning; the queue draws to the server's limit; reduced motion shows no
+walking. Run each from `app/` with `NODE_OPTIONS=--max-old-space-size=1536 bun
+run test:browser <file>`, after `bun run --bun build` for the second. The server
+side is covered by `test/feud_hall/domain/public_view_test.exs` and one test in
+`application/management_test.exs` (totals only, no reasons). These use software
+rendering and are not frame-rate evidence.
+
 `participation.spec.ts` exercises a visitor receiving a license during a shift,
 owner navigation/history, own-stall purchase exclusion, and competitor dining.
 The focused `visitor_play_test.exs`, `management_test.exs`, and

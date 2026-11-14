@@ -505,6 +505,20 @@ For a hall with rooms, `GET /api/state` adds `room` and `position` to each `hall
 
 Existing managed halls receive version 3 through the recorded `hall_catalog_expanded` event at start-up (command ID `web-launch-catalog:3`, see [Deployment](DEPLOYMENT.md#local-management-game)). `CatalogExpansion.decide/2` gives each pinned spot the room and position of the same spot ID in the launch layout and keeps its tier, keeps a pinned room rule if one exists, and takes each computer-run profile's preferred class from the launch profile with the same ID. A pinned spot ID missing from the launch layout fails validation and emits no event. `evolve` is unchanged: events before the upgrade replay under the old rule because the rule reads the catalog in force at each position.
 
+### Diners on the floor
+
+The [floor rule](GAME_DESIGN.md#diners-on-the-floor) is client presentation over two extra fields of the hall view. Nothing is stored, no event, command or catalog version is added, and the view is derived from committed state; a query writes nothing.
+
+**View fields.** `PublicView.build/1` adds `today: %{arrivals, admitted, left}`, three integers (`left` is the sum of the reason counts), and `Management.view/3` copies it into the hall view together with `queue_limit` from the catalog's kitchen rules. Both are public. The reasons for leaving and per-stall lost-diner counts are not in the view; the tests refute both.
+
+**The floor model.** `app/src/diner-floor.ts` is pure: `createDinerFloor()` reads no clock (every call takes `now`), touches no DOM and imports no scene objects. `apply(input, now)` takes one snapshot: each stall's room, position, `waiting` and `lastService`, the hall's `serving` flag, `today`, `queueLimit`, the open-room count, and the `animate` (motion) and `browse` (detail) flags. `figures(now, visit)` and `count(now)` are pure functions of `now` and the applied inputs. Looks come from `personLook(serial, "diner")` with a serial derived from stable identifiers and a counter.
+
+**Staging rules.** The model is count-true: a figure exists only because a count changed, and `tally` reports the figures created by each cause. The first snapshot, one after `clear()`, one after a gap longer than `STALE_MS`, and one in which any total fell (midnight) start from the current counts with no walk-outs and no desserts. A queue change at a stall is worked out from the server's raw waiting counts in three steps: a service removes one diner; diners advancing from beyond the drawn queue appear standing in place and are not counted as new; what remains is real joiners, who walk in and are counted, or a fall, whose diners walk out. Walk-outs come from the rise of arrivals minus admitted; a dessert comes from the hall-wide rise in waiting beyond the rise in admitted. When the hall is not serving, every figure walks out within `CLEAR_MS` and none is created.
+
+**Drawing.** `hall-scene.ts` builds one input per update (skipped while the page is hidden, which also calls `clear()`) and draws `figures` with the people instances, using `Pose.seated` for eaters. A figure carries its position, heading, activity, opacity, and, while queued, its `stall` and `spot`; while collecting, `take` and `stall` for the whole collect. The scene reports `data-hall-walking` and `data-hall-seated` beside `data-hall-people`. Seats, entrances, queue spots and walking routes are fixed presentation lookups in `app/src/room-layout.ts` and `app/src/hall-layout.ts` (`seatSpots`, `entrance`, `routeWithin`, `queueSpot`). The scene draws neighbouring rooms' eaters and the first queued diner per stall only.
+
+**Proposed defaults.** `EAT_MS` 60 s, `ROOM_BUDGET` 96 walking or seated figures per room, `QUEUE_DRAW_MAX` 8, walking speed 1.6 m/s, `CLEAR_MS` 8 s, `STALE_MS` 10 s. The budget limits new walkers only. No animation finishing, and no figure arriving, awards money or completes work.
+
 ### Transport and credential boundaries
 
 Serve production traffic over HTTPS/WSS. For the web client, use protected

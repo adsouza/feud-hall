@@ -1406,11 +1406,30 @@ Server events describe order and station state, work remaining, effective speed,
 
 The first release may render representative crowd density at overview distances. Counts and detailed inspection must remain accurate; representative figures must not masquerade as extra paying customers. Physical customer pathfinding and collisions are cosmetic. A walking animation finishing never authorizes an economic transition.
 
-Waiting diner figures vary in clothing color, skin tone, and height. New figures fade in as they walk from the aisle to the stall. Figures leaving the queue walk into the aisle and fade out. Reduced motion skips both animations.
+Waiting diner figures vary in clothing color, skin tone, and height. Diners enter and leave through the room's entrance and fade in or out at the street end of it, as described in [Diners on the floor](#diners-on-the-floor). Reduced motion skips walking.
 
 A diner can click their own served tray on the counter to see two arms reach out from the camera, take the tray, and lower it out of view. F while the scene is focused and a labelled Take tray control offer equivalent access. Only private committed service facts create these personal trays; main/drink share a tray and a served dessert has its own. Collection is cosmetic: service, payment and dessert eligibility never wait for the animation or require another economic command. Reduced motion removes the tray immediately. Keep collected trays gone across live updates and scene remounts for the current client session; recent uncollected completed courses remain visible for 30 real seconds of available hall time.
 
 After a committed handover, the served customer steps out of the queue, walks along their own row to the counter beside the queue, takes the tray there, and leaves away from the queue carrying it. Neither the customer nor the tray passes through anyone still waiting. The counter tray represents current handover work, and a customer's tray fades with that customer. A cancellation produces no food-carrying departure.
+
+### Diners on the floor
+
+**Owner decision (2026-11-13):** at a busy stall the owner sees a queue, a few people wandering between stalls, and people eating at tables nearby. The rest of this section is the designer's call. Spec: [Project 3](superpowers/specs/2026-11-13-livelier-hall-design.md#project-3-visible-diners).
+
+What the floor shows:
+
+- **Queues.** Each stall's queue is drawn to the smaller of the server's queue limit (sent in the hall view as `queue_limit`) and a drawing cap of eight. The stall's "orders waiting" number is the server's count and stays exact; it never waits for a figure to arrive.
+- **Arrivals.** A diner who joins a queue walks in through the room's entrance, passes one or two other stalls, and ends at the back of the queue. A diner who leaves without buying walks in the same way and walks out again through an entrance of an open room, chosen deterministically.
+- **Serving.** When a diner is served, the figure at the front takes the tray at the counter and carries it to a free seat in the room. It eats for about a minute of real time, then leaves through the entrance. If no seat is free it leaves carrying the tray, as diners did before. A table never blocks or delays a sale.
+- **Desserts.** A dessert order is staged from a diner who is already seated in the room, who returns to the queue, where one exists.
+- **Closed hall.** From 03:00 to 05:00 the floor is empty. Figures on the floor when cleaning begins walk out and are gone within a few seconds.
+- **Loading and reconnecting.** The floor starts from the current counts. Nothing replays and no crowd rushes in. A diner served before their figure reaches the queue turns to the counter from where they stand.
+
+Truthfulness. Every figure is staged from a diner the server committed, and the client never adds one. Each figure is staged from a change in the server's counts: a rise in a stall's waiting count, a rise in arrivals not matched by admissions, or a dessert offer. The client may delay a figure, route it, simplify it, and thin a crowd evenly when a room exceeds a drawing budget. This is the representative-crowd allowance above, used in one direction only: figures may be omitted, never invented. Walk-outs are staged from arrivals minus admitted, not from the "left" total, because "left" also counts admitted diners whose order later failed. Individual diners are not identified, so the staging is count-true, not identity-true. Reasons for leaving, and any per-stall count of lost diners, stay out of the public view.
+
+Reduced detail skips browsing walks: diners appear at their queue spot and eaters are static. Reduced motion shows nothing walking, and eaters are static. Neither changes any count.
+
+Proposed defaults (tuning values, not validated): eating time 60 s of real time; a drawing budget of 96 walking or seated figures per room; a queue drawing cap of eight; walking speed 1.6 m/s; cleaning clears the floor within 8 s; a gap of more than 10 s between snapshots is treated as a reconnect and starts from the current counts. Technical contract: [hall presentation](ARCHITECTURE.md#diners-on-the-floor).
 
 ### Audio and accessibility
 
