@@ -778,7 +778,8 @@ export function createDinerFloor(): {
       for (const f of figures)
         if (
           f.legs.some(
-            (leg) => leg.kind === "collect" && leg.stall === id && leg.end > now,
+            (leg) =>
+              leg.kind === "collect" && leg.stall === id && leg.end > now,
           )
         )
           remove(f);

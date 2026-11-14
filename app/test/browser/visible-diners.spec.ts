@@ -63,6 +63,7 @@ async function ownStall(page: Page, hall: { origin: string; secret: string }) {
 
   let current = base;
   let served = 0;
+  let views = 0;
   let paused = false;
   await page.route("**/api/state**", (route) => {
     served++;
@@ -71,6 +72,10 @@ async function ownStall(page: Page, hall: { origin: string; secret: string }) {
   /** Serves a copy of the captured view: only the owned stall is open and busy. */
   async function serve(snapshot: Snapshot) {
     const view: View = structuredClone(base);
+    // Each call is a new server view: its position rises, as a real server's
+    // does when events commit. The scene re-applies no counts from a view
+    // whose position it has already seen.
+    view.hall.position = base.hall.position + ++views;
     view.hall.access = snapshot.access ?? "open";
     view.hall.today = snapshot.today;
     if (snapshot.queueLimit === undefined) delete view.hall.queue_limit;

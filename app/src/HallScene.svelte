@@ -19,6 +19,7 @@
     serving,
     today,
     queueLimit,
+    snapshot,
     room = $bindable(saved?.room ?? 1),
     onVacancy,
     ownedStalls,
@@ -46,6 +47,8 @@
     serving: boolean;
     today?: { arrivals: number; admitted: number; left: number };
     queueLimit?: number;
+    /** The view's `hall.position`: which server view the counts came from. */
+    snapshot?: number;
     room?: number;
     onVacancy: (stallId: string) => void;
     ownedStalls: Stall[];
@@ -154,6 +157,7 @@
       serving,
       today,
       queueLimit,
+      snapshot,
       toLetLabel: t("toLet"),
       ownedStalls: ownedStalls.map((stall) => stall.stall_id),
       selected,

@@ -117,6 +117,8 @@ function appearance(service: number): Appearance {
     vacancies,
     toLetLabel: "To let",
     serving: true,
+    // Each synthetic update is a new server view.
+    snapshot: service,
     // Each second every stall serves one diner and admits one more, and some
     // arrivals in every open room leave without buying.
     ...(floor

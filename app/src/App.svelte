@@ -2512,6 +2512,7 @@
               serving={view.hall.access === "open"}
               today={view.hall.today}
               queueLimit={view.hall.queue_limit}
+              snapshot={view.hall.position}
               onVacancy={viewSpot}
               ownedStalls={view.hall.stalls.filter((stall) =>
                 restaurant?.stalls.some((owned) => owned.id === stall.stall_id),

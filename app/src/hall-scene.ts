@@ -101,6 +101,11 @@ export type Appearance = {
   today?: { arrivals: number; admitted: number; left: number };
   /** How many may wait at one stall; absent: four are drawn. */
   queueLimit?: number;
+  /**
+   * The identity of the server view these counts came from (`hall.position`);
+   * an update with the same value re-applies no counts to the floor.
+   */
+  snapshot?: number;
 };
 type Counter = {
   root: T.Group;
@@ -1924,6 +1929,7 @@ export function createHallScene(
           }),
           animate: next.motion,
           browse: next.detail,
+          snapshot: next.snapshot,
         });
       updateBays(next);
       paintToLet(next.toLetLabel);
