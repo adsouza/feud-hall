@@ -54,6 +54,13 @@ export type FloorInput = {
   stalls: FloorStall[];
   animate: boolean; // motion on
   browse: boolean; // detail on
+  /**
+   * The identity of the server view the counts came from (the hall's committed
+   * position). An apply with the same snapshot as the last one changes no
+   * figure because of counts and does not count as a fresh snapshot for the
+   * gap; absent, every apply is treated as a new snapshot.
+   */
+  snapshot?: number | string;
 };
 export type FloorActivity = "walking" | "queued" | "collecting" | "seated";
 export type FloorFigure = {
@@ -355,10 +362,12 @@ export function createDinerFloor(): {
   const stalls = new Map<string, StallState>();
   const seating = new Map<number, Seating>();
   let last: {
+    /** When the last new snapshot was applied: the gap is measured from it. */
     now: number;
     serving: boolean;
     animate: boolean;
     today?: FloorInput["today"];
+    snapshot?: number | string;
   } | null = null;
   let created = 0;
   const visited = emptyPose();
@@ -815,6 +824,22 @@ export function createDinerFloor(): {
       releaseSeat(f);
       return false;
     });
+    if (
+      last !== null &&
+      input.snapshot !== undefined &&
+      input.snapshot === last.snapshot &&
+      input.serving === last.serving
+    ) {
+      // The same server view again (the scene re-applies it on selection,
+      // tablet and label changes): no figure is created, removed or re-planned
+      // because of counts, and the gap timer keeps the time of the snapshot's
+      // first apply. Stalls that went away and a change of motion still apply.
+      removeGone(input, now);
+      if (!input.animate && last.animate) stopMotion(now);
+      last.animate = input.animate;
+      figures = figures.filter((f) => f.end > now);
+      return;
+    }
     const cap = Math.min(input.queueLimit ?? 4, QUEUE_DRAW_MAX);
     const fresh =
       last === null ||
@@ -844,6 +869,7 @@ export function createDinerFloor(): {
       serving: input.serving,
       animate: input.animate,
       today: input.today && { ...input.today },
+      snapshot: input.snapshot,
     };
     figures = figures.filter((f) => f.end > now);
   }

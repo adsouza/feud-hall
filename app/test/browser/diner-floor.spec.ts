@@ -560,6 +560,85 @@ test("floor: a long gap starts again from the counts", () => {
   });
 });
 
+test("floor: re-applying one snapshot does not hold off a long gap", () => {
+  const floor = createDinerFloor();
+  const a = input({ waiting: { s01: 1 }, snapshot: 1 });
+  // The scene re-applies the same view on selection, tablet and label changes.
+  for (let now = 0; now <= 300_000; now += 2_000) floor.apply({ ...a, now });
+  const tally = { ...floor.tally };
+  const waiting = Object.fromEntries(
+    IDS.map((id) => [id, (id === "s01" ? 1 : 0) + 5]),
+  );
+  const now = 302_000;
+  floor.apply(
+    input({
+      now,
+      waiting,
+      snapshot: 2,
+      today: { arrivals: 400, admitted: 0, left: 0 },
+    }),
+  );
+  const figures = all(floor, now);
+  expect(figures).toHaveLength(6 + 14 * 5);
+  expect(figures.every((f) => f.activity === "queued")).toBe(true);
+  expect(figures.some((f) => f.activity === "walking")).toBe(false);
+  expect(floor.moving(now)).toBe(false);
+  expect(floor.tally).toEqual(tally);
+});
+
+test("floor: re-applying the same snapshot changes nothing", () => {
+  const plain = createDinerFloor(),
+    floor = createDinerFloor();
+  const first = input({ waiting: { s02: 1 }, snapshot: 1 });
+  const second = input({
+    now: STEP,
+    waiting: { s02: 0, s05: 2 },
+    served: { s02: "a" },
+    today: { arrivals: 4, admitted: 2, left: 0 },
+    snapshot: 2,
+  });
+  for (const f of [plain, floor]) {
+    f.apply(first);
+    f.apply(second);
+  }
+  expect(floor.moving(STEP)).toBe(true);
+  const tally = { ...floor.tally };
+  const pose = (f: FloorFigure) => ({
+    look: f.look,
+    activity: f.activity,
+    x: f.x,
+    z: f.z,
+  });
+  // Twenty re-applies, each more than STALE_MS after the last.
+  for (let n = 1; n <= 20; n++) {
+    const now = STEP + n * (STALE_MS + 1);
+    floor.apply({ ...second, now });
+    for (const t of [now, now + 400, now + 5_000]) {
+      expect(floor.count(t)).toBe(plain.count(t));
+      expect(all(floor, t).map(pose)).toEqual(all(plain, t).map(pose));
+    }
+    expect(floor.tally).toEqual(tally);
+  }
+});
+
+test("floor: a re-applied snapshot with motion turned off still places walkers", () => {
+  const floor = createDinerFloor();
+  floor.apply(input({ snapshot: 1 }));
+  const moving = input({
+    now: STEP,
+    waiting: { s02: 2 },
+    today: { arrivals: 5, admitted: 2, left: 0 },
+    snapshot: 2,
+  });
+  floor.apply(moving);
+  expect(floor.moving(STEP)).toBe(true);
+  floor.apply({ ...moving, now: 2 * STEP, animate: false });
+  const figures = all(floor, 2 * STEP);
+  expect(figures).toHaveLength(2);
+  expect(figures.every((f) => f.activity === "queued")).toBe(true);
+  expect(floor.moving(2 * STEP)).toBe(false);
+});
+
 test("floor: midnight stages no walk-outs", () => {
   const floor = createDinerFloor();
   floor.apply(input({ today: { arrivals: 100, admitted: 80, left: 70 } }));
