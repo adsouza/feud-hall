@@ -14,6 +14,7 @@ import {
   type Role,
 } from "../../src/people";
 import { createPeople } from "../../src/people-mesh";
+import { QUEUE_SPOTS, STAFF_SPOTS } from "../../src/hall-layout";
 
 test("people: a look is a pure function of serial and role", () => {
   expect(personLook(42, "diner")).toEqual(personLook(42, "diner"));
@@ -351,4 +352,36 @@ test("people: feet rest on the floor and do not sink through it", () => {
       expect(world.min.y).toBeLessThanOrEqual(0.03);
     }
   }
+});
+
+test("people: queue spots are far enough apart for the widest figure", () => {
+  for (const [i, a] of QUEUE_SPOTS.entries())
+    for (const b of QUEUE_SPOTS.slice(i + 1))
+      expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeGreaterThanOrEqual(
+        FIGURE_MAX_SPAN,
+      );
+  expect(STAFF_SPOTS.length).toBe(9);
+});
+
+test("people: a frame uploads only the slots in use", () => {
+  const people = createPeople(100, null);
+  const hands = people.mesh("hand");
+  const colours = hands.geometry.getAttribute(
+    "color",
+  ) as T.InstancedBufferAttribute;
+  people.begin();
+  people.add(personLook(1, "diner"), stand, "full");
+  people.add(personLook(2, "diner"), stand, "full");
+  people.end();
+  expect(hands.count).toBe(4);
+  expect(hands.instanceMatrix.updateRanges).toEqual([{ start: 0, count: 64 }]);
+  expect(colours.updateRanges).toEqual([{ start: 0, count: 16 }]);
+  // An empty kind is not flagged for upload at all.
+  const bun = people.mesh("hairBun").instanceMatrix;
+  bun.clearUpdateRanges();
+  const version = bun.version;
+  people.begin();
+  people.end();
+  expect(bun.version).toBe(version);
+  expect(bun.updateRanges).toEqual([]);
 });

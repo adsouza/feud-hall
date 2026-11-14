@@ -9,6 +9,25 @@ export type StallPlacement = StallSlot & {
   z: number;
   yaw: number;
 };
+/** Where staff stand behind a counter, in stall-local coordinates. */
+export const STAFF_SPOTS: readonly (readonly [number, number])[] = [
+  [0.65, 0.06],
+  [-0.1, -0.43],
+  [0.91, -0.43],
+  [-1.12, -0.43],
+  [0.15, 0.06],
+  [-1.15, 0.06],
+  [1.16, 0.06],
+  [-0.62, -0.43],
+  [0.41, -0.43],
+];
+/** Where diners wait in front of a counter, far enough apart for the widest figure. */
+export const QUEUE_SPOTS: readonly (readonly [number, number])[] = [
+  [-0.82, 1.55],
+  [0.08, 1.55],
+  [-0.82, 2.45],
+  [0.08, 2.45],
+];
 const corners = [0, 0.25, 0.5, 0.75];
 const islandPositions = [...corners, 0.125, 0.375, 0.625, 0.875];
 const ISLAND_SIDE = 9.4;

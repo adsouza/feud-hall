@@ -17,7 +17,11 @@ import {
   toHall,
   toStall,
   type StallPlacement,
+  QUEUE_SPOTS,
+  STAFF_SPOTS,
 } from "./hall-layout";
+import { carryPoint, personLook, type Look, type Pose } from "./people";
+import { createPeople } from "./people-mesh";
 
 type Point = [number, number, number];
 type CameraPose = {
@@ -60,9 +64,7 @@ export type Appearance = {
   tabletHint: string;
 };
 type Diner = {
-  torso: T.Color;
-  head: T.Color;
-  height: number;
+  look: Look;
   faceYaw: number;
   arrivalStartedAt?: number;
 };
@@ -75,7 +77,6 @@ type Departure = {
   startedAt: number;
   trayFrom?: Point;
 };
-type Gait = { stride: number; side: number; opacity: number; faceYaw: number };
 type Counter = {
   root: T.Group;
   trim: T.Group;
@@ -95,6 +96,7 @@ type Counter = {
   name: string;
   cuisine: string;
   color: T.Color;
+  staff: Look[]; // the owner, then one per staff spot
   queue: Diner[];
   visibleDiners: number;
   nextDiner: number;
@@ -117,26 +119,8 @@ const IDLE_FRAME_MS = 80;
 const SHUTTER_SLATS = 9;
 const SHUTTER_HEIGHT = 0.91;
 const SHUTTER_FONT = '900 79px "Noto Sans JP", system-ui, sans-serif';
-const staffPositions: [number, number][] = [
-  [0.65, 0.06],
-  [-0.1, -0.43],
-  [0.91, -0.43],
-  [-1.12, -0.43],
-  [0.15, 0.06],
-  [-1.15, 0.06],
-  [1.16, 0.06],
-  [-0.62, -0.43],
-  [0.41, -0.43],
-];
-const queuePositions = [
-  [-0.54, 1.55],
-  [0.03, 1.55],
-  [-0.54, 2.07],
-  [0.03, 2.07],
-];
-const QUEUE_LIMIT = STALL_LIMIT * queuePositions.length;
-const ACTOR_LIMIT =
-  STALL_LIMIT * (queuePositions.length + 1 + staffPositions.length);
+const QUEUE_LIMIT = STALL_LIMIT * QUEUE_SPOTS.length;
+const ACTOR_LIMIT = STALL_LIMIT * (QUEUE_SPOTS.length + 1 + STAFF_SPOTS.length);
 const hues = [
   "#ffba57",
   "#fc7988",
@@ -739,6 +723,10 @@ export function createHallScene(
       name: "",
       cuisine: stall.cuisine,
       color: accent.color,
+      staff: [
+        personLook(index * 16, "owner"),
+        ...STAFF_SPOTS.map((_, n) => personLook(index * 16 + n + 1, "worker")),
+      ],
       queue: [],
       visibleDiners: 0,
       nextDiner: hash(stall.stall_id),
@@ -756,46 +744,8 @@ export function createHallScene(
     counter.placard.material.dispose();
   }
 
-  const actorGeometry = new T.CapsuleGeometry(0.14, 0.28, 3, 6);
-  const headGeometry = new T.SphereGeometry(0.115, 6, 4);
   const faces = faceTexture();
-  const body = new T.InstancedMesh(
-    actorGeometry,
-    new T.MeshStandardMaterial({ roughness: 0.9 }),
-    ACTOR_LIMIT,
-  );
-  const heads = new T.InstancedMesh(
-    headGeometry,
-    new T.MeshStandardMaterial({ map: faces, roughness: 0.9 }),
-    ACTOR_LIMIT,
-  );
-  function translucentActors(
-    shape: T.BufferGeometry,
-    capacity: number,
-    map: T.Texture | null = null,
-  ) {
-    const geometry = shape.clone();
-    // Three.js reads the instanced RGBA attribute as vertex colors, including alpha.
-    const colors = new T.InstancedBufferAttribute(
-      new Float32Array(capacity * 4),
-      4,
-    ).setUsage(T.DynamicDrawUsage);
-    geometry.setAttribute("color", colors);
-    const material = new T.MeshStandardMaterial({
-      map,
-      roughness: 0.9,
-      vertexColors: true,
-      transparent: true,
-      depthWrite: false,
-    });
-    return {
-      mesh: new T.InstancedMesh(geometry, material, capacity),
-      colors,
-    };
-  }
-  const walkingBodies = translucentActors(actorGeometry, QUEUE_LIMIT * 2);
-  const walkingHeads = translucentActors(headGeometry, QUEUE_LIMIT * 2, faces);
-  const dinerLegs = translucentActors(actorGeometry, QUEUE_LIMIT * 4);
+  const people = createPeople(ACTOR_LIMIT + QUEUE_LIMIT * 2, faces);
   const carriedGeometry = pickupGeometry.clone();
   const trayOpacity = new T.InstancedBufferAttribute(
     new Float32Array(QUEUE_LIMIT),
@@ -830,18 +780,9 @@ export function createHallScene(
     carriedMaterial,
     QUEUE_LIMIT,
   );
-  const forearms = [-1, 1].map((side) =>
-    actorGeometry
-      .clone()
-      .scale(0.26, 0.5, 0.26)
-      .rotateX(Math.PI / 2)
-      .translate(side * 0.22, 0, 0.17),
-  );
-  const armsGeometry = mergeGeometries(forearms);
-  for (const arm of forearms) arm.dispose();
-  const carryingArms = translucentActors(armsGeometry, QUEUE_LIMIT);
+  const steamGeometry = new T.SphereGeometry(0.115, 6, 4);
   const steam = new T.InstancedMesh(
-    headGeometry,
+    steamGeometry,
     new T.MeshBasicMaterial({
       color: "#ffe8c4",
       transparent: true,
@@ -850,16 +791,7 @@ export function createHallScene(
     }),
     STALL_LIMIT * 2,
   );
-  const animatedMeshes = [
-    body,
-    heads,
-    steam,
-    walkingBodies.mesh,
-    walkingHeads.mesh,
-    dinerLegs.mesh,
-    carriedTrays,
-    carryingArms.mesh,
-  ];
+  const animatedMeshes = [steam, carriedTrays, ...people.meshes];
   for (const mesh of animatedMeshes) {
     mesh.frustumCulled = false;
     mesh.count = 0;
@@ -867,104 +799,31 @@ export function createHallScene(
     scene.add(mesh);
   }
   const dummy = new T.Object3D();
-  const workerTint = new T.Color("#8de2d1");
-  const ownerTint = new T.Color("#ff9e57");
-  const staffSkin = new T.Color("#dca57f");
-  const trousers = new T.Color("#515068");
-  const shirts = [
-    "#e27158",
-    "#548bd3",
-    "#cca756",
-    "#5d9c79",
-    "#9766bd",
-    "#c36491",
-    "#aab6c0",
-    "#3a807d",
-    "#ad855f",
-  ].map((color) => new T.Color(color));
-  const skinTones = [
-    "#f1c3a0",
-    "#9d6146",
-    "#c28a63",
-    "#e6ad79",
-    "#704331",
-    "#b57a57",
-  ].map((color) => new T.Color(color));
+  const figure: Pose = {
+    x: 0,
+    z: 0,
+    yaw: 0,
+    faceYaw: 0,
+    stride: 0,
+    walking: false,
+    carrying: false,
+  };
 
-  function staffActor(
-    index: number,
+  function stand(
+    look: Look,
     x: number,
     z: number,
-    color: T.Color,
-    faceYaw = 0,
-    yaw = 0,
+    yaw: number,
+    faceYaw: number,
+    detailed: boolean,
   ) {
-    dummy.rotation.y = yaw;
-    dummy.rotation.z = 0;
-    dummy.scale.set(1.45, 2.1, 1);
-    dummy.position.set(x, 0.65, z);
-    dummy.updateMatrix();
-    body.setMatrixAt(index, dummy.matrix);
-    body.setColorAt(index, color);
-    dummy.rotation.y = yaw + faceYaw;
-    dummy.scale.setScalar(1.45);
-    dummy.position.y = 1.34;
-    dummy.updateMatrix();
-    heads.setMatrixAt(index, dummy.matrix);
-    heads.setColorAt(index, staffSkin);
-    dummy.rotation.y = 0;
-  }
-
-  function dinerPose(
-    index: number,
-    diner: Diner,
-    x: number,
-    z: number,
-    torso: T.InstancedMesh,
-    head: T.InstancedMesh,
-    gait?: Gait,
-    yaw = 0,
-  ) {
-    const stride = gait?.stride ?? 0;
-    const lean = stride * 0.1;
-    const bob = Math.abs(stride) * 0.04;
-    const height = diner.height * 0.85;
-    dummy.rotation.y = yaw;
-    dummy.rotation.z = lean;
-    dummy.scale.set(1, height, 1);
-    dummy.position.set(x, 0.16 + 0.28 * height + bob, z);
-    dummy.updateMatrix();
-    torso.setMatrixAt(index, dummy.matrix);
-    dummy.rotation.y = yaw + (gait?.faceYaw ?? diner.faceYaw);
-    dummy.rotation.z = 0;
-    dummy.scale.setScalar(1);
-    dummy.position.x = x - Math.cos(yaw) * Math.sin(lean) * 0.29 * height;
-    dummy.position.z = z + Math.sin(yaw) * Math.sin(lean) * 0.29 * height;
-    dummy.position.y = 0.24 + 0.55 * height + bob;
-    dummy.updateMatrix();
-    head.setMatrixAt(index, dummy.matrix);
-    dummy.rotation.y = yaw;
-
-    dummy.scale.set(0.39, 0.39, 0.45);
-    for (const leg of [-1, 1]) {
-      const step = leg * stride;
-      const footX = leg * 0.074 + (gait?.side ?? 0) * step * 0.05;
-      dummy.position.set(
-        x + Math.cos(yaw) * footX + Math.sin(yaw) * step * 0.11,
-        0.11 + Math.max(0, step) * 0.065,
-        z - Math.sin(yaw) * footX + Math.cos(yaw) * step * 0.11,
-      );
-      dummy.updateMatrix();
-      const part = dinerLegs.mesh.count++;
-      dinerLegs.mesh.setMatrixAt(part, dummy.matrix);
-      dinerLegs.colors.setXYZW(
-        part,
-        trousers.r,
-        trousers.g,
-        trousers.b,
-        gait?.opacity ?? 1,
-      );
-    }
+    figure.x = x;
+    figure.z = z;
+    figure.yaw = yaw;
+    figure.faceYaw = faceYaw;
+    figure.stride = 0;
+    figure.walking = figure.carrying = false;
+    people.add(look, figure, detailed ? "full" : "simple");
   }
 
   function queueSway(index: number, position: number, now: number) {
@@ -987,7 +846,7 @@ export function createHallScene(
     const diner = model.queue[index];
     const distance = aisleDistance(diner, now);
     if (distance === 1) return false;
-    const [dx, dz] = queuePositions[index];
+    const [dx, dz] = QUEUE_SPOTS[index];
     const { x, z } = toHall(
       model.placement,
       dx + queueSway(model.index, index, now),
@@ -1014,7 +873,7 @@ export function createHallScene(
     now: number,
     served = false,
   ) {
-    const count = Math.min(waiting, queuePositions.length);
+    const count = Math.min(waiting, QUEUE_SPOTS.length);
     const animateQueue = appearance.motion && !document.hidden;
     if (animateQueue) {
       for (let n = count; n < model.visibleDiners; n++) {
@@ -1034,13 +893,9 @@ export function createHallScene(
       for (const diner of model.queue) diner.arrivalStartedAt = undefined;
     }
     while (model.queue.length < count) {
-      const serial = model.nextDiner++;
-      const sample = Math.imul(serial, 0x9e3779b1) >>> 0;
-      const [dx, dz] = queuePositions[model.queue.length];
+      const [dx, dz] = QUEUE_SPOTS[model.queue.length];
       model.queue.push({
-        torso: shirts[serial % shirts.length],
-        head: skinTones[(serial * 5) % skinTones.length],
-        height: 1.16 + ((sample % 1000) / 1000) * 0.6,
+        look: personLook(model.nextDiner++, "diner"),
         faceYaw: Math.atan2(-dx, -dz),
         arrivalStartedAt: animateQueue && hasHallView ? now : undefined,
       });
@@ -1057,7 +912,6 @@ export function createHallScene(
     trayFrom?: Point,
     yaw = 0,
   ) {
-    const index = walkingBodies.mesh.count++;
     const stride = Math.sin(distance * Math.PI * 8);
     const opacity = 1 - T.MathUtils.smoothstep(distance, 0.14, 1);
     const walking = toHall(
@@ -1065,42 +919,30 @@ export function createHallScene(
       side * 1.18 * T.MathUtils.smoothstep(distance, 0.05, 1),
       distance * 1.4,
     );
-    dinerPose(
-      index,
-      diner,
-      walking.x,
-      walking.z,
-      walkingBodies.mesh,
-      walkingHeads.mesh,
-      {
-        stride,
-        side,
-        opacity,
-        faceYaw: departing ? Math.atan2(side * 1.18, 1.4) : diner.faceYaw,
-      },
-      yaw,
-    );
-    const { torso, head } = diner;
-    walkingBodies.colors.setXYZW(index, torso.r, torso.g, torso.b, opacity);
-    walkingHeads.colors.setXYZW(index, head.r, head.g, head.b, opacity);
+    const heading = Math.atan2(side * 1.18, 1.4);
+    figure.x = walking.x;
+    figure.z = walking.z;
+    figure.yaw = yaw + (departing ? heading : diner.faceYaw);
+    figure.faceYaw = 0;
+    figure.stride = stride;
+    figure.walking = true;
+    figure.carrying = Boolean(trayFrom);
+    people.add(diner.look, figure, "full", opacity);
     if (trayFrom) {
-      const heading = yaw + Math.atan2(side * 1.18, 1.4);
-      const { x: walkX, z: walkZ } = walking;
-      const height =
-        0.16 + 0.38 * diner.height * 0.85 + Math.abs(stride) * 0.04;
+      const carry = carryPoint(diner.look, stride);
       const handover = T.MathUtils.smoothstep(distance, 0, 0.16);
-      dummy.rotation.set(0, heading, 0);
+      dummy.rotation.set(0, figure.yaw, 0);
       dummy.scale.setScalar(0.75);
       dummy.position.set(
         T.MathUtils.lerp(
           trayFrom[0],
-          walkX + Math.sin(heading) * 0.29,
+          walking.x + Math.sin(figure.yaw) * carry.forward,
           handover,
         ),
-        T.MathUtils.lerp(trayFrom[1], height, handover),
+        T.MathUtils.lerp(trayFrom[1], carry.y, handover),
         T.MathUtils.lerp(
           trayFrom[2],
-          walkZ + Math.cos(heading) * 0.29,
+          walking.z + Math.cos(figure.yaw) * carry.forward,
           handover,
         ),
       );
@@ -1108,19 +950,6 @@ export function createHallScene(
       const trayIndex = carriedTrays.count++;
       carriedTrays.setMatrixAt(trayIndex, dummy.matrix);
       trayOpacity.setX(trayIndex, opacity);
-
-      dummy.scale.setScalar(1);
-      dummy.position.set(walkX, height - 0.015, walkZ);
-      dummy.updateMatrix();
-      const armsIndex = carryingArms.mesh.count++;
-      carryingArms.mesh.setMatrixAt(armsIndex, dummy.matrix);
-      carryingArms.colors.setXYZW(
-        armsIndex,
-        diner.head.r,
-        diner.head.g,
-        diner.head.b,
-        opacity * Math.min(1, handover * 4),
-      );
       dummy.rotation.set(0, 0, 0);
     }
   }
@@ -1168,6 +997,7 @@ export function createHallScene(
   let initialized = Boolean(saved);
   let hasHallView = false;
   let lastFrame = 0;
+  let drawnPeople = -1;
   const heldArrows = new Set<string>();
   let shiftHeld = false;
 
@@ -1175,12 +1005,9 @@ export function createHallScene(
     if (disposed || document.hidden) return;
     const started = performance.now();
     hallShell.update(camera.position);
-    let actors = 0;
     let puffs = 0;
-    walkingBodies.mesh.count = 0;
-    dinerLegs.mesh.count = 0;
     carriedTrays.count = 0;
-    carryingArms.mesh.count = 0;
+    people.begin();
     const time = appearance.motion ? now / 1000 : 0;
     for (const [id, model] of stalls) {
       const nearby =
@@ -1199,43 +1026,43 @@ export function createHallScene(
       const activity = model.activity;
       const yaw = model.placement.yaw;
       const owner = toHall(model.placement, -0.61, 0.08);
+      const glance = appearance.motion && detailed;
       if (model.open) {
-        const glance = appearance.motion && detailed;
         if (insideStall !== id)
-          staffActor(
-            actors++,
+          stand(
+            model.staff[0],
             owner.x,
             owner.z,
-            ownerTint,
-            glance ? staffGlance(time, model.index, 0) : 0,
             yaw,
+            glance ? staffGlance(time, model.index, 0) : 0,
+            detailed,
           );
         const workers = activity?.workers ?? Number(Boolean(activity?.staffed));
-        const count = Math.min(workers, detailed ? staffPositions.length : 1);
+        const count = Math.min(workers, detailed ? STAFF_SPOTS.length : 1);
         for (let n = 0; n < count; n++) {
-          const [dx, dz] = staffPositions[n];
+          const [dx, dz] = STAFF_SPOTS[n];
           const sway = appearance.motion
             ? Math.sin(time * 2 + model.index + n) * 0.045
             : 0;
           const worker = toHall(model.placement, dx + sway, dz);
-          staffActor(
-            actors++,
+          stand(
+            model.staff[n + 1],
             worker.x,
             worker.z,
-            workerTint,
+            yaw,
             (n % 2 ? 1 : -1) * 0.22 +
               (glance ? staffGlance(time, model.index, n + 1) : 0),
-            yaw,
+            detailed,
           );
         }
       }
       model.visibleDiners = Math.min(
         model.queue.length,
-        detailed ? queuePositions.length : 1,
+        detailed ? QUEUE_SPOTS.length : 1,
       );
       for (let n = 0; n < model.visibleDiners; n++) {
         const diner = model.queue[n];
-        const [dx, dz] = queuePositions[n];
+        const [dx, dz] = QUEUE_SPOTS[n];
         const sway = appearance.motion ? queueSway(model.index, n, now) : 0;
         const distance = aisleDistance(diner, now);
         const position = toHall(model.placement, dx + sway, dz);
@@ -1252,18 +1079,14 @@ export function createHallScene(
           );
           continue;
         }
-        dinerPose(
-          actors,
-          diner,
+        stand(
+          diner.look,
           position.x,
           position.z,
-          body,
-          heads,
-          undefined,
-          yaw,
+          yaw + diner.faceYaw,
+          glance ? staffGlance(time, model.index, n + 10) : 0,
+          detailed,
         );
-        body.setColorAt(actors, diner.torso);
-        heads.setColorAt(actors++, diner.head);
       }
       if (!activity) continue;
       if (detailed && activity.cooking > 0) {
@@ -1281,20 +1104,16 @@ export function createHallScene(
         }
       }
     }
-    body.count = heads.count = actors;
     steam.count = puffs;
     drawDepartures(now);
-    if (carriedTrays.count > 0) trayOpacity.needsUpdate = true;
-    if (carryingArms.mesh.count > 0) carryingArms.colors.needsUpdate = true;
-    walkingHeads.mesh.count = walkingBodies.mesh.count;
-    if (walkingBodies.mesh.count > 0) {
-      walkingBodies.colors.needsUpdate = true;
-      walkingHeads.colors.needsUpdate = true;
+    people.end();
+    if (people.count !== drawnPeople) {
+      drawnPeople = people.count;
+      host.setAttribute("data-hall-people", String(drawnPeople));
     }
-    if (dinerLegs.mesh.count > 0) dinerLegs.colors.needsUpdate = true;
-    for (const mesh of animatedMeshes) mesh.instanceMatrix.needsUpdate = true;
-    if (body.instanceColor) body.instanceColor.needsUpdate = true;
-    if (heads.instanceColor) heads.instanceColor.needsUpdate = true;
+    if (carriedTrays.count > 0) trayOpacity.needsUpdate = true;
+    steam.instanceMatrix.needsUpdate = true;
+    carriedTrays.instanceMatrix.needsUpdate = true;
     const wasTaking = pickupHands.active;
     pickupHands.update(now);
     if (wasTaking && !pickupHands.active) actions.collected();
@@ -2158,7 +1977,8 @@ export function createHallScene(
       hallShell.dispose();
       shut.map?.dispose();
       faces?.dispose();
-      for (const mesh of animatedMeshes) {
+      people.dispose();
+      for (const mesh of [steam, carriedTrays]) {
         mesh.material.dispose();
         mesh.dispose();
       }
@@ -2189,14 +2009,8 @@ export function createHallScene(
         placardGeometry,
         pickupGeometry,
         shutterGeometry,
-        actorGeometry,
-        headGeometry,
-        walkingBodies.mesh.geometry,
-        walkingHeads.mesh.geometry,
-        dinerLegs.mesh.geometry,
+        steamGeometry,
         carriedGeometry,
-        armsGeometry,
-        carryingArms.mesh.geometry,
       ])
         geometry.dispose();
       renderer.dispose();

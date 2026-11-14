@@ -169,9 +169,17 @@ export function createPeople(
       posePerson(look, pose, detail, emit);
     },
     end() {
+      // Upload only the slots in use: whole buffers sized for every stall
+      // are megabytes per frame. A zero count uploads nothing (WebGL2 reads
+      // a zero-length range as "to the end of the array").
       for (const kind of PART_KINDS) {
-        (byKind.get(kind) as T.InstancedMesh).instanceMatrix.needsUpdate = true;
-        (colours.get(kind) as T.InstancedBufferAttribute).needsUpdate = true;
+        const mesh = byKind.get(kind) as T.InstancedMesh;
+        if (mesh.count === 0) continue;
+        const colour = colours.get(kind) as T.InstancedBufferAttribute;
+        mesh.instanceMatrix.addUpdateRange(0, mesh.count * 16);
+        mesh.instanceMatrix.needsUpdate = true;
+        colour.addUpdateRange(0, mesh.count * 4);
+        colour.needsUpdate = true;
       }
     },
     get count() {
