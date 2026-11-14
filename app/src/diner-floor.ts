@@ -20,6 +20,7 @@ import { personLook, serialFor, type Look } from "./people";
 import {
   entrance,
   roomAt,
+  roomCentre,
   routeAt,
   routeLength,
   routeWithin,
@@ -170,19 +171,33 @@ type Seating = { seats: Seat[]; holder: (Figure | null)[] };
 /*
  * Routes between fixed points (entrance, queue spots, pass points, seats,
  * pickup spots, aisle points) are cached for every floor: routeWithin costs
- * about half a millisecond and one snapshot can start dozens of walks.
+ * about half a millisecond and one snapshot can start dozens of walks. Every
+ * room has the same layout about its centre, so routes are keyed and stored
+ * relative to the room centre and shared by all rooms.
  */
 const routes = new Map<string, Point[]>();
 const ROUTE_CACHE_MAX = 50_000;
-function cachedRoute(room: number, from: Point, to: Point): Point[] {
-  const key = `${room}:${from.x.toFixed(3)},${from.z.toFixed(3)}>${to.x.toFixed(3)},${to.z.toFixed(3)}`;
+/** How many routes the cache holds; for tests. */
+export function routeCacheSize() {
+  return routes.size;
+}
+export function cachedRoute(room: number, from: Point, to: Point): Point[] {
+  const c = roomCentre(room);
+  const fx = from.x - c.x,
+    fz = from.z - c.z,
+    tx = to.x - c.x,
+    tz = to.z - c.z;
+  const key = `${fx.toFixed(3)},${fz.toFixed(3)}>${tx.toFixed(3)},${tz.toFixed(3)}`;
   let route = routes.get(key);
   if (!route) {
     if (routes.size >= ROUTE_CACHE_MAX) routes.clear();
-    route = routeWithin(room, from, to);
+    route = routeWithin(room, from, to).map((p) => ({
+      x: p.x - c.x,
+      z: p.z - c.z,
+    }));
     routes.set(key, route);
   }
-  return route;
+  return route.map((p) => ({ x: p.x + c.x, z: p.z + c.z }));
 }
 
 /** Joins polylines, dropping repeated points where they meet. */

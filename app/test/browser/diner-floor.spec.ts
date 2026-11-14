@@ -5,7 +5,9 @@ import {
   EAT_MS,
   ROOM_BUDGET,
   STALE_MS,
+  cachedRoute,
   createDinerFloor,
+  routeCacheSize,
   type FloorFigure,
   type FloorInput,
   type FloorStall,
@@ -14,6 +16,7 @@ import { queueSpot, stallBlocks, toHall } from "../../src/hall-layout";
 import {
   entrance,
   roomAt,
+  roomCentre,
   seatSpots,
   spotPlacement,
 } from "../../src/room-layout";
@@ -753,6 +756,30 @@ test("floor: a stall that goes away before its served diner collects takes the d
     }
     expect(floor.count(now)).toBe(0);
   }
+});
+
+test("floor: routes are kept per room layout, not per room", () => {
+  const c1 = roomCentre(1),
+    c7 = roomCentre(7);
+  const shift = (p: { x: number; z: number }) => ({
+    x: p.x - c1.x + c7.x,
+    z: p.z - c1.z + c7.z,
+  });
+  // From inside the entrance to a queue spot of the north-west corner booth:
+  // a route that goes around tables.
+  const from = entrance(1).inside;
+  const to = toHall(spotPlacement(1, 0), ...queueSpot(3));
+  const one = cachedRoute(1, from, to);
+  expect(one.length).toBeGreaterThan(2);
+  const size = routeCacheSize();
+  const seven = cachedRoute(7, shift(from), shift(to));
+  // Room 7 reuses room 1's entry.
+  expect(routeCacheSize()).toBe(size);
+  expect(seven).toHaveLength(one.length);
+  seven.forEach((p, i) => {
+    expect(p.x - one[i]!.x).toBeCloseTo(c7.x - c1.x, 9);
+    expect(p.z - one[i]!.z).toBeCloseTo(c7.z - c1.z, 9);
+  });
 });
 
 test("floor: a closed room's figures are removed", () => {
