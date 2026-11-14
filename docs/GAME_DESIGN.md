@@ -1323,6 +1323,8 @@ change. Visitors retain the public hall and stall-list views.
 
 Cooking emits heat and steam, an unstaffed station looks inactive, a sold-out item is marked, and a safety stop has an inspectable indicator. Closed stalls lower a corrugated metal shutter with a spray-painted closure label in the selected language. Open stalls show a proprietor figure and, in the detailed view, one figure per on-duty staff position. A visitor helper represents their assigned counter position. The proprietor figure represents the business even during unattended service. Smoke and steam are feedback, not an independent physics simulation.
 
+People are proportioned figures built in code, with arms and legs, several hair styles, and varied clothing and build. Owners wear an apron so they can be told from diners and kitchen staff. Distant and reduced-detail people are drawn more simply but keep their silhouette. A person's look stays the same for as long as they are in the hall, and walking people fade in and out smoothly.
+
 Closed stalls display a counter placard with the next expected reopening in hall time when an opening is queued and current conditions support a forecast. A stall with an unset reopening time displays that status. The stall inspector and list show the same information.
 
 ### Performance and truthful animation
