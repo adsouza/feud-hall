@@ -21,12 +21,16 @@ export const STAFF_SPOTS: readonly (readonly [number, number])[] = [
   [-0.62, -0.43],
   [0.41, -0.43],
 ];
-/** Where diners wait in front of a counter, far enough apart for the widest figure. */
+/**
+ * Where diners wait in front of a counter, far enough apart for the widest
+ * figure, and left of the handover point so the tray pickup view (looking
+ * down the centre line at the tray) passes no one.
+ */
 export const QUEUE_SPOTS: readonly (readonly [number, number])[] = [
-  [-0.82, 1.55],
-  [0.08, 1.55],
-  [-0.82, 2.45],
-  [0.08, 2.45],
+  [-1.45, 1.55],
+  [-0.55, 1.55],
+  [-1.45, 2.45],
+  [-0.55, 2.45],
 ];
 const corners = [0, 0.25, 0.5, 0.75];
 const islandPositions = [...corners, 0.125, 0.375, 0.625, 0.875];

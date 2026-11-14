@@ -407,6 +407,12 @@ test("people: queue spots are far enough apart for the widest figure", () => {
   expect(STAFF_SPOTS.length).toBe(9);
 });
 
+test("people: the queue stands clear of the tray pickup lane", () => {
+  // The pickup view looks along the stall's centre line (x = 0) at the tray.
+  for (const spot of QUEUE_SPOTS)
+    expect(spot[0] + FIGURE_MAX_SPAN / 2).toBeLessThanOrEqual(-0.1);
+});
+
 test("people: a frame uploads only the slots in use", () => {
   const people = createPeople(100, null);
   const hands = people.mesh("hand");
