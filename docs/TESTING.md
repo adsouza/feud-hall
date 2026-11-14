@@ -491,6 +491,23 @@ Run this focused file with one browser worker alongside `visitor-play.spec.ts`,
 changing the shared controls. These use the disposable browser hall, not the
 running local game, and do not qualify physical touch/GPU performance.
 
+### How to run the frame bench
+
+The dev-only bench mounts the real 3D hall scene with a synthetic hall and
+reports frame delivery. From `app/`, run
+`NODE_OPTIONS=--max-old-space-size=1536 bun run dev -- --port 5199`, then open
+`http://localhost:5199/bench.html?stalls=150&detail=0&seconds=20` and the same
+URL with `detail=1` in a GPU-backed browser window that stays visible and
+focused for the whole run (a hidden tab stops the scene drawing). Each page
+ends by showing a `[data-bench-result]` element holding JSON with `stalls`,
+`detail`, `seconds`, `frames`, `fps`, `lateShare` (share of intervals between
+consecutive frames longer than 40 ms), `meanDrawMs`, `p95DrawMs`, and
+`renderer`. The bench alternates the queue length every second so the scene
+keeps animating in both detail modes. Run each URL twice and keep the second.
+Software-rendered browsers, including the Playwright Chromium suite, are not
+valid evidence: check `renderer` for a real GPU. Record results in
+`docs/superpowers/reports/`.
+
 `participation.spec.ts` exercises a visitor receiving a license during a shift,
 owner navigation/history, own-stall purchase exclusion, and competitor dining.
 The focused `visitor_play_test.exs`, `management_test.exs`, and

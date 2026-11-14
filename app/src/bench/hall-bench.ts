@@ -1,0 +1,127 @@
+// Development-only frame bench. Mounts the real hall scene with a synthetic
+// hall and reports frame delivery. Open /bench.html?stalls=150&detail=0&seconds=20
+// in a visible, GPU-backed browser window; a hidden tab stops the scene drawing.
+import type { Stall } from "../api";
+import { createHallScene, type Appearance } from "../hall-scene";
+
+const params = new URLSearchParams(location.search);
+function number(name: string, fallback: number, min: number, max: number) {
+  const value = Number(params.get(name) ?? fallback);
+  return Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.round(value)))
+    : fallback;
+}
+const count = number("stalls", 150, 1, 150);
+const detail = number("detail", 0, 0, 1) === 1;
+const seconds = number("seconds", 20, 1, 600);
+
+function stall(index: number, waiting: number): Stall {
+  return {
+    stall_id: `bench-${index}`,
+    restaurant_id: `bench-restaurant-${index}`,
+    tier: "standard",
+    name: `Bench ${index + 1}`,
+    cuisine: "italian",
+    menu: {},
+    "open?": true,
+    activity: {
+      waiting,
+      cooking: 2,
+      handover: false,
+      staffed: true,
+      workers: 9,
+      staging: false,
+      paused: false,
+    },
+  };
+}
+
+function appearance(waiting: number): Appearance {
+  return {
+    stalls: Array.from({ length: count }, (_, index) => stall(index, waiting)),
+    ownedStalls: [],
+    selected: "",
+    pickup: "",
+    pickups: [],
+    closedLabel: "",
+    cuisineLabel: () => "",
+    reopeningHeading: "",
+    reopeningTime: () => "",
+    detail,
+    motion: true,
+    tablet: null,
+    tabletLabel: "",
+    tabletHint: "",
+  };
+}
+
+const host = document.getElementById("hall") as HTMLDivElement;
+const draws: number[] = [];
+const stamps: number[] = [];
+const scene = createHallScene(host, {
+  select: () => {},
+  interact: () => {},
+  tablet: () => {},
+  hover: () => {},
+  fail: () => {},
+  inside: () => {},
+  walk: () => {},
+  collect: () => false,
+  collected: () => {},
+  frame: (drawMs) => {
+    draws.push(drawMs);
+    stamps.push(performance.now());
+  },
+});
+
+// Alternate the queue length so departures keep the scene animating even with
+// detail off, where it would otherwise settle and stop drawing.
+let waiting = 4;
+scene.update(appearance(waiting));
+const toggle = setInterval(() => {
+  waiting = waiting === 4 ? 3 : 4;
+  scene.update(appearance(waiting));
+}, 1000);
+
+function percentile(sorted: number[], share: number) {
+  if (sorted.length === 0) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * share))];
+}
+
+function renderer() {
+  try {
+    const gl = host.querySelector("canvas")?.getContext("webgl2");
+    const info = gl?.getExtension("WEBGL_debug_renderer_info");
+    return info
+      ? String(gl?.getParameter(info.UNMASKED_RENDERER_WEBGL))
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+setTimeout(() => {
+  clearInterval(toggle);
+  const frames = draws.length;
+  const intervals = stamps.slice(1).map((at, i) => at - stamps[i]);
+  const late = intervals.filter((gap) => gap > 40).length;
+  const sorted = [...draws].sort((a, b) => a - b);
+  const span = frames > 1 ? (stamps[frames - 1] - stamps[0]) / 1000 : 0;
+  const round = (value: number) => Math.round(value * 100) / 100;
+  const result = {
+    stalls: count,
+    detail: detail ? 1 : 0,
+    seconds,
+    frames,
+    fps: span > 0 ? round((frames - 1) / span) : 0,
+    lateShare: intervals.length ? round(late / intervals.length) : 0,
+    meanDrawMs: frames ? round(draws.reduce((a, b) => a + b, 0) / frames) : 0,
+    p95DrawMs: round(percentile(sorted, 0.95)),
+    renderer: renderer(),
+  };
+  const out = document.createElement("pre");
+  out.setAttribute("data-bench-result", "");
+  out.textContent = JSON.stringify(result);
+  document.body.append(out);
+  scene.dispose();
+}, seconds * 1000);

@@ -31,7 +31,7 @@ export type CameraState = CameraPose & {
   menu?: { stall: string; hall: CameraPose };
 };
 export type HallTarget = "menu" | "counter" | "staff" | "supply";
-type Actions = {
+export type Actions = {
   select: (id: string) => void;
   interact: (id: string, target: HallTarget) => void;
   tablet: (id: string, action: TabletAction) => void;
@@ -41,8 +41,9 @@ type Actions = {
   walk: (id: string) => void;
   collect: (id: string) => boolean;
   collected: () => void;
+  frame?: (drawMs: number) => void;
 };
-type Appearance = {
+export type Appearance = {
   stalls: Stall[];
   ownedStalls: string[];
   selected: string;
@@ -1172,6 +1173,7 @@ export function createHallScene(
 
   function draw(now = performance.now()) {
     if (disposed || document.hidden) return;
+    const started = performance.now();
     hallShell.update(camera.position);
     let actors = 0;
     let puffs = 0;
@@ -1301,6 +1303,7 @@ export function createHallScene(
     } catch {
       actions.fail();
     }
+    actions.frame?.(performance.now() - started);
   }
 
   function animate(now: number) {
