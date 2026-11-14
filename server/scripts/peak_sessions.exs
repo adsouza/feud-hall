@@ -168,7 +168,19 @@ defmodule FeudHall.PeakSessions do
     end
   end
 
-  defp stall_id(index), do: "s" <> String.pad_leading(to_string(index), 3, "0")
+  # The room rule refuses a spot in a room that is not open yet, and room k+1
+  # opens only when every spot of one class in rooms 1..k is leased. Leasing
+  # the quiet spots first, in ascending ID order, fills each room's four quiet
+  # corners before the next room's, so the ten rooms open in a chain; every
+  # other spot is then in an open room. Index i (1-based) takes the i-th spot of
+  # that order. For the launch layout this is s001..s150, because the quiet
+  # class is s001..s040.
+  defp stall_id(index), do: Enum.at(lease_order(), index - 1)
+
+  defp lease_order do
+    {quiet, rest} = state().catalog.layout |> Enum.sort_by(& &1.slot_id) |> Enum.split_with(&(&1.tier == :quiet))
+    Enum.map(quiet ++ rest, & &1.slot_id)
+  end
 
   defp admit_diner(owner) do
     diner = register("diner", owner.index)
