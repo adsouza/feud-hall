@@ -100,14 +100,25 @@ What changed along the way:
 `near=1` starts the camera low among the stalls, so the stalls within the detail
 distance are drawn in full at `detail=1`; `near=1&detail=1` is the densest view.
 No "before" exists for this view: the bench gained the option after the capsule
-figures were replaced. One run each of `stalls=150&near=1&detail=1&seconds=20`
+figures were replaced. Runs of `stalls=150&near=1&detail=1&seconds=20`
 and `stalls=150&near=1&detail=0&seconds=20`: 150 stalls, 20 seconds after a
 2-second warm-up.
 
-| detail | people           | frames           | fps              | lateShare        | meanDrawMs       | p95DrawMs        |
-| ------ | ---------------- | ---------------- | ---------------- | ---------------- | ---------------- | ---------------- |
-| 1      | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) |
-| 0      | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) |
+| detail | people | frames | fps   | lateShare | meanDrawMs | p95DrawMs |
+| ------ | ------ | ------ | ----- | --------- | ---------- | --------- |
+| 1      | 1300   | 620    | 30.97 | 0         | 7.62       | 8.8       |
+| 0      | 750    | 620    | 30.96 | 0         | 7.58       | 9.3       |
+
+Commit measured: 1e5212e. Each URL was run twice and the second run kept; the
+first runs gave 30.97 fps, 0 late frames and 7.66 ms mean at `detail=1`, and
+30.96 fps, 0 late frames and 7.67 ms mean at `detail=0`. `people` is the largest
+number of figures drawn in one frame: at `detail=1` about fifty stalls are within
+the detail distance and drawn in full.
+
+The densest view holds the scene's pacing ceiling with no late frames, at about
+half a millisecond more CPU-side draw time than the overview. The overview was
+re-run at the same commit as a check: 750 people, 30.96 fps and no late frames at
+both `detail` values (7.82 ms and 7.22 ms mean).
 
 Limits of this evidence: one workstation (Apple M4) with a capable GPU. Weaker
 integrated GPUs are not covered, and the game design's reference machine is
