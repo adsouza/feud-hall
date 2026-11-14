@@ -5,7 +5,7 @@ defmodule FeudHall.Application.RoomsTest do
   alias FeudHall.Application.{CommandWorkflow, Management, Recovery}
   alias FeudHall.Domain.{Clock, Content, Hall, Identity, PublicView}
   alias FeudHall.Domain.Npc.Planner
-  alias FeudHall.Domain.Content.LaunchCatalog
+  alias FeudHall.Domain.Content.{LaunchCatalog, SliceCatalog}
   alias FeudHall.Domain.Hall.{CatalogExpansion, Evolver, Invariants, Rooms}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
   alias FeudHall.Infrastructure.{HallAuthority, InMemoryEventStore, ManualClock, Snapshot}
@@ -237,6 +237,84 @@ defmodule FeudHall.Application.RoomsTest do
     unfiltered = Map.reject(state.layout, fn {sid, _} -> HallManagement.reserved?(state, sid) end)
     assert Planner.choose_slot(view, unfiltered, premium) == "s047"
     assert Planner.choose_slot(view, HallManagement.npc_layout(state), premium) == "s001"
+  end
+
+  describe "rooms in the view" do
+    defp launch_view do
+      {rt, [first]} = owners(boot(), ["first"])
+      rt = Enum.reduce(~w(s001 s041 s042), rt, &npc_lease(&2, &1))
+      {rt, first}
+    end
+
+    test "a launch hall's view shows rooms, positions and vacancies" do
+      {rt, _} = launch_view()
+      before = {rt.position, rt.state}
+      assert {:ok, %{hall: hall}} = Management.view(rt, "first")
+      assert {rt.position, rt.state} == before
+
+      assert hall.rooms == %{count: 10, open: 1}
+
+      assert hall.stalls |> Enum.map(&{&1.stall_id, &1.room, &1.position}) |> Enum.sort() ==
+               [{"s001", 1, 0}, {"s041", 1, 1}, {"s042", 1, 2}]
+
+      assert length(hall.vacancies) == 12
+      assert Enum.all?(hall.vacancies, &(&1.room == 1))
+      ids = Enum.map(hall.vacancies, & &1.stall_id)
+      refute Enum.any?(~w(s001 s041 s042), &(&1 in ids))
+
+      assert %{rent: "12000", base_rent: "10000", class_leased: 2, class_total: 6, tier: :standard} =
+               Enum.find(hall.vacancies, &(&1.stall_id == "s043"))
+    end
+
+    test "vacancies exclude reserved spots, and the owner's slots and draft carry the room fields" do
+      {rt, first} = launch_view()
+      rt = accepted(rt, {:principal, first}, :reserve_stall, %{stall_id: "s043"})
+      assert {:ok, %{hall: hall, profile: profile}} = Management.view(rt, "first")
+      refute "s043" in Enum.map(hall.vacancies, & &1.stall_id)
+      assert length(hall.vacancies) == 11
+
+      assert %{
+               stall_id: "s043",
+               room: 1,
+               position: 3,
+               rent: "12000",
+               base_rent: "10000",
+               class_leased: 2,
+               class_total: 6
+             } =
+               profile.draft
+
+      assert %{room: 1, base_rent: "10000", class_total: 6} = Enum.find(profile.slots, &(&1.stall_id == "s044"))
+    end
+
+    test "the computer-run planner's view and the vacancies name the same spots" do
+      {rt, first} = launch_view()
+      rt = accepted(rt, {:principal, first}, :reserve_stall, %{stall_id: "s043"})
+      state = rt.state
+      assert {:ok, %{hall: hall}} = Management.view(rt, "first")
+
+      taken = MapSet.new(PublicView.build(state).stalls, & &1.stall_id)
+
+      expected =
+        for sid <- Map.keys(state.layout),
+            Rooms.room(state, sid) <= Rooms.summary(state).open,
+            not MapSet.member?(taken, sid),
+            not HallManagement.reserved?(state, sid),
+            do: sid
+
+      assert hall.vacancies |> Enum.map(& &1.stall_id) |> Enum.sort() == Enum.sort(expected)
+    end
+
+    test "a hall without the room rule sends none of the room fields" do
+      {rt, _} = owners(boot(SliceCatalog.catalog()), ["first"])
+      rt = npc_lease(rt, hd(Enum.sort(Map.keys(rt.state.layout))))
+      assert {:ok, %{hall: hall, profile: profile}} = Management.view(rt, "first")
+      refute Map.has_key?(hall, :rooms)
+      refute Map.has_key?(hall, :vacancies)
+      refute Enum.any?(hall.stalls, &Map.has_key?(&1, :room))
+      assert profile.slots != []
+      refute Enum.any?(profile.slots, &(Map.has_key?(&1, :room) or Map.has_key?(&1, :base_rent)))
+    end
   end
 
   @tag :guard_sensitivity

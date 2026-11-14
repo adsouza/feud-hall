@@ -13,6 +13,8 @@ export type Stall = {
   stall_id: string;
   restaurant_id: string;
   tier: string;
+  room?: number;
+  position?: number;
   name: string;
   cuisine: string;
   menu: Record<string, Money>;
@@ -59,7 +61,13 @@ export type Slot = {
   rent: Money;
   holding: Money;
   setup_fee: Money;
+  room?: number;
+  position?: number;
+  base_rent?: Money;
+  class_leased?: number;
+  class_total?: number;
 };
+export type Vacancy = Slot;
 type Award = {
   distinction: string;
   cuisine: string | null;
@@ -197,6 +205,8 @@ export type View = {
     visitor_play?: boolean;
     access: string;
     stalls: Stall[];
+    rooms?: { count: number; open: number };
+    vacancies?: Vacancy[];
     position: number;
     cuisines: string[];
     dietary_profiles?: string[];

@@ -88,6 +88,7 @@ defmodule FeudHall.Application.Management do
     account = identity.principals[principal]
     public = PublicView.build(state)
     activity = public_activity(state)
+    rooms = Rooms.summary(state)
 
     stalls =
       Enum.map(public.stalls, fn stall ->
@@ -106,6 +107,7 @@ defmodule FeudHall.Application.Management do
           last_service: Map.get(Map.get(runtime, :counter_services, %{}), stall.stall_id),
           menu: Map.new(stall.menu, fn {id, price} -> {id, cents(price)} end)
         })
+        |> Map.merge(spot_fields(state, rooms, stall.stall_id))
       end)
 
     hall = %{
@@ -127,7 +129,12 @@ defmodule FeudHall.Application.Management do
         Map.new(state.catalog.recipes, fn {id, recipe} -> {id, Map.take(recipe, [:id, :kind, :cuisine, :starter])} end)
     }
 
-    view = %{hall: hall, profile: account && private_view(identity, state, account, public.market)}
+    hall =
+      if Rooms.enabled?(state),
+        do: Map.merge(hall, %{rooms: %{count: rooms.count, open: rooms.open}, vacancies: vacancies(state, rooms)}),
+        else: hall
+
+    view = %{hall: hall, profile: account && private_view(identity, state, account, public.market, rooms)}
 
     case DinerBrowse.checkout_menu(state, params["stall_id"], params["profile_id"], principal) do
       nil -> {:ok, view}
@@ -175,7 +182,7 @@ defmodule FeudHall.Application.Management do
     }
   end
 
-  defp private_view(identity, state, account, market) do
+  defp private_view(identity, state, account, market, rooms) do
     principal = account.id
     restaurant_id = state.owners[{:principal, principal}]
     restaurant = state.restaurants[restaurant_id]
@@ -209,10 +216,17 @@ defmodule FeudHall.Application.Management do
       reviewer_queue: if(account.reviewer?, do: reviewer_queue(identity), else: []),
       work: work_view(state, principal, account.owner?),
       restaurant: if(restaurant, do: restaurant_view(state, restaurant, market), else: nil),
-      draft: if(HallManagement.enabled?(state), do: encode_lease(state.management.drafts[principal]), else: nil),
+      draft:
+        if(HallManagement.enabled?(state),
+          do: encode_draft(state, state.management.drafts[principal], rooms),
+          else: nil
+        ),
       waitlisted: HallManagement.enabled?(state) and Map.has_key?(state.management.waitlist, principal),
       slots:
-        if(account.owner? and (is_nil(restaurant) or Progression.enabled?(state)), do: available_slots(state), else: []),
+        if(account.owner? and (is_nil(restaurant) or Progression.enabled?(state)),
+          do: available_slots(state, rooms),
+          else: []
+        ),
       ventures: venture_history(state, principal)
     }
   end
@@ -284,9 +298,7 @@ defmodule FeudHall.Application.Management do
     |> Enum.map(&Map.put(&1, :name, identity.principals[&1.principal].name))
   end
 
-  defp available_slots(state) do
-    summary = Rooms.summary(state)
-
+  defp available_slots(state, summary) do
     state.layout
     |> Map.keys()
     |> Enum.sort()
@@ -295,13 +307,60 @@ defmodule FeudHall.Application.Management do
     |> Enum.map(&encode_lease/1)
   end
 
+  # Every vacant, unreserved spot in an open room, with its current quote.
+  defp vacancies(state, summary), do: available_slots(state, summary)
+
+  defp spot_fields(state, summary, sid) do
+    case Rooms.enabled?(state) && summary.spots[sid] do
+      %{room: room, position: position} when not is_nil(room) -> %{room: room, position: position}
+      _ -> %{}
+    end
+  end
+
   defp encode_lease(nil), do: nil
 
   defp encode_lease(slot) do
     slot
     |> Map.take([:stall_id, :tier, :exposure, :rent, :holding, :setup_fee, :expires_at])
     |> Map.merge(%{rent: cents(slot.rent), holding: cents(slot.holding), setup_fee: cents(slot.setup_fee)})
+    |> Map.merge(room_fields(slot))
   end
+
+  # A draft keeps the rent it was quoted; the room fields and class counts are current.
+  defp encode_draft(_state, nil, _summary), do: nil
+
+  defp encode_draft(state, draft, summary) do
+    fields =
+      if Rooms.enabled?(state) do
+        class = Rooms.quote(summary, draft.tier)
+        spot = Map.get(summary.spots, draft.stall_id, %{})
+
+        Map.merge(draft, %{
+          base_rent: class.base_rent,
+          class_leased: class.leased,
+          class_total: class.total,
+          room: spot[:room],
+          position: spot[:position]
+        })
+      else
+        draft
+      end
+
+    encode_lease(fields)
+  end
+
+  # Slice halls have no rooms and send none of the room fields.
+  defp room_fields(%{room: room} = slot) when not is_nil(room) do
+    %{
+      room: room,
+      position: slot.position,
+      base_rent: cents(slot.base_rent),
+      class_leased: slot.class_leased,
+      class_total: slot.class_total
+    }
+  end
+
+  defp room_fields(_slot), do: %{}
 
   defp restaurant_view(state, restaurant, market) do
     id = restaurant.id
