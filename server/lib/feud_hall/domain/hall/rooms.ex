@@ -72,6 +72,7 @@ defmodule FeudHall.Domain.Hall.Rooms do
   def open?(state, slot_id, summary \\ nil) do
     if enabled?(state) do
       summary = summary || summary(state)
+      # A spot with no catalog room counts as open: callers check that the spot exists first.
       (get_in(summary.spots, [slot_id, :room]) || 0) <= summary.open
     else
       true

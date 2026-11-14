@@ -172,8 +172,18 @@ defmodule FeudHall.Domain.LaunchCatalogTest do
       missing = put_in(catalog.rules.rooms, Map.delete(@rooms, :scarcity_cap_permille))
       assert {:rules, :rooms, :scarcity_cap_permille} in problems(missing)
 
-      zero = put_in(catalog.rules.rooms, %{@rooms | class_gap: 0})
-      assert {:rules, :rooms, :class_gap} in problems(zero)
+      zero = put_in(catalog.rules.rooms, %{@rooms | count: 0})
+      assert {:rules, :rooms, :count} in problems(zero)
+    end
+
+    test "the scarcity cap never lowers rent and the class gap is never negative" do
+      catalog = LaunchCatalog.catalog()
+      rooms = fn changes -> Content.validate(put_in(catalog.rules.rooms, Map.merge(@rooms, changes))) end
+
+      assert {:error, [{:rules, :rooms, :scarcity_cap_permille}]} = rooms.(%{scarcity_cap_permille: 999})
+      assert rooms.(%{scarcity_cap_permille: 1_000}) == :ok
+      assert {:error, [{:rules, :rooms, :class_gap}]} = rooms.(%{class_gap: -1})
+      assert rooms.(%{class_gap: 0}) == :ok
     end
   end
 end

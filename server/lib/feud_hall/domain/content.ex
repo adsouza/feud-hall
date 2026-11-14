@@ -251,7 +251,12 @@ defmodule FeudHall.Domain.Content do
   defp rooms_rule_problems(nil), do: []
 
   defp rooms_rule_problems(rooms),
-    do: for(key <- @rooms_keys, not pos_int?(get(rooms, key)), do: {:rules, :rooms, key})
+    do: for(key <- @rooms_keys, not rooms_value?(key, get(rooms, key)), do: {:rules, :rooms, key})
+
+  # The cap never lowers a rent below its base; a zero gap lets neighbouring classes meet.
+  defp rooms_value?(:scarcity_cap_permille, v), do: is_integer(v) and v >= 1000
+  defp rooms_value?(:class_gap, v), do: nonneg_int?(v)
+  defp rooms_value?(_key, v), do: pos_int?(v)
 
   defp layout_problems(layout, rooms) do
     if is_list(layout) and Enum.all?(layout, &(is_map(&1) and is_binary(get(&1, :slot_id)) and Map.has_key?(&1, :tier))) do

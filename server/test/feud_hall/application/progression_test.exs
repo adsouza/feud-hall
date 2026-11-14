@@ -5,7 +5,7 @@ defmodule FeudHall.Application.ProgressionTest do
   alias FeudHall.Application.{CommandWorkflow, Management, Recovery}
   alias FeudHall.Domain.{Clock, Identity}
   alias FeudHall.Domain.Content.{LaunchCatalog, SliceCatalog}
-  alias FeudHall.Domain.Hall.Invariants
+  alias FeudHall.Domain.Hall.{Invariants, Rooms}
   alias FeudHall.Infrastructure.{InMemoryEventStore, PostgresEventStore}
 
   test "all owned locations reject purchases while owners may dine at competitors" do
@@ -87,8 +87,15 @@ defmodule FeudHall.Application.ProgressionTest do
     rt = advance(rt, 4 * Clock.minute())
     stock = rt.state.market.stock
     restaurant = rt.state.restaurants["old-kitchen"]
+    tiers = Map.new(rt.state.catalog.layout, &{&1.slot_id, &1.tier})
+    layout = rt.state.layout
+    refute Rooms.enabled?(rt.state)
     rt = accepted(rt, {:system, :admin}, :expand_catalog, %{catalog: LaunchCatalog.catalog()})
 
+    assert Rooms.enabled?(rt.state)
+    assert Map.new(rt.state.catalog.layout, &{&1.slot_id, &1.tier}) == tiers
+    assert rt.state.layout == layout
+    assert Enum.find(rt.state.catalog.npc_profiles, &(&1.id == "premium")).preferred_tier == :standard
     assert rt.state.restaurants["old-kitchen"] == restaurant
     assert Map.take(rt.state.catalog.recipes, Map.keys(old.recipes)) == old.recipes
     assert Map.take(rt.state.market.stock, Map.keys(stock)) == stock
