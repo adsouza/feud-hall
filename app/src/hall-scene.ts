@@ -20,7 +20,13 @@ import {
   QUEUE_SPOTS,
   STAFF_SPOTS,
 } from "./hall-layout";
-import { carryPoint, personLook, type Look, type Pose } from "./people";
+import {
+  carryPoint,
+  personLook,
+  staffLooks,
+  type Look,
+  type Pose,
+} from "./people";
 import { createPeople } from "./people-mesh";
 
 type Point = [number, number, number];
@@ -96,6 +102,7 @@ type Counter = {
   name: string;
   cuisine: string;
   color: T.Color;
+  restaurant: string; // the business the owner look is keyed to
   staff: Look[]; // the owner, then one per staff spot
   queue: Diner[];
   visibleDiners: number;
@@ -723,10 +730,12 @@ export function createHallScene(
       name: "",
       cuisine: stall.cuisine,
       color: accent.color,
-      staff: [
-        personLook(index * 16, "owner"),
-        ...STAFF_SPOTS.map((_, n) => personLook(index * 16 + n + 1, "worker")),
-      ],
+      restaurant: stall.restaurant_id,
+      staff: staffLooks(
+        stall.restaurant_id,
+        stall.stall_id,
+        STAFF_SPOTS.length,
+      ),
       queue: [],
       visibleDiners: 0,
       nextDiner: hash(stall.stall_id),
@@ -1749,6 +1758,15 @@ export function createHallScene(
           model = createCounter(stall, index);
           indices.add(index);
           stalls.set(stall.stall_id, model);
+        }
+        if (model.restaurant !== stall.restaurant_id) {
+          // The stall changed hands: the new business's owner stands there.
+          model.restaurant = stall.restaurant_id;
+          model.staff = staffLooks(
+            stall.restaurant_id,
+            stall.stall_id,
+            STAFF_SPOTS.length,
+          );
         }
         paintSign(model, stall);
         model.tablet.material =

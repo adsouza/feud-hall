@@ -7,6 +7,8 @@ import {
   carryPoint,
   personLook,
   posePerson,
+  serialFor,
+  staffLooks,
   type Detail,
   type Look,
   PART_KINDS,
@@ -41,6 +43,48 @@ test("people: a look is a pure function of serial and role", () => {
           ).toBe(true);
       },
     ),
+  );
+});
+
+test("people: a serial for a key is a stable unsigned 32-bit hash", () => {
+  expect(serialFor("staff:stall-1")).toBe(serialFor("staff:stall-1"));
+  const keys = [
+    "",
+    "owner:r-1",
+    "owner:r-2",
+    "staff:stall-1",
+    "staff:stall-2",
+    "staff:stall-10",
+  ];
+  for (const key of keys) {
+    const serial = serialFor(key);
+    expect(Number.isInteger(serial)).toBe(true);
+    expect(serial).toBeGreaterThanOrEqual(0);
+    expect(serial).toBeLessThan(2 ** 32);
+  }
+  expect(new Set(keys.map(serialFor)).size).toBe(keys.length);
+});
+
+test("people: staff looks follow the stall and the business, not a scene slot", () => {
+  const crew = (looks: Look[]) => looks.slice(1);
+  const a = staffLooks("r-1", "stall-1", 9);
+  expect(a.length).toBe(10);
+  expect(staffLooks("r-1", "stall-1", 9)).toEqual(a);
+  const b = staffLooks("r-1", "stall-2", 9);
+  expect(crew(b)).not.toEqual(crew(a));
+  // Not a row of clones: the nine workers at one stall are not all alike.
+  expect(new Set(crew(a).map((look) => JSON.stringify(look))).size).toBe(9);
+  // One business's owner is the same person at each of its stalls.
+  expect(b[0]).toEqual(a[0]);
+  expect(a[0].apron).toBe(true);
+  expect(staffLooks("r-2", "stall-1", 9)[0]).not.toEqual(a[0]);
+  expect(crew(staffLooks("r-2", "stall-1", 9))).toEqual(crew(a));
+  // Without a business, the owner is keyed to the stall.
+  expect(staffLooks("", "stall-1", 0)[0]).toEqual(
+    staffLooks("", "stall-1", 0)[0],
+  );
+  expect(staffLooks("", "stall-1", 0)[0]).not.toEqual(
+    staffLooks("", "stall-2", 0)[0],
   );
 });
 

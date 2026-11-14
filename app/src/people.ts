@@ -48,6 +48,34 @@ function field(bits: number, start: number, width: number): number {
   return (bits >>> start) & ((1 << width) - 1);
 }
 
+// A serial for a stable identifier (FNV-1a over UTF-16 code units), so a
+// look keyed to it is the same on every client and every mount.
+export function serialFor(key: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// A stall's owner, then one worker per staff spot. The owner is keyed to the
+// business, so one owner is the same person at every stall they hold; the
+// crew is keyed to the stall.
+export function staffLooks(
+  restaurantId: string,
+  stallId: string,
+  workers: number,
+): Look[] {
+  const crew = serialFor("staff:" + stallId);
+  return [
+    personLook(serialFor("owner:" + (restaurantId || stallId)), "owner"),
+    ...Array.from({ length: workers }, (_, n) =>
+      personLook(crew + n + 1, "worker"),
+    ),
+  ];
+}
+
 export function personLook(serial: number, role: Role): Look {
   const bits = mix32(serial);
   const shirtIndex = field(bits, 0, 4) % SHIRTS.length;
