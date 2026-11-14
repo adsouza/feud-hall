@@ -728,7 +728,17 @@ test("floor: a stall that goes away takes its figures with it", () => {
   );
   floor.apply({ ...base, now: 2 * STEP, stalls: moved });
   expect(floor.tally.toQueue).toBe(0);
-  expect(floor.boundFor("s05")).toBeLessThanOrEqual(2);
+  expect(floor.boundFor("s05")).toBe(2);
+  const placement = spotPlacement(1, 3);
+  const queued = all(floor, 2 * STEP).filter(
+    (f) => f.activity === "queued" && f.stall === "s05",
+  );
+  expect(queued.map((f) => f.spot).sort()).toEqual([0, 1]);
+  for (const f of queued) {
+    const at = toHall(placement, ...queueSpot(f.spot!));
+    expect(f.x).toBeCloseTo(at.x, 9);
+    expect(f.z).toBeCloseTo(at.z, 9);
+  }
 });
 
 test("floor: a stall that goes away before its served diner collects takes the diner", () => {
@@ -756,6 +766,59 @@ test("floor: a stall that goes away before its served diner collects takes the d
     }
     expect(floor.count(now)).toBe(0);
   }
+});
+
+test("floor: a queue that falls without a service sends its last diner out", () => {
+  const floor = createDinerFloor();
+  floor.apply(input({ waiting: { s04: 2 } }));
+  const start = all(floor, 0);
+  const front = start.find((f) => f.spot === 0)!;
+  const back = start.find((f) => f.spot === 1)!;
+  const fell = input({ now: STEP, waiting: { s04: 1 } });
+  floor.apply(fell);
+  const after = all(floor, STEP);
+  const walking = after.filter((f) => f.activity === "walking");
+  expect(walking).toHaveLength(1);
+  expect(walking[0]!.look).toEqual(back.look);
+  expect(walking[0]!.carrying).toBe(false);
+  const queued = after.filter((f) => f.activity === "queued");
+  expect(queued).toHaveLength(1);
+  expect(queued[0]!.look).toEqual(front.look);
+  expect(after).toHaveLength(2);
+  let last: FloorFigure | undefined;
+  let gone = -1;
+  for (let now = STEP; now <= STEP + 60_000; now += 50) {
+    if ((now - STEP) % STEP === 0) floor.apply({ ...fell, now });
+    const figures = all(floor, now);
+    const stay = figures.filter((f) => f.activity === "queued");
+    expect(stay).toHaveLength(1);
+    expect(stay[0]!.look).toEqual(front.look);
+    expect(stay[0]!.spot).toBe(0);
+    const out = figures.filter((f) => f.activity !== "queued");
+    if (gone >= 0) {
+      expect(out).toHaveLength(0);
+      continue;
+    }
+    if (out.length === 0) {
+      gone = now;
+      continue;
+    }
+    expect(out).toHaveLength(1);
+    expect(out[0]!.activity).toBe("walking");
+    expect(out[0]!.carrying).toBe(false);
+    expect(out[0]!.look).toEqual(back.look);
+    last = out[0];
+  }
+  expect(gone).toBeGreaterThan(0);
+  const door = entrance(1).outside;
+  expect(last!.room).toBe(1);
+  expect(Math.hypot(last!.x - door.x, last!.z - door.z)).toBeLessThan(0.1);
+  expect(floor.tally).toEqual({
+    toQueue: 0,
+    walkOut: 0,
+    fromSeat: 0,
+    thinned: 0,
+  });
 });
 
 test("floor: routes are kept per room layout, not per room", () => {
