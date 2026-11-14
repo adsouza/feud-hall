@@ -14,11 +14,11 @@ Measured with the dev-only bench. See
 
 ### Environment
 
-- Date: TBD (controller)
-- Machine model: TBD (controller)
-- GPU (`renderer`): TBD (controller)
-- Browser and version: TBD (controller)
-- Commit measured: TBD (controller)
+- Date: 2026-11-14
+- Machine model: Mac16,10 (Apple M4, 16 GB)
+- GPU (`renderer`): ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)
+- Browser and version: Playwright's bundled Chromium 158.0.8127.18, headless, 1280×800
+- Commit measured: ae6f898
 
 ### Method
 
@@ -64,9 +64,9 @@ URLs (from `app/`, dev server on port 5199):
 
 | view | people | frames | fps | lateShare | meanDrawMs | p95DrawMs |
 | --- | --- | --- | --- | --- | --- | --- |
-| room 5 overview, `detail=0` | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) |
-| room 5 overview, `detail=1` | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) |
-| room 5, `near=1&detail=1` | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) |
+| room 5 overview, `detail=0` | 315 | 620 | 30.95 | 0 | 3.68 | 5.6 |
+| room 5 overview, `detail=1` | 315 | 620 | 30.95 | 0 | 3.24 | 6.0 |
+| room 5, `near=1&detail=1` | 403 | 620 | 30.97 | 0 | 4.17 | 6.2 |
 
 ### Pass bar
 
@@ -75,7 +75,13 @@ at least 29.5 frames per second with at most 5% late frames
 (`fps ≥ 29.5`, `lateShare ≤ 0.05`). If it fails, adjacent rooms are simplified
 first and the runs repeated, and what changed is recorded here.
 
-Result: TBD (controller)
+Result: **pass**. At `detail=0` the bench delivered 30.95 frames per second with no
+late frames. Each URL was run twice and the second run kept; the first runs gave
+30.96 fps and 3.76 ms mean at `detail=0`, 30.95 fps and 3.47 ms at `detail=1`,
+and 30.96 fps and 4.34 ms at `near=1&detail=1`, all with no late frames. Mean
+draw time is about half of Project 1's figure for 150 stalls (7.5 ms), because
+only the current room and its two open neighbours are drawn (315 people against
+1,050). One workstation with a capable GPU; weaker hardware is not covered.
 
 ## Checks run
 
@@ -195,4 +201,26 @@ their rent figures differ from earlier runs.
 
 ## Trial upgrade on a copy of a real hall
 
-TBD (controller)
+Done by the controller on 2026-11-14 at commit ae6f898, before the owner's hall was
+ever started on this code.
+
+- The owner's database `feud_hall_management` was copied with `pg_dump` into a new
+  database, `feud_hall_trial_rooms`, while its own server was stopped. (`createdb -T`
+  was not used: the tool was not on the path.) The server from this branch was
+  started against the copy on port 4010 with the hall's own signing secret.
+- It answered after about four seconds. The log shows one `expand_catalog` command,
+  ID `web-launch-catalog:3`, accepted with one event, and no errors.
+- The view then reported `rooms: {count: 10, open: 1}`, eleven vacancies, and the
+  four existing stalls unmoved, all in room 1: `s001` (quiet, position 0), `s041`
+  (standard, position 1), `s101` (busy, position 7) and `s136` (prime, position
+  10). The computer-run premium restaurant keeps its prime spot. Quotes for new
+  leases were 9333 quiet (1 of 4 taken), 11000 standard (1 of 6), 18750 busy
+  (1 of 3) and 33000 prime (1 of 2).
+- Event counts, original against copy: `hall_catalog_expanded` 2 and 3;
+  `stall_leased` 4 and 4; `stall_draft_reserved` 1 and 1. The upgrade added one
+  event and no lease event, so no existing lease changed.
+- Stopped and started again, the server issued no `expand_catalog` at all and
+  logged no error.
+- The copy was dropped afterwards. The original was not started on this code.
+
+Not covered: playing on the upgraded copy (reserving a spot, a full game day).
