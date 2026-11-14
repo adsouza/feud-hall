@@ -112,7 +112,7 @@ defmodule FeudHall.Domain.Hall.Population do
 
   defp restore(state, hour) do
     view = PublicView.build(state)
-    layout = Map.reject(state.layout, fn {sid, _} -> Management.reserved?(state, sid) end)
+    layout = Management.npc_layout(state)
 
     state.catalog.npc_profiles
     |> Enum.sort_by(& &1.id)

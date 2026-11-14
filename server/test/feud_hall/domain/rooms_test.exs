@@ -67,6 +67,24 @@ defmodule FeudHall.Domain.RoomsTest do
     end
   end
 
+  describe "spot places" do
+    test "the summary maps every spot to its room and position" do
+      spots = Rooms.summary(state([])).spots
+      assert map_size(spots) == 150
+      assert spots["s001"] == %{room: 1, position: Enum.find(@catalog.layout, &(&1.slot_id == "s001")).position}
+      assert spots["s138"].room == 2
+      assert spots["s009"].room == 3
+      assert Enum.all?(@catalog.layout, &(spots[&1.slot_id] == %{room: &1.room, position: &1.position}))
+    end
+
+    test "a catalog without room data maps spots to no room" do
+      slice = SliceCatalog.catalog()
+      spots = Rooms.summary(state([], [], slice)).spots
+      assert Map.keys(spots) |> Enum.sort() == slice.layout |> Enum.map(& &1.slot_id) |> Enum.sort()
+      assert Enum.all?(Map.values(spots), &(&1 == %{room: nil, position: nil}))
+    end
+  end
+
   describe "rent quotes" do
     test "an empty hall quotes the base rents" do
       assert rents(state([])) == %{quiet: 8_000, standard: 10_000, busy: 15_000, prime: 22_000}

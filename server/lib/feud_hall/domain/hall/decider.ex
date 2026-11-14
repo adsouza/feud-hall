@@ -25,6 +25,7 @@ defmodule FeudHall.Domain.Hall.Decider do
     Management,
     OperatingPolicy,
     Progression,
+    Rooms,
     Settlement,
     SimulationUpgrade
   }
@@ -111,6 +112,9 @@ defmodule FeudHall.Domain.Hall.Decider do
       not Map.has_key?(state.layout, p.stall_id) ->
         {:error, :unknown_slot}
 
+      not Rooms.open?(state, p.stall_id) ->
+        {:error, :room_closed}
+
       Map.has_key?(state.stalls, p.stall_id) ->
         {:error, :stall_taken}
 
@@ -122,7 +126,12 @@ defmodule FeudHall.Domain.Hall.Decider do
 
       true ->
         events = create_restaurant_events(state, p, kind, owner, starter)
-        {:ok, events ++ Management.lease_events(state, p.stall_id, p.restaurant_id, kind, owner)}
+
+        {:ok,
+         Management.with_vacancies(
+           state,
+           events ++ Management.lease_events(state, p.stall_id, p.restaurant_id, kind, owner)
+         )}
     end
   end
 

@@ -2,7 +2,7 @@ defmodule FeudHall.Domain.Hall.Progression do
   @moduledoc "Venture and location transitions owned by the managed hall."
 
   alias FeudHall.Domain.{Market, Money}
-  alias FeudHall.Domain.Hall.{CounterPlay, Equipment, Evolver, Management, Population, Recognition, Settlement}
+  alias FeudHall.Domain.Hall.{CounterPlay, Equipment, Evolver, Management, Population, Recognition, Rooms, Settlement}
 
   @commands [
     :lease_location,
@@ -85,6 +85,9 @@ defmodule FeudHall.Domain.Hall.Progression do
       length(leased) >= state.catalog.rules.progression.stall_limit ->
         {:error, :stall_limit}
 
+      not reserved and Map.has_key?(state.layout, sid) and not Rooms.open?(state, sid) ->
+        {:error, :room_closed}
+
       not is_map(quote) or Map.has_key?(state.stalls, sid) ->
         {:error, :slot_unavailable}
 
@@ -108,7 +111,7 @@ defmodule FeudHall.Domain.Hall.Progression do
 
         lease = Management.lease_event(state, quote, id, restaurant.owner_kind, if(reserved, do: owner))
 
-        {:ok, [added, lease | starter_menu(restaurant, starter)]}
+        {:ok, Management.with_vacancies(state, [added, lease | starter_menu(restaurant, starter)])}
     end
   end
 

@@ -12,6 +12,7 @@ defmodule FeudHall.Application.Management do
     Population,
     Progression,
     Recognition,
+    Rooms,
     Staff
   }
 
@@ -284,10 +285,12 @@ defmodule FeudHall.Application.Management do
   end
 
   defp available_slots(state) do
+    summary = Rooms.summary(state)
+
     state.layout
     |> Map.keys()
     |> Enum.sort()
-    |> Enum.map(&HallManagement.lease_quote(state, &1))
+    |> Enum.map(&HallManagement.lease_quote(state, &1, summary))
     |> Enum.reject(&is_nil/1)
     |> Enum.map(&encode_lease/1)
   end

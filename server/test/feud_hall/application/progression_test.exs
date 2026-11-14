@@ -396,7 +396,7 @@ defmodule FeudHall.Application.ProgressionTest do
       end)
 
     npcs = [
-      {"budget", "s020", "levantine"},
+      {"budget", "s014", "levantine"},
       {"mainstream", "s041", "tamil"},
       {"premium", "s140", "mughlai_punjabi"}
     ]
@@ -441,7 +441,7 @@ defmodule FeudHall.Application.ProgressionTest do
     assert length(Demand.operating(dormant)) == 2
     assert dormant.owners[{:npc, "budget"}] == "npc-budget"
     assert dormant.restaurants["npc-budget"].ledger.capital == 500_000
-    refute Map.has_key?(dormant.stalls, "s020")
+    refute Map.has_key?(dormant.stalls, "s014")
 
     short = Population.observe(dormant, Clock.service_duration(600_000), Demand.operating(dormant))
     restoration = Population.evaluate(short)

@@ -23,7 +23,13 @@ defmodule FeudHall.Domain.Hall.Rooms do
           rent: integer(),
           holding: integer()
         }
-  @type summary :: %{open: non_neg_integer(), count: non_neg_integer(), classes: %{tier => class_quote}}
+  @type spot :: %{room: pos_integer() | nil, position: non_neg_integer() | nil}
+  @type summary :: %{
+          open: non_neg_integer(),
+          count: non_neg_integer(),
+          classes: %{tier => class_quote},
+          spots: %{String.t() => spot}
+        }
 
   @doc "True when the pinned catalog carries a room rule."
   @spec enabled?(map()) :: boolean()
@@ -35,22 +41,26 @@ defmodule FeudHall.Domain.Hall.Rooms do
     Enum.find_value(state.catalog.layout, fn entry -> entry.slot_id == slot_id && Map.get(entry, :room) end)
   end
 
-  @doc "Open rooms and the current quote of every class, from committed state."
+  @doc """
+  Open rooms, the current quote of every class, and each spot's room and
+  position (nil without room data), from committed state.
+  """
   @spec summary(map()) :: summary()
   def summary(state) do
     layout = state.catalog.layout
     rates = lease_rates(state)
+    spots = Map.new(layout, &{&1.slot_id, %{room: Map.get(&1, :room), position: Map.get(&1, :position)}})
 
     case rule(state) do
       nil ->
         classes = classes(layout, state, rates, nil, nil)
-        %{open: 0, count: 0, classes: classes}
+        %{open: 0, count: 0, classes: classes, spots: spots}
 
       rooms_rule ->
         count = rooms_rule.count
         open = open_rooms(state, layout, count)
         classes = classes(layout, state, rates, rooms_rule, open)
-        %{open: open, count: count, classes: classes}
+        %{open: open, count: count, classes: classes, spots: spots}
     end
   end
 
@@ -62,7 +72,7 @@ defmodule FeudHall.Domain.Hall.Rooms do
   def open?(state, slot_id, summary \\ nil) do
     if enabled?(state) do
       summary = summary || summary(state)
-      (room(state, slot_id) || 0) <= summary.open
+      (get_in(summary.spots, [slot_id, :room]) || 0) <= summary.open
     else
       true
     end

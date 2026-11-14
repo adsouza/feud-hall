@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.Hall.Management do
   @moduledoc "Managed leases, staffing windows, attendance and counter-helper coverage."
   alias FeudHall.Domain.{Clock, Kitchen, Money}
-  alias FeudHall.Domain.Hall.{CounterPlay, Evolver, OperatingPolicy, Population, Progression, Staff}
+  alias FeudHall.Domain.Hall.{CounterPlay, Evolver, OperatingPolicy, Population, Progression, Rooms, Staff}
 
   @shift_max Clock.service_duration(10 * 60 * 1_000)
   @shift_default Clock.service_duration(5 * 60 * 1_000)
@@ -10,6 +10,8 @@ defmodule FeudHall.Domain.Hall.Management do
   @draft_window Clock.service_duration(10 * 60 * 1_000)
   @attendance_window Clock.service_duration(20_000)
   @transfer_window Clock.service_duration(60 * 60 * 1_000)
+  # Quote fields for display only; reservation and lease events never store them.
+  @quote_extras [:base_rent, :class_leased, :class_total, :room, :position]
 
   def commands do
     [
@@ -297,24 +299,46 @@ defmodule FeudHall.Domain.Hall.Management do
     }
   end
 
-  def lease_quote(state, sid) do
+  @doc """
+  The terms a free spot is offered at now, or nil when it cannot be offered
+  (unknown, leased, reserved, or in a closed room). `rent` and `holding` are
+  the class's current quote. Pass a `Rooms.summary/1` of the same state to
+  quote many spots without recomputing it.
+  """
+  def lease_quote(state, sid, summary \\ nil) do
     tier = state.layout[sid]
 
     if enabled?(state) and not is_nil(tier) and not Map.has_key?(state.stalls, sid) and not reserved?(state, sid) do
-      [rent, holding] = state.management.rules.lease_rates[tier]
+      summary = summary || Rooms.summary(state)
 
-      %{
-        stall_id: sid,
-        tier: tier,
-        rent: rent,
-        holding: holding,
-        setup_fee: state.management.rules.setup_fee,
-        exposure: state.catalog.rules.exposure_permille[tier]
-      }
+      if Rooms.open?(state, sid, summary) do
+        class = Rooms.quote(summary, tier)
+        spot = Map.get(summary.spots, sid, %{room: nil, position: nil})
+
+        %{
+          stall_id: sid,
+          tier: tier,
+          rent: class.rent,
+          holding: class.holding,
+          setup_fee: state.management.rules.setup_fee,
+          exposure: state.catalog.rules.exposure_permille[tier],
+          base_rent: class.base_rent,
+          class_leased: class.leased,
+          class_total: class.total,
+          room: spot.room,
+          position: spot.position
+        }
+      end
     end
   end
 
   def reserved?(state, sid), do: get_in(state, [:management, :draft_by_stall, sid]) != nil
+
+  @doc "The layout a computer-run owner may choose from: unreserved spots in open rooms."
+  def npc_layout(state) do
+    summary = Rooms.summary(state)
+    Map.filter(state.layout, fn {sid, _} -> not reserved?(state, sid) and Rooms.open?(state, sid, summary) end)
+  end
 
   def allow_lease(state, sid, kind, owner) do
     cond do
@@ -337,7 +361,12 @@ defmodule FeudHall.Domain.Hall.Management do
   end
 
   defp draft(quote, id, now),
-    do: Map.merge(quote, %{type: :stall_draft_reserved, principal: id, expires_at: now + @draft_window})
+    do:
+      Map.merge(Map.drop(quote, @quote_extras), %{
+        type: :stall_draft_reserved,
+        principal: id,
+        expires_at: now + @draft_window
+      })
 
   def release_draft(state, id, reason) do
     case state.management.drafts[id] do
@@ -351,6 +380,17 @@ defmodule FeudHall.Domain.Hall.Management do
   end
 
   def vacancy_events(state), do: offer_waitlist(state)
+
+  @doc """
+  Appends waiting-list offers to a batch that leases a spot, evaluated on the
+  state after the batch: a lease can open a room. Unmanaged halls and halls
+  without the room rule are unchanged, since a lease there frees nothing.
+  """
+  def with_vacancies(state, events) do
+    if enabled?(state) and Rooms.enabled?(state),
+      do: events ++ vacancy_events(Enum.reduce(events, state, &Evolver.evolve(&2, &1))),
+      else: events
+  end
 
   defp first_location?(state, id) do
     case state.owners[{:principal, id}] do
@@ -366,10 +406,14 @@ defmodule FeudHall.Domain.Hall.Management do
     state.management.waitlist
     |> Enum.sort_by(fn {_, entry} -> entry.priority end)
     |> Enum.reduce({[], state}, fn {id, entry}, {events, current} ->
+      # Drafts change neither rents nor which rooms are open (a draft lies in an
+      # open room), so one summary serves this owner's search.
+      summary = Rooms.summary(current)
+
       available =
         current.layout
         |> Enum.sort()
-        |> Enum.find_value(fn {sid, tier} -> if tier in entry.tiers, do: lease_quote(current, sid) end)
+        |> Enum.find_value(fn {sid, tier} -> if tier in entry.tiers, do: lease_quote(current, sid, summary) end)
 
       if available && not Map.has_key?(current.management.drafts, id) do
         event = draft(available, id, current.now)
@@ -397,7 +441,7 @@ defmodule FeudHall.Domain.Hall.Management do
   def lease_event(state, quote, rid, kind, principal) do
     {start, finish} = starter_schedule(state.now)
 
-    Map.merge(Map.drop(quote, [:expires_at]), %{
+    Map.merge(Map.drop(quote, [:expires_at | @quote_extras]), %{
       type: :stall_leased,
       restaurant_id: rid,
       start_hour: start,

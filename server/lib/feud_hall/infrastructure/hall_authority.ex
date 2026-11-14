@@ -565,7 +565,7 @@ defmodule FeudHall.Infrastructure.HallAuthority do
 
     with {:ok, slot} when slot != nil <-
            guarded(fn ->
-             layout = Map.reject(hall.layout, fn {sid, _} -> FeudHall.Domain.Hall.Management.reserved?(hall, sid) end)
+             layout = FeudHall.Domain.Hall.Management.npc_layout(hall)
              Planner.choose_slot(PublicView.build(hall), layout, profile)
            end),
          {:ok, cuisine} <- starter do
