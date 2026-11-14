@@ -19,7 +19,8 @@ The owner was away, so the desktop app's browser pane was hidden. A hidden pane
 throttles animation (a trial there delivered 3 frames per second with 69% late
 frames), so it is not valid evidence. The runs below used Playwright's Chromium
 with hardware rendering and background throttling switched off, which does not
-depend on a visible window:
+depend on a visible window. The driver is a short Playwright script kept
+outside the repository; it opens each bench URL with these launch options:
 
 - `channel: "chromium"`, `headless: true`;
 - `--use-angle=metal --enable-gpu --ignore-gpu-blocklist`;
@@ -38,8 +39,12 @@ submit. GPU cost shows through `fps` and `lateShare`.
 ## Before: capsule figures
 
 150 stalls, 20 seconds per run after a 2-second warm-up, second run of each kept.
-Every stall is open with 9 workers, 4 queued diners and one diner walking off
-with a tray each second.
+Every stall is open with 9 workers and 4 queued diners, and one diner per stall
+walks off with a tray each second. What was drawn: the bench leaves the camera
+at the overview, where no stall is within the detail distance, so at both
+`detail` values every stall was drawn at reduced detail (one owner, one worker
+and one queued diner each, about 450 simple figures), plus one full-detail
+walker per stall each second.
 
 | detail | frames | fps   | lateShare | meanDrawMs | p95DrawMs |
 | ------ | ------ | ----- | --------- | ---------- | --------- |
@@ -53,7 +58,10 @@ and 5.22 ms mean at `detail=1`, with no late frames.
 
 Commit measured: 5cf0ba7. Same machine, browser, method and URLs as above: 150
 stalls, 20 seconds per run after a 2-second warm-up, each URL run twice and the
-second run kept.
+second run kept. What was drawn is the same as in "Before": at the overview
+camera, every stall at reduced detail (one owner, one worker and one queued
+diner each, about 450 simple figures), plus one full-detail walker per stall
+each second.
 
 | detail | frames | fps   | lateShare | meanDrawMs | p95DrawMs |
 | ------ | ------ | ----- | --------- | ---------- | --------- |
@@ -74,7 +82,7 @@ against a 32 ms frame interval.
 
 No simplification was applied.
 
-What was measured:
+What changed along the way:
 
 - Fading walkers use a depth pre-pass, not alpha hashing. The first
   implementation used alpha hashing as the plan proposed; on GPU hardware a
@@ -86,6 +94,20 @@ What was measured:
 - Instance buffers are uploaded only for the slots in use each frame. An earlier
   version re-uploaded every buffer in full each frame (about 5.8 MB), which was
   slow enough under software rendering to make an existing walking test fail.
+
+## After: rounded figures, among the stalls
+
+`near=1` starts the camera low among the stalls, so the stalls within the detail
+distance are drawn in full at `detail=1`; `near=1&detail=1` is the densest view.
+No "before" exists for this view: the bench gained the option after the capsule
+figures were replaced. One run each of `stalls=150&near=1&detail=1&seconds=20`
+and `stalls=150&near=1&detail=0&seconds=20`: 150 stalls, 20 seconds after a
+2-second warm-up.
+
+| detail | people           | frames           | fps              | lateShare        | meanDrawMs       | p95DrawMs        |
+| ------ | ---------------- | ---------------- | ---------------- | ---------------- | ---------------- | ---------------- |
+| 1      | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) |
+| 0      | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) | TBD (controller) |
 
 Limits of this evidence: one workstation (Apple M4) with a capable GPU. Weaker
 integrated GPUs are not covered, and the game design's reference machine is

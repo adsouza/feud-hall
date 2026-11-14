@@ -498,13 +498,24 @@ reports frame delivery. From `app/`, run
 `NODE_OPTIONS=--max-old-space-size=1536 bun run dev -- --port 5199`, then open
 `http://localhost:5199/bench.html?stalls=150&detail=0&seconds=20` and the same
 URL with `detail=1` in a GPU-backed browser window that stays visible and
-focused for the whole run (a hidden tab stops the scene drawing). Each page
-ends by showing a `[data-bench-result]` element holding JSON with `stalls`,
-`detail`, `seconds`, `frames`, `fps`, `lateShare` (share of intervals between
-consecutive frames longer than 40 ms), `meanDrawMs`, `p95DrawMs`, and
-`renderer`. Every second the bench gives each stall a new last-served order, so
-one diner per stall walks off with a tray and the scene keeps animating in both
-detail modes. It discards a 2-second warm-up and then measures for `seconds`.
+focused for the whole run (a hidden tab stops the scene drawing). Add `near=1`
+(default `0`) to start the camera low among the stalls, at `(0, 10, 12)` looking
+at `(0, 1, 0)`, instead of at the whole-hall overview. Each page ends by showing
+a `[data-bench-result]` element holding JSON with `stalls`, `detail`, `near`,
+`seconds`, `frames`, `fps`, `lateShare` (share of intervals between consecutive
+frames longer than 40 ms), `meanDrawMs`, `p95DrawMs`, `people` (the most people
+the scene drew in one measured frame, read from the hall's `data-hall-people`
+attribute), and `renderer`. Every second the bench gives each stall a new
+last-served order, so one diner per stall walks off with a tray and the scene
+keeps animating in both detail modes. It discards a 2-second warm-up and then
+measures for `seconds`. The scene draws a stall in full only when it is
+inspected or, with `detail=1`, within 28 units of the camera. At the overview
+camera no stall is that close, so `detail=0` and `detail=1` draw the same
+reduced-detail figures (one owner, one worker and one queued diner per stall)
+plus the walkers; `near=1&detail=1` is the densest view. The bench always runs
+with motion on, but `detail=0` with motion on cannot occur in the app, which
+turns motion off whenever it reduces detail; the bench's `detail=0` runs are a
+harder case than the app produces.
 `meanDrawMs` and `p95DrawMs` are CPU-side `draw()` time including the render
 submit, not GPU time; GPU cost shows up through `fps` and `lateShare`. Run each
 URL twice and keep the second.
