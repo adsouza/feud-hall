@@ -134,7 +134,8 @@ export const FIGURE = {
   kneeBend: 0.9,
   armSwing: 0.5,
   bob: 0.015,
-  // Parts the brief leaves unplaced.
+  // Where the skirt and apron hang, and how far forward of the ankle a foot's
+  // centre sits.
   skirtY: 0.45,
   apronY: 0.56,
   apronZ: 0.09,
@@ -153,7 +154,8 @@ export const FIGURE = {
   apronW: 0.2,
   apronH: 0.32,
   apronT: 0.012,
-  // Flatter than the brief's 0.045: the foot centre stands 0.02 above the floor.
+  // The foot's half-height must not exceed the ankle's height above the floor
+  // (hipY - thighLen - shinLen = 0.02 standing), or it sinks through the floor.
   footW: 0.075,
   footH: 0.036,
   footLen: 0.15,

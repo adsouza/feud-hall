@@ -27,7 +27,7 @@ import {
   type Look,
   type Pose,
 } from "./people";
-import { createPeople } from "./people-mesh";
+import { createFaceTexture, createPeople } from "./people-mesh";
 
 type Point = [number, number, number];
 type CameraPose = {
@@ -195,36 +195,6 @@ function shutterTexture(label: string) {
     ctx.globalAlpha = grain() * 0.24;
     ctx.fillRect(grain() * width, grain() * height, 0.6 + grain() * 2.3, 1);
   }
-
-  const texture = new T.CanvasTexture(canvas);
-  texture.colorSpace = T.SRGBColorSpace;
-  return texture;
-}
-
-function faceTexture() {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 128;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-
-  // The front of a Three.js sphere (+Z) is at u = 0.25.
-  const center = canvas.width / 4;
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#352720";
-  for (const offset of [-11, 11]) {
-    ctx.beginPath();
-    ctx.ellipse(center + offset, 59, 3.3, 4.2, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.beginPath();
-  ctx.moveTo(center - 7.5, 69);
-  ctx.quadraticCurveTo(center, 76, center + 7.5, 69);
-  ctx.strokeStyle = "#74413d";
-  ctx.lineWidth = 3;
-  ctx.lineCap = "round";
-  ctx.stroke();
 
   const texture = new T.CanvasTexture(canvas);
   texture.colorSpace = T.SRGBColorSpace;
@@ -753,7 +723,7 @@ export function createHallScene(
     counter.placard.material.dispose();
   }
 
-  const faces = faceTexture();
+  const faces = createFaceTexture();
   // Walkers are the only people who fade.
   const people = createPeople(
     ACTOR_LIMIT + QUEUE_LIMIT * 2,
@@ -805,13 +775,13 @@ export function createHallScene(
     }),
     STALL_LIMIT * 2,
   );
-  const animatedMeshes = [steam, carriedTrays, ...people.meshes];
-  for (const mesh of animatedMeshes) {
+  // The people meshes come from createPeople already set up for this.
+  for (const mesh of [steam, carriedTrays]) {
     mesh.frustumCulled = false;
     mesh.count = 0;
     mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
-    scene.add(mesh);
   }
+  scene.add(steam, carriedTrays, ...people.meshes);
   const dummy = new T.Object3D();
   const figure: Pose = {
     x: 0,

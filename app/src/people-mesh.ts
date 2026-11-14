@@ -108,6 +108,38 @@ const SHAPES: Record<
   },
 };
 
+// The painted face for the head batches: two eyes and a smile on white, so
+// the instance colour tints the skin. Touches `document` only when called.
+export function createFaceTexture(): T.CanvasTexture | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // The front of a Three.js sphere (+Z) is at u = 0.25.
+  const center = canvas.width / 4;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#352720";
+  for (const offset of [-11, 11]) {
+    ctx.beginPath();
+    ctx.ellipse(center + offset, 59, 3.3, 4.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.moveTo(center - 7.5, 69);
+  ctx.quadraticCurveTo(center, 76, center + 7.5, 69);
+  ctx.strokeStyle = "#74413d";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.stroke();
+
+  const texture = new T.CanvasTexture(canvas);
+  texture.colorSpace = T.SRGBColorSpace;
+  return texture;
+}
+
 const SCRATCH = new T.Color();
 
 // One instanced batch per part kind. A fading batch also has a depth-only

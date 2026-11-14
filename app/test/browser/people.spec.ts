@@ -181,6 +181,48 @@ test("people: a full figure has every part once per side", () => {
   expect(count(parts(personLook(3, "owner")), "apron")).toBe(1);
 });
 
+test("people: each part takes its colour from the look", () => {
+  const looks = [
+    lookWith({ skirt: false, shortSleeves: false, hairStyle: "short" }),
+    lookWith({ skirt: true, shortSleeves: true, hairStyle: "long" }),
+    lookWith({ skirt: false, shortSleeves: true, hairStyle: "bun" }),
+    lookWith({ skirt: true, shortSleeves: false, hairStyle: "cap" }),
+    lookWith({ hairStyle: "cap", skirt: false }, "owner"),
+    lookWith({ hairStyle: "short", skirt: true }, "worker"),
+  ];
+  for (const look of looks) {
+    const want: Record<PartKind, number> = {
+      torso: look.shirt,
+      upperArm: look.shirt,
+      skirt: look.shirt,
+      forearm: look.shortSleeves ? look.skin : look.shirt,
+      upperLeg: look.skirt ? look.skin : look.trousers,
+      lowerLeg: look.skirt ? look.skin : look.trousers,
+      head: look.skin,
+      neck: look.skin,
+      hand: look.skin,
+      hairCap: look.hairStyle === "cap" ? look.hat : look.hair,
+      hairLong: look.hair,
+      hairBun: look.hair,
+      hairBrim: look.hat,
+      apron: 0xf3e6d0,
+      foot: 0x2b2623,
+    };
+    const list = parts(look);
+    expect(list.length).toBeGreaterThan(0);
+    for (const part of list)
+      expect(part.colour, part.kind).toBe(want[part.kind]);
+    // The simple figure keeps the same colour rules for the parts it draws.
+    for (const part of parts(look, stand, "simple"))
+      expect(part.colour, part.kind).toBe(want[part.kind]);
+  }
+  // The skirt, apron and every hair style above were all drawn and checked.
+  const kinds = new Set(
+    looks.flatMap((look) => parts(look).map((p) => p.kind)),
+  );
+  expect([...kinds].sort()).toEqual([...PART_KINDS].sort());
+});
+
 test("people: a simple figure keeps the silhouette and the owner's apron", () => {
   const simple = parts(
     lookWith({ hairStyle: "bun", skirt: false }, "owner"),
@@ -308,6 +350,25 @@ test("people: every pose is finite, and no look is wider than the stated span", 
   const reach = FIGURE.handR * widest.height * widest.width;
   const span = right.at.x - left.at.x + 2 * reach;
   expect(span).toBeGreaterThanOrEqual(0.95 * FIGURE_MAX_SPAN);
+  expect(span).toBeLessThanOrEqual(FIGURE_MAX_SPAN + 1e-9);
+});
+
+test("people: every limb hangs down from its joint", () => {
+  const people = createPeople(1, null);
+  for (const [kind, radius] of [
+    ["upperLeg", FIGURE.thighR],
+    ["lowerLeg", FIGURE.shinR],
+    ["upperArm", FIGURE.upperArmR],
+    ["forearm", FIGURE.forearmR],
+  ] as const) {
+    const geometry = people.mesh(kind).geometry;
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox as T.Box3;
+    // The joint is the origin: the limb's top is there, its bottom below.
+    expect(box.max.y, kind).toBeLessThanOrEqual(radius + 1e-9);
+    expect(box.max.y, kind).toBeGreaterThanOrEqual(-1e-9);
+    expect(box.min.y, kind).toBeLessThan(-0.05);
+  }
 });
 
 test("people: each person fills one batch slot per part, and a frame starts empty", () => {
