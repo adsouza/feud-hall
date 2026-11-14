@@ -10,6 +10,7 @@
   import { splitTabletMessage } from "./tablet-text";
   import { servedTrays } from "./diner-pickup";
   import { assignSpots } from "./room-layout";
+  import { rentExplanation } from "./rent";
   import type { TabletView, TabletAction, TabletRow } from "./hall-tablet";
   import {
     ApiError,
@@ -31,6 +32,7 @@
     Page,
     Pending,
     Quote,
+    Slot,
     Stall,
     View,
   } from "./api";
@@ -387,6 +389,8 @@
   let chosenSlot = $state("");
   let ownerStallId = $state("");
   let expansionStallId = $state("");
+  let expansionOpen = $state(false);
+  let expansionDetails = $state<HTMLDetailsElement>();
   let expansionCuisine = $state("");
   let refitCuisine = $state("");
   let stallId = $state("");
@@ -445,6 +449,11 @@
   );
   /** The vacant spot being viewed; exclusive with a selected stall. */
   let hallVacancy = $state("");
+  /** A viewed spot that someone else took while its panel was open. */
+  let spotTaken = $state("");
+  let viewedSpot = $derived(
+    view?.hall.vacancies?.find((vacancy) => vacancy.stall_id === hallVacancy),
+  );
   /**
    * Stalls and vacant spots of each open room, for halls with the room rule;
    * stalls without room data take the scene's fallback rooms.
@@ -469,7 +478,16 @@
     t("hallRoom").replace("{n}", String(room));
   function viewSpot(id: string) {
     hallSelection = "";
+    spotTaken = "";
     hallVacancy = id;
+    // The panel lives in the inspector, which the immersive view hides.
+    immersiveHall = false;
+    if (phone) navigate("hall", true, businessSection, "");
+  }
+  function closeSpot() {
+    hallVacancy = "";
+    spotTaken = "";
+    if (phone && phoneDetail) backToHall();
   }
   let recentPickup = $derived.by(() => {
     const newest = receipts?.receipts[0];
@@ -525,6 +543,9 @@
     profile?.draft ??
       profile?.slots.find((slot) => slot.stall_id === expansionStallId),
   );
+  let expansionRentLine = $derived.by(() =>
+    expansionSlot ? rentLine(expansionSlot) : "",
+  );
   let expansionEstimate = $derived.by(() => {
     const forecast = view?.hall.lease_forecast;
     if (!forecast || !expansionSlot || !expansionCuisine) return null;
@@ -568,6 +589,57 @@
     profile?.draft ??
       profile?.slots.find((slot) => slot.stall_id === chosenSlot),
   );
+  /** What the viewer can do with the viewed spot, or why they cannot. */
+  let spotOffer = $derived.by(
+    (): { action: "reserve" | "lease" } | { reason: string } | null => {
+      if (!hallVacancy) return null;
+      if (!profile) return { reason: t("guestHint") };
+      if (!profile.account["owner?"]) return { reason: t("needsLicense") };
+      if (
+        restaurant &&
+        (!restaurant.stall_limit ||
+          restaurant.stalls.length >= restaurant.stall_limit)
+      )
+        return { reason: t("noMoreLocations") };
+      if (restaurant?.distress_deadline != null)
+        return { reason: refusalMessage(locale, "business_distressed") };
+      if (
+        profile.draft ||
+        !profile.slots.some((slot) => slot.stall_id === hallVacancy)
+      )
+        return { reason: refusalMessage(locale, "slot_unavailable") };
+      return { action: restaurant ? "lease" : "reserve" };
+    },
+  );
+  function submitFirstBusiness() {
+    if (!selectedSlot) return;
+    if (!profile?.draft)
+      void submit("reserve_stall", { stall_id: selectedSlot.stall_id });
+    else
+      void submit("create_restaurant", {
+        restaurant_id: crypto.randomUUID(),
+        stall_id: selectedSlot.stall_id,
+        name: restaurantName,
+        cuisine: chosenCuisine,
+      });
+  }
+  /** Choose the viewed spot in the existing location form and use it. */
+  function takeSpot(offer: "reserve" | "lease", id: string) {
+    hallVacancy = "";
+    if (offer === "reserve") {
+      chosenSlot = id;
+      navigate("business");
+      submitFirstBusiness();
+    } else {
+      expansionStallId = id;
+      expansionOpen = true;
+      navigate("business", false, "locations");
+      void tick().then(() => {
+        expansionDetails?.scrollIntoView({ block: "nearest" });
+        expansionDetails?.querySelector("select")?.focus();
+      });
+    }
+  }
   let selectedShift = $derived(profile?.work.active ?? null);
   let selectedHandover = $derived.by(() => {
     const shift = selectedShift;
@@ -599,6 +671,13 @@
 
   const t = (key: Key) => label(locale, key);
   const title = (id: string) => contentLabel(locale, id);
+  const rentLine = (slot: Slot & { expires_at?: number }) =>
+    rentExplanation(slot, {
+      t,
+      tier: (tier) => title(tier).toLowerCase(),
+      cash,
+      clock,
+    });
 
   function reopeningTime(stall: Stall) {
     const at = stall.reopens_at;
@@ -991,15 +1070,25 @@
   });
 
   $effect(() => {
-    if (hallSelection) hallVacancy = "";
+    if (hallSelection) {
+      hallVacancy = "";
+      spotTaken = "";
+    }
   });
 
   $effect(() => {
     if (
       hallVacancy &&
       !view?.hall.vacancies?.some((vacancy) => vacancy.stall_id === hallVacancy)
-    )
+    ) {
+      // Keep the panel open to say so, unless the viewer took it.
+      if (
+        profile?.draft?.stall_id !== hallVacancy &&
+        !restaurant?.stalls.some((stall) => stall.id === hallVacancy)
+      )
+        spotTaken = hallVacancy;
       hallVacancy = "";
+    }
   });
 
   $effect(() => {
@@ -2299,6 +2388,56 @@
           >{/each}
       {/if}
     {/snippet}
+    {#snippet spotPanel()}
+      <div class="spot-panel-live" aria-live="polite">
+        {#if hallVacancy || spotTaken}
+          <section class="spot-panel" aria-labelledby="spot-panel-title">
+            <div class="spot-panel-heading">
+              <h2 id="spot-panel-title" class="desktop-only">
+                {t("spotPanelTitle")}
+              </h2>
+              <button type="button" onclick={closeSpot}>{t("closeSpot")}</button
+              >
+            </div>
+            {#if viewedSpot}
+              {@const spot = viewedSpot}
+              {@const line = rentLine(spot)}
+              <p class="eyebrow">
+                {spot.stall_id}{spot.room
+                  ? " · " + hallRoomLabel(spot.room)
+                  : ""}
+              </p>
+              <p>
+                {title(spot.tier)} · {t("exposure")}
+                {spot.exposure / 1000}×
+              </p>
+              <p class="spot-rent">{t("rent")} {cash(spot.rent)}</p>
+              {#if line}<p class="rent-explanation">{line}</p>{/if}
+              <p>
+                {t("holding")}
+                {cash(spot.holding)} · {t("setupFee")}
+                {cash(spot.setup_fee)}
+              </p>
+              {#if spotOffer && "action" in spotOffer}
+                {@const offer = spotOffer.action}
+                <button
+                  {disabled}
+                  onclick={() => takeSpot(offer, spot.stall_id)}
+                  >{t(
+                    offer === "reserve" ? "reserveThisSpot" : "leaseThisSpot",
+                  )}</button
+                >
+              {:else if spotOffer}
+                <p>{spotOffer.reason}</p>
+              {/if}
+            {:else}
+              <p class="eyebrow">{spotTaken}</p>
+              <p>{refusalMessage(locale, "slot_unavailable")}</p>
+            {/if}
+          </section>
+        {/if}
+      </div>
+    {/snippet}
     <div class:phone-section-hidden={phoneDetail}>
       <h1>{t("hall")}</h1>
       {#if !profile}<p>
@@ -2359,7 +2498,10 @@
           class:phone-section-hidden={!phoneDetail}
         >
           <button onclick={backToHall}>{t("backToHall")}</button>
-          <h1>{hallStall?.name ?? t("stallDetails")}</h1>
+          <h1>
+            {hallStall?.name ??
+              t(hallVacancy || spotTaken ? "spotPanelTitle" : "stallDetails")}
+          </h1>
         </div>
         {#if hallMode === "3d" && !(phone && phoneDetail)}
           <div class="hall-scene-pane">
@@ -2446,9 +2588,10 @@
                     : inspect(hallSelection)}>{t("orderHere")}</button
               >
             {/if}
-          {:else}
+          {:else if !hallVacancy && !spotTaken}
             <p>{t("chooseStallToInspect")}</p>
           {/if}
+          {@render spotPanel()}
           {#if hallStall}
             <div class="actions" role="group" aria-label={t("hallActions")}>
               {#each ["menu", "counter", "staff", ...(ownStall(hallStall) ? ["supply"] : [])] as target}
@@ -2512,6 +2655,7 @@
       </article>
     {/snippet}
     {#if !view.hall.visitor_play || hallMode === "list"}
+      {#if !view.hall.visitor_play}{@render spotPanel()}{/if}
       {#if hallGroups}
         <div class:phone-section-hidden={phoneDetail}>
           {#each hallGroups as group (group.room)}
@@ -2531,6 +2675,7 @@
                   {@render stallCard(stall, "h3")}
                 {/each}
                 {#each group.vacancies as spot (spot.stall_id)}
+                  {@const line = rentLine(spot)}
                   <article
                     class="stall vacancy"
                     aria-current={hallVacancy === spot.stall_id
@@ -2539,8 +2684,14 @@
                   >
                     <p class="eyebrow">{spot.stall_id} · {title(spot.tier)}</p>
                     <h3>{t("toLet")}</h3>
-                    <p>{t("rent")} {cash(spot.rent)}</p>
-                    <button onclick={() => viewSpot(spot.stall_id)}
+                    <p class="spot-rent">{t("rent")} {cash(spot.rent)}</p>
+                    {#if line}<p class="rent-explanation">{line}</p>{/if}
+                    <button
+                      aria-label={t("viewSpotNamed").replace(
+                        "{id}",
+                        spot.stall_id,
+                      )}
+                      onclick={() => viewSpot(spot.stall_id)}
                       >{t("viewSpot")}</button
                     >
                   </article>
@@ -2583,16 +2734,7 @@
       <form
         onsubmit={(e) => {
           e.preventDefault();
-          if (!selectedSlot) return;
-          if (!profile?.draft)
-            void submit("reserve_stall", { stall_id: selectedSlot.stall_id });
-          else
-            void submit("create_restaurant", {
-              restaurant_id: crypto.randomUUID(),
-              stall_id: selectedSlot.stall_id,
-              name: restaurantName,
-              cuisine: chosenCuisine,
-            });
+          submitFirstBusiness();
         }}
       >
         {#if profile.draft}
@@ -2626,13 +2768,17 @@
             ></label
           >
         {/if}
-        {#if selectedSlot}<p>
+        {#if selectedSlot}
+          {@const line = rentLine(selectedSlot)}
+          <p>
             {selectedSlot.stall_id} · {t("exposure")}
             {selectedSlot.exposure / 1000}× · {t("rent")}
             {cash(selectedSlot.rent)} · {t("holding")}
             {cash(selectedSlot.holding)} · {t("setupFee")}
             {cash(selectedSlot.setup_fee)}
-          </p>{/if}
+          </p>
+          {#if line}<p class="rent-explanation">{line}</p>{/if}
+        {/if}
         <button disabled={disabled || !selectedSlot}
           >{t(profile.draft ? "confirmLease" : "reserveLease")}</button
         >
@@ -2847,7 +2993,7 @@
           {#if restaurant.stalls.length >= restaurant.stall_limit}
             <p>{t("noMoreLocations")}</p>
           {:else if profile.draft || profile.slots.length}
-            <details>
+            <details bind:open={expansionOpen} bind:this={expansionDetails}>
               <summary
                 >{t(
                   restaurant.stalls.length
@@ -2891,6 +3037,10 @@
                     {t("setupFee")}
                     {cash(expansionSlot.setup_fee)}
                   </p>
+                  <!-- With an estimate, the line explains the estimate's rent instead. -->
+                  {#if !expansionEstimate && expansionRentLine}
+                    <p class="rent-explanation">{expansionRentLine}</p>
+                  {/if}
                 {/if}
                 <CuisinePicker
                   cuisines={view.hall.cuisines}
@@ -2900,20 +3050,25 @@
                   {title}
                 />
                 {#if expansionEstimate}
-                  <p>
-                    {t("dailyOverheadEstimate")}
-                    {cash(expansionEstimate.overhead)}
-                  </p>
-                  {#if expansionEstimate.meals}
+                  <div class="lease-estimate">
                     <p>
-                      {t("breakEvenMeals").replace(
-                        "{meals}",
-                        expansionEstimate.meals,
-                      )}
+                      {t("dailyOverheadEstimate")}
+                      {cash(expansionEstimate.overhead)}
                     </p>
-                  {:else}
-                    <p>{t("noStarterMargin")}</p>
-                  {/if}
+                    {#if expansionRentLine}
+                      <p class="rent-explanation">{expansionRentLine}</p>
+                    {/if}
+                    {#if expansionEstimate.meals}
+                      <p>
+                        {t("breakEvenMeals").replace(
+                          "{meals}",
+                          expansionEstimate.meals,
+                        )}
+                      </p>
+                    {:else}
+                      <p>{t("noStarterMargin")}</p>
+                    {/if}
+                  </div>
                 {/if}
                 <button
                   disabled={disabled || !expansionSlot || !expansionCuisine}

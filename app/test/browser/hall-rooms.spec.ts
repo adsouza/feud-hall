@@ -1,6 +1,7 @@
 import * as T from "three";
 import type { Page } from "@playwright/test";
 import type { Stall, Vacancy, View } from "../../src/api";
+import { cash, clock } from "../../src/api";
 import { ROOM_SIDE, positionKind, roomCentre } from "../../src/room-layout";
 import { createGuest, test, expect, state } from "./hall";
 
@@ -874,4 +875,267 @@ test("a personal tray in a room that is not drawn cannot be taken", async ({
   await page.waitForTimeout(500);
   await expect(page.getByText("Taking your tray")).toHaveCount(0);
   await expect(page.getByText("Tray taken")).toHaveCount(0);
+});
+
+/** The panel for the vacant spot being viewed. */
+const spotPanel = (page: Page) =>
+  page.getByRole("region", { name: "Vacant spot", exact: true });
+
+/** A visitor admitted as an owner, with no business yet, on the hall page. */
+async function seededOwner(
+  page: Page,
+  hall: { origin: string; secret: string },
+  name: string,
+) {
+  await page.goto(hall.origin);
+  await createGuest(page, name);
+  const principal = (await state(page)).profile.account.id;
+  const seeded = await page.request.post(hall.origin + "/api/operator/seed", {
+    headers: { authorization: "Bearer " + hall.secret },
+    data: { command_id: "seed-" + principal, principal },
+  });
+  expect((await seeded.json()).accepted).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "Business", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await expect(page.locator("[data-hall-canvas] canvas")).toBeVisible();
+}
+
+/** Click a to-let bay in the scene, from the reset camera. */
+async function clickBay(page: Page, id: string) {
+  await page.getByRole("button", { name: "Reset camera", exact: true }).click();
+  await expect.poll(() => pointOf(page, "vacancy", id)).not.toBeNull();
+  await clickScreen(page, (await pointOf(page, "vacancy", id))!.screen);
+}
+
+const s043Scarcity =
+  "2 of 6 standard spots are taken, so rent is 20% above the usual $100.00.";
+
+test("leasing from a to-let bay", async ({ page, hall }) => {
+  await observeScene(page);
+  await seededOwner(page, hall, "Bay owner");
+  const s043 = (await state(page)).hall.vacancies.find(
+    (spot: Vacancy) => spot.stall_id === "s043",
+  );
+  expect(s043).toMatchObject({
+    tier: "standard",
+    rent: "12000",
+    base_rent: "10000",
+    class_leased: 2,
+    class_total: 6,
+  });
+  await clickBay(page, "s043");
+  const panel = spotPanel(page);
+  await expect(panel).toContainText("s043");
+  await expect(panel).toContainText("Standard");
+  await expect(panel.locator(".spot-rent")).toHaveText(
+    "Daily open rent $120.00",
+  );
+  await expect(panel.locator(".rent-explanation")).toHaveText(s043Scarcity);
+  await expect(panel).toContainText(`Daily holding fee ${cash(s043.holding)}`);
+  await expect(panel).toContainText(`Setup fee ${cash(s043.setup_fee)}`);
+
+  // The first answer is lost; the form's own retry resends the same command.
+  const commands: { kind: string; command_id: string }[] = [];
+  await page.route("**/api/commands", async (route) => {
+    const command = route.request().postDataJSON();
+    commands.push(command);
+    if (command.kind !== "reserve_stall") return route.continue();
+    const result = await route.fetch();
+    if (commands.filter((c) => c.kind === "reserve_stall").length === 1)
+      await route.fulfill({ status: 503, json: { error: "unknown_outcome" } });
+    else await route.fulfill({ response: result });
+  });
+  await panel.getByRole("button", { name: "Reserve this spot" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Set up your first stall" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Retry same command" }).click();
+  await expect(page.getByLabel("Restaurant name")).toBeVisible();
+  const draft = (await state(page)).profile.draft;
+  expect(draft).toMatchObject({ stall_id: "s043", rent: "12000" });
+  const form = page.locator("form").filter({ hasText: "s043" });
+  await expect(form).toContainText("Daily open rent $120.00");
+  await expect(form.locator(".rent-explanation")).toHaveText(
+    `Held at this rent until ${clock(draft.expires_at)}.`,
+  );
+  const reserves = commands.filter((c) => c.kind === "reserve_stall");
+  expect(reserves).toHaveLength(2);
+  expect(new Set(reserves.map((c) => c.command_id)).size).toBe(1);
+  // Nothing else was submitted: presence reports are the owner's heartbeat.
+  expect(
+    commands
+      .map((c) => c.kind)
+      .filter((kind) => kind !== "report_owner_presence"),
+  ).toEqual(["reserve_stall", "reserve_stall"]);
+});
+
+test("the lease list and the bay agree", async ({ page, hall }) => {
+  await page.goto(hall.origin);
+  await expect(page.locator("[data-hall-canvas] canvas")).toBeVisible();
+  const vacancies: Vacancy[] = (await state(page)).hall.vacancies;
+  expect(vacancies).toHaveLength(12);
+  await page.getByRole("button", { name: "Stall list", exact: true }).click();
+  const panel = spotPanel(page);
+  for (const spot of vacancies) {
+    const card = spotCard(page, spot.stall_id);
+    const view = card.getByRole("button", {
+      name: "View spot " + spot.stall_id,
+      exact: true,
+    });
+    await expect(view).toHaveText("View spot");
+    await view.click();
+    await expect(panel).toContainText(spot.stall_id);
+    const rent = `Daily open rent ${cash(spot.rent)}`;
+    await expect(card.locator(".spot-rent")).toHaveText(rent);
+    await expect(panel.locator(".spot-rent")).toHaveText(rent);
+    const line = await card.locator(".rent-explanation").innerText();
+    expect(line).toMatch(/^(The usual rent|\d+ of \d+ )/);
+    await expect(panel.locator(".rent-explanation")).toHaveText(line);
+  }
+  await panel.getByRole("button", { name: "Close spot details" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.locator('[aria-current="true"]')).toHaveCount(0);
+});
+
+test("a visitor sees the bay but cannot reserve it", async ({ page, hall }) => {
+  await observeScene(page);
+  await page.goto(hall.origin);
+  await expect(page.locator("[data-hall-canvas] canvas")).toBeVisible();
+  await clickBay(page, "s043");
+  const panel = spotPanel(page);
+  await expect(panel).toContainText("Standard");
+  await expect(panel.locator(".spot-rent")).toHaveText(
+    "Daily open rent $120.00",
+  );
+  await expect(panel.locator(".rent-explanation")).toHaveText(s043Scarcity);
+  await expect(panel).toContainText(
+    "You can look around now. Create a profile when you’re ready to eat or work.",
+  );
+  await expect(panel.getByRole("button")).toHaveText(["Close spot details"]);
+});
+
+test("the expansion estimate explains its rent", async ({ page, hall }) => {
+  await seededOwner(page, hall, "Second spot");
+  await page.getByRole("button", { name: "Business", exact: true }).click();
+  await locationPicker(page).selectOption("s043");
+  await page
+    .getByRole("button", { name: "Reserve stall for ten minutes" })
+    .click();
+  await page.getByRole("radio", { name: "Tamil", exact: true }).check();
+  await page.getByLabel("Restaurant name").fill("First counter");
+  await page.getByRole("button", { name: "Confirm lease" }).click();
+  await expect(
+    page.getByRole("heading", { name: "First counter", exact: true }),
+  ).toBeVisible();
+
+  const current: View = await state(page);
+  const slot = current.profile!.slots.find((s) => s.stall_id === "s044")!;
+  expect(slot).toMatchObject({ tier: "standard", class_leased: 3 });
+  expect(BigInt(slot.rent)).toBeGreaterThan(BigInt(slot.base_rent!));
+  const percent =
+    ((BigInt(slot.rent) - BigInt(slot.base_rent!)) * 100n) /
+    BigInt(slot.base_rent!);
+  const line = `3 of 6 standard spots are taken, so rent is ${percent}% above the usual ${cash(slot.base_rent!)}.`;
+
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await page.getByRole("button", { name: "Stall list", exact: true }).click();
+  await spotCard(page, "s044")
+    .getByRole("button", { name: "View spot s044", exact: true })
+    .click();
+  await expect(spotPanel(page).locator(".rent-explanation")).toHaveText(line);
+  await spotPanel(page)
+    .getByRole("button", { name: "Lease this spot" })
+    .click();
+
+  const form = page.locator("form").filter({ hasText: "s044" });
+  await expect(form).toBeVisible();
+  await expect(form.getByRole("combobox", { name: "Location" })).toHaveValue(
+    "s044",
+  );
+  await form.getByRole("radio", { name: "Levantine", exact: true }).check();
+  const estimate = form.locator(".lease-estimate");
+  await expect(estimate.locator(".rent-explanation")).toHaveText(line);
+  const forecast = current.hall.lease_forecast!;
+  const open = BigInt(forecast.trading_hours);
+  const overhead =
+    (BigInt(slot.rent) * open + BigInt(slot.holding) * (24n - open)) / 24n +
+    BigInt(forecast.wages);
+  const margin = BigInt(forecast.starter_margins.levantine);
+  expect(margin).toBeGreaterThan(0n);
+  await expect(estimate).toContainText(
+    `Estimated daily rent and wages ${cash(overhead.toString())}`,
+  );
+  await expect(estimate).toContainText(
+    `Estimated break-even at starter prices: ${(overhead + margin - 1n) / margin} meals per game day.`,
+  );
+});
+
+test("Japanese shows the same numbers", async ({ page, hall }) => {
+  await page.goto(hall.origin);
+  await expect(page.locator("[data-hall-canvas] canvas")).toBeVisible();
+  await page.getByRole("button", { name: "Stall list", exact: true }).click();
+  await spotCard(page, "s043")
+    .getByRole("button", { name: "View spot s043", exact: true })
+    .click();
+  await page.getByLabel("Language / 言語").selectOption("ja");
+  const panel = page.getByRole("region", { name: "空き区画", exact: true });
+  await expect(panel).toContainText("標準");
+  await expect(panel.locator(".spot-rent")).toHaveText(
+    "営業時の日額賃料 $120.00",
+  );
+  await expect(panel.locator(".rent-explanation")).toHaveText(
+    "標準区画は6区画中2区画が埋まっているため、賃料は通常の$100.00より20%高くなっています。",
+  );
+  await expect(
+    spotCard(page, "s043").getByRole("button", {
+      name: "区画s043を見る",
+      exact: true,
+    }),
+  ).toHaveText("区画を見る");
+});
+
+test("a spot taken while the panel is open", async ({ page, hall }) => {
+  const snapshot = await routed(page, hall.origin, [[1, 0]], 1, [[1, 3]]);
+  await page.getByRole("button", { name: "Stall list", exact: true }).click();
+  await spotCard(page, "spot-1-3")
+    .getByRole("button", { name: "View spot spot-1-3", exact: true })
+    .click();
+  const panel = spotPanel(page);
+  await expect(panel.locator(".spot-rent")).toHaveText(
+    "Daily open rent $13.00",
+  );
+  snapshot.hall.vacancies = [];
+  await nextPoll(page);
+  await expect(panel).toContainText("spot-1-3");
+  await expect(panel).toContainText(
+    "This stall can’t be reserved or leased right now. Check your current reservation or choose another stall.",
+  );
+  await expect(panel.locator(".spot-rent")).toHaveCount(0);
+  await expect(panel.getByRole("button")).toHaveText(["Close spot details"]);
+  await panel.getByRole("button", { name: "Close spot details" }).click();
+  await expect(panel).toHaveCount(0);
+});
+
+test.describe("on a phone", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test("viewing a spot opens it as the detail view", async ({ page, hall }) => {
+    await page.goto(hall.origin);
+    await expect(page.locator("[data-hall-canvas] canvas")).toBeVisible();
+    await page.getByRole("button", { name: "Stall list", exact: true }).click();
+    await spotCard(page, "s043")
+      .getByRole("button", { name: "View spot s043", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Vacant spot" }),
+    ).toBeVisible();
+    const panel = spotPanel(page);
+    await expect(panel.locator(".rent-explanation")).toHaveText(s043Scarcity);
+    await expect(panel.locator(".rent-explanation")).toBeVisible();
+    await expect(spotCard(page, "s043")).toBeHidden();
+    await page.getByRole("button", { name: "Back to hall" }).click();
+    await expect(spotCard(page, "s043")).toBeVisible();
+  });
 });

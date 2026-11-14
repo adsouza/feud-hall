@@ -286,6 +286,19 @@ textarea {
   outline: 2px solid var(--accent, #ffc96d);
   outline-offset: 2px;
 }
+.spot-panel {
+  margin-block: 0.75rem;
+}
+.spot-panel-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.spot-panel-heading h2 {
+  margin: 0;
+}
 .hall-layout {
   position: relative;
   grid-template-areas: "scene inspector" "bench inspector";
