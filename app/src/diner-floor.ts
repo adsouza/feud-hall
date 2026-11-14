@@ -758,10 +758,15 @@ export function createDinerFloor(): {
       )
         continue;
       for (const f of state.queue) remove(f);
-      for (const f of figures) {
-        const leg = legAt(f, now);
-        if (leg?.kind === "collect" && leg.stall === id) remove(f);
-      }
+      // Served diners still to collect there, whether collecting now or still
+      // on the way: their tray would come from a counter that is gone.
+      for (const f of figures)
+        if (
+          f.legs.some(
+            (leg) => leg.kind === "collect" && leg.stall === id && leg.end > now,
+          )
+        )
+          remove(f);
       stalls.delete(id);
     }
     for (const f of figures) if (f.room > input.openRooms) remove(f);

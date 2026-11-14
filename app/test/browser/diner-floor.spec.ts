@@ -728,6 +728,33 @@ test("floor: a stall that goes away takes its figures with it", () => {
   expect(floor.boundFor("s05")).toBeLessThanOrEqual(2);
 });
 
+test("floor: a stall that goes away before its served diner collects takes the diner", () => {
+  const floor = createDinerFloor();
+  floor.apply(input());
+  const today = { arrivals: 1, admitted: 1, left: 0 };
+  floor.apply(input({ now: STEP, waiting: { s01: 1 }, today }));
+  const served = input({ now: STEP + 400, served: { s01: "x" }, today });
+  floor.apply(served);
+  // Served while still walking in: the collect is still ahead.
+  expect(all(floor, STEP + 400).map((f) => f.activity)).toEqual(["walking"]);
+  const from = STEP + 800;
+  const gone = {
+    ...served,
+    now: from,
+    stalls: served.stalls.filter((s) => s.id !== "s01"),
+  };
+  floor.apply(gone);
+  expect(floor.count(from)).toBe(0);
+  for (let now = from; now <= from + EAT_MS + 60_000; now += 100) {
+    if ((now - from) % STEP === 0) floor.apply({ ...gone, now });
+    for (const f of all(floor, now)) {
+      expect(f.activity).not.toBe("collecting");
+      expect(f.activity).not.toBe("seated");
+    }
+    expect(floor.count(now)).toBe(0);
+  }
+});
+
 test("floor: a closed room's figures are removed", () => {
   const floor = createDinerFloor();
   const stalls = [1, 2].flatMap((room) =>
