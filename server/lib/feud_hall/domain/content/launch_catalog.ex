@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.Content.LaunchCatalog do
   @moduledoc "Versioned launch recipes, ingredient grades, and balanced market and demand inputs."
 
-  alias FeudHall.Domain.Content.SliceCatalog
+  alias FeudHall.Domain.Content.{RoomLayout, SliceCatalog}
 
   @menus Path.expand("../../../../priv/content/launch_menus.json", __DIR__)
   @products Path.expand("../../../../priv/content/launch_products.json", __DIR__)
@@ -55,11 +55,14 @@ defmodule FeudHall.Domain.Content.LaunchCatalog do
     %{
       slice
       | id: "launch",
-        version: 2,
+        version: 3,
+        layout: RoomLayout.assign(slice.layout),
+        npc_profiles: Enum.map(slice.npc_profiles, &launch_profile/1),
         products: products,
         recipes: recipes,
         rules:
           Map.merge(slice.rules, %{
+            rooms: %{version: 1, count: 10, per_room: 15, scarcity_cap_permille: 1_500, class_gap: 100},
             market: market(slice.rules.market, products, recipes),
             demand: demand(slice.rules.demand, recipes),
             progression: %{
@@ -84,6 +87,10 @@ defmodule FeudHall.Domain.Content.LaunchCatalog do
           })
     }
   end
+
+  # Rooms make the prime spots scarce: the premium computer-run profile starts in standard spots.
+  defp launch_profile(%{id: "premium"} = profile), do: %{profile | preferred_tier: :standard}
+  defp launch_profile(profile), do: profile
 
   defp slice_techniques(recipes) do
     methods = %{

@@ -63,7 +63,8 @@ defmodule FeudHall.Domain.Content do
         exposure_problems(get(rules, :exposure_permille)) ++
         market_problems(catalog, get(rules, :market)) ++
         demand_problems(catalog, get(rules, :demand)) ++
-        layout_problems(get(catalog, :layout)) ++
+        layout_problems(get(catalog, :layout), get(rules, :rooms)) ++
+        rooms_rule_problems(get(rules, :rooms)) ++
         npc_problems(get(catalog, :npc_profiles)) ++
         progression_problems(catalog, get(rules, :progression))
 
@@ -245,7 +246,14 @@ defmodule FeudHall.Domain.Content do
 
   defp range?(_), do: false
 
-  defp layout_problems(layout) do
+  @rooms_keys ~w(version count per_room scarcity_cap_permille class_gap)a
+
+  defp rooms_rule_problems(nil), do: []
+
+  defp rooms_rule_problems(rooms),
+    do: for(key <- @rooms_keys, not pos_int?(get(rooms, key)), do: {:rules, :rooms, key})
+
+  defp layout_problems(layout, rooms) do
     if is_list(layout) and Enum.all?(layout, &(is_map(&1) and is_binary(get(&1, :slot_id)) and Map.has_key?(&1, :tier))) do
       too_many = if length(layout) > @max_slots, do: [{:layout, :too_many_slots}], else: []
 
@@ -257,9 +265,56 @@ defmodule FeudHall.Domain.Content do
         |> Enum.map(fn {id, _} -> {:layout, id, :duplicate} end)
         |> Enum.sort()
 
-      too_many ++ duplicates ++ for(slot <- layout, slot.tier not in @tiers, do: {:layout, slot.slot_id, :bad_tier})
+      too_many ++
+        duplicates ++
+        for(slot <- layout, slot.tier not in @tiers, do: {:layout, slot.slot_id, :bad_tier}) ++
+        room_problems(layout, rooms)
     else
       [{:layout, :malformed}]
+    end
+  end
+
+  # Room data is checked only when the catalog carries the rooms rule (the slice catalog does not).
+  defp room_problems(_layout, nil), do: []
+
+  defp room_problems(layout, rooms) do
+    count = get(rooms, :count)
+    per_room = get(rooms, :per_room)
+
+    if pos_int?(count) and pos_int?(per_room) do
+      spots =
+        for slot <- layout do
+          room = Map.get(slot, :room)
+          position = Map.get(slot, :position)
+
+          problem =
+            cond do
+              not (Map.has_key?(slot, :room) and Map.has_key?(slot, :position)) ->
+                {:layout, :slot_without_room, slot.slot_id}
+
+              not (is_integer(room) and room in 1..count//1) ->
+                {:layout, :room_out_of_range, slot.slot_id}
+
+              not (is_integer(position) and position in 0..(per_room - 1)//1) ->
+                {:layout, :position_out_of_range, slot.slot_id}
+
+              true ->
+                nil
+            end
+
+          {slot, problem}
+        end
+
+      duplicates =
+        for({%{room: room, position: position}, nil} <- spots, do: {room, position})
+        |> Enum.frequencies()
+        |> Enum.filter(fn {_, n} -> n > 1 end)
+        |> Enum.map(fn {pair, _} -> {:layout, :duplicate_position, pair} end)
+        |> Enum.sort()
+
+      for({_, problem} <- spots, problem, do: problem) ++ duplicates
+    else
+      []
     end
   end
 

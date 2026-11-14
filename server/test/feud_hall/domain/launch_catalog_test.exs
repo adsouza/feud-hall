@@ -122,4 +122,58 @@ defmodule FeudHall.Domain.LaunchCatalogTest do
       assert Hall.replay(events) == state
     end
   end
+
+  describe "rooms" do
+    alias FeudHall.Domain.Content.SliceCatalog
+
+    @rooms %{version: 1, count: 10, per_room: 15, scarcity_cap_permille: 1_500, class_gap: 100}
+
+    test "the launch catalog is version 3 with room data and a validating layout" do
+      catalog = LaunchCatalog.catalog()
+      assert catalog.version == 3
+      assert :ok = Content.validate(catalog)
+      assert catalog.rules.rooms == @rooms
+      assert Enum.all?(catalog.layout, &(&1.room in 1..10 and &1.position in 0..14))
+      assert Enum.find(catalog.npc_profiles, &(&1.id == "premium")).preferred_tier == :standard
+      assert Enum.find(catalog.npc_profiles, &(&1.id == "budget")).preferred_tier == :quiet
+      assert Enum.find(catalog.npc_profiles, &(&1.id == "mainstream")).preferred_tier == :standard
+    end
+
+    test "the slice catalog has no room data and keeps its profiles" do
+      slice = SliceCatalog.catalog()
+      refute Map.has_key?(slice.rules, :rooms)
+      refute Enum.any?(slice.layout, &Map.has_key?(&1, :room))
+      assert :ok = Content.validate(slice)
+      assert Enum.find(slice.npc_profiles, &(&1.id == "premium")).preferred_tier == :prime
+    end
+
+    defp problems(catalog) do
+      {:error, problems} = Content.validate(catalog)
+      problems
+    end
+
+    defp tweak_spot(catalog, slot_id, fun),
+      do: %{catalog | layout: Enum.map(catalog.layout, &if(&1.slot_id == slot_id, do: fun.(&1), else: &1))}
+
+    test "room data problems are reported when the rooms rule is present" do
+      catalog = LaunchCatalog.catalog()
+
+      assert {:layout, :slot_without_room, "s001"} in problems(tweak_spot(catalog, "s001", &Map.delete(&1, :room)))
+      assert {:layout, :room_out_of_range, "s001"} in problems(tweak_spot(catalog, "s001", &%{&1 | room: 11}))
+      assert {:layout, :position_out_of_range, "s001"} in problems(tweak_spot(catalog, "s001", &%{&1 | position: 15}))
+
+      duplicate = tweak_spot(catalog, "s002", &%{&1 | room: 1, position: 0})
+      assert {:layout, :duplicate_position, {1, 0}} in problems(duplicate)
+    end
+
+    test "rooms rule values must be present and positive" do
+      catalog = LaunchCatalog.catalog()
+
+      missing = put_in(catalog.rules.rooms, Map.delete(@rooms, :scarcity_cap_permille))
+      assert {:rules, :rooms, :scarcity_cap_permille} in problems(missing)
+
+      zero = put_in(catalog.rules.rooms, %{@rooms | class_gap: 0})
+      assert {:rules, :rooms, :class_gap} in problems(zero)
+    end
+  end
 end

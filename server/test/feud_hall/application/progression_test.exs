@@ -160,7 +160,7 @@ defmodule FeudHall.Application.ProgressionTest do
     snapshot_position = rt.position
     snapshot = Snapshot.take(%{hall: rt.state, control: rt.control}, rt.position)
     rt = accepted(rt, {:system, :admin}, :expand_catalog, %{catalog: launch})
-    assert rt.state.catalog.version == 2
+    assert rt.state.catalog.version == 3
     assert Map.take(rt.state.catalog.recipes, Map.keys(old_recipes)) == before.catalog.recipes
     assert Map.take(rt.state.catalog.products, Map.keys(old.products)) == before.catalog.products
     assert rt.state.restaurants == before.restaurants

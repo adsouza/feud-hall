@@ -58,6 +58,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
     prep_ms finish_ms holding_ms substitute num den enabled stricter_than
     availability_started availability_resumed hall_resumed epoch_id recovery_id hall_ms catalog_ref
     owner_kind npc
+    room position rooms count per_room scarcity_cap_permille class_gap
     seed exposure_permille kitchen market demand layout npc_profiles prep_stations finish_stations
     queue_limit clear_every_hall_ms price_floor_permille price_ceiling_permille
     target_stock_per_equivalent replenish_cap arrivals_per_equivalent equivalent_floor_millis

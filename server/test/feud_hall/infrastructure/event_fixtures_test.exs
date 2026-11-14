@@ -59,6 +59,23 @@ defmodule FeudHall.Infrastructure.EventFixturesTest do
     end
   end
 
+  # The store keeps a full catalog as term-format content and writes `catalog_ref` into the event, so
+  # the JSON codec sees a catalog only where one is embedded (small fixtures). The room fields must
+  # survive both paths.
+  test "room layout data and the rooms rule survive the codec and the stored content form" do
+    launch = FeudHall.Domain.Content.LaunchCatalog.catalog()
+    catalog = %{id: launch.id, version: launch.version, layout: launch.layout, rules: %{rooms: launch.rules.rooms}}
+    event = %{type: :hall_initialized, hall_id: "launch", catalog: catalog}
+
+    assert {:ok, decoded} = event |> EventCodec.encode!() |> EventCodec.decode()
+    assert decoded == event
+    assert length(decoded.catalog.layout) == 150
+    assert Enum.all?(decoded.catalog.layout, &(is_integer(&1.room) and is_integer(&1.position)))
+
+    stored = :erlang.term_to_binary(launch, [:deterministic])
+    assert :erlang.binary_to_term(stored, [:safe]) == launch
+  end
+
   # The decider no longer emits these, so their evolution is pinned field by field. Entries are
   # built at run time here, so the compile-time type checker does not see every fixture's shape.
   defp entry(name), do: Enum.find(EventFixtureScenarios.entries(), &(&1.name == name))
