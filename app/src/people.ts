@@ -114,6 +114,31 @@ export const FIGURE = {
   // Carrying: the upper arm hangs a little forward, the forearm points ahead.
   carryUpper: -0.35,
   carryFore: -1.45,
+  // Sizes of the parts the renderer builds (unit figure).
+  neckRTop: 0.035,
+  neckRBottom: 0.04,
+  neckLen: 0.06,
+  skirtRTop: 0.11,
+  skirtRBottom: 0.19,
+  skirtLen: 0.26,
+  skirtDeep: 0.85,
+  apronW: 0.2,
+  apronH: 0.32,
+  apronT: 0.012,
+  // Flatter than the brief's 0.045: the foot centre stands 0.02 above the floor.
+  footW: 0.075,
+  footH: 0.036,
+  footLen: 0.15,
+  hairCapR: 0.106,
+  hairTilt: 0.35,
+  hairLongR: 0.07,
+  hairLongStraight: 0.12,
+  hairLongWide: 1.3,
+  hairLongDeep: 0.6,
+  bunR: 0.046,
+  brimW: 0.13,
+  brimT: 0.012,
+  brimLen: 0.1,
 } as const;
 
 const F = FIGURE;

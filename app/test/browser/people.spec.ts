@@ -13,6 +13,7 @@ import {
   type Pose,
   type Role,
 } from "../../src/people";
+import { createPeople } from "../../src/people-mesh";
 
 test("people: a look is a pure function of serial and role", () => {
   expect(personLook(42, "diner")).toEqual(personLook(42, "diner"));
@@ -261,4 +262,93 @@ test("people: every pose is finite, and no look is wider than the stated span", 
   const reach = FIGURE.handR * widest.height * widest.width;
   const span = right.at.x - left.at.x + 2 * reach;
   expect(span).toBeGreaterThanOrEqual(0.95 * FIGURE_MAX_SPAN);
+});
+
+test("people: each person fills one batch slot per part, and a frame starts empty", () => {
+  expect(createPeople(1, null).meshes.length).toBe(15);
+  expect(createPeople(500, null).meshes.length).toBe(15);
+  const people = createPeople(4, null);
+  people.begin();
+  people.add(lookWith({ hairStyle: "short", skirt: false }), stand, "full");
+  people.end();
+  expect(people.count).toBe(1);
+  expect(people.mesh("head").count).toBe(1);
+  expect(people.mesh("upperLeg").count).toBe(2);
+  expect(people.mesh("skirt").count).toBe(0);
+  people.begin();
+  people.end();
+  expect(people.count).toBe(0);
+  for (const mesh of people.meshes) expect(mesh.count).toBe(0);
+});
+
+test("people: someone who does not fit, or has faded out, is skipped whole", () => {
+  const people = createPeople(1, null);
+  people.begin();
+  people.add(personLook(1, "diner"), stand, "full", 0);
+  expect(people.count).toBe(0);
+  people.add(personLook(1, "diner"), stand, "full");
+  people.add(personLook(2, "diner"), stand, "full");
+  people.end();
+  expect(people.count).toBe(1);
+  expect(people.mesh("head").count).toBe(1);
+  expect(people.mesh("hand").count).toBe(2);
+});
+
+test("people: colour and opacity are written per person", () => {
+  const people = createPeople(2, null);
+  const look = personLook(9, "diner");
+  people.begin();
+  people.add(look, stand, "full", 0.4);
+  people.end();
+  const colour = people.mesh("head").geometry.getAttribute("color");
+  const skin = new T.Color(look.skin);
+  expect(colour.getX(0)).toBeCloseTo(skin.r, 5);
+  expect(colour.getY(0)).toBeCloseTo(skin.g, 5);
+  expect(colour.getZ(0)).toBeCloseTo(skin.b, 5);
+  expect(colour.getW(0)).toBeCloseTo(0.4, 5);
+});
+
+test("people: disposing releases every geometry and material once", () => {
+  const people = createPeople(2, null);
+  let released = 0;
+  for (const mesh of people.meshes) {
+    mesh.geometry.addEventListener("dispose", () => released++);
+    (mesh.material as T.Material).addEventListener("dispose", () => released++);
+  }
+  people.dispose();
+  expect(released).toBe(30);
+});
+
+test("people: feet rest on the floor and do not sink through it", () => {
+  const picks: Look[] = [];
+  let tall: Look | undefined;
+  let short: Look | undefined;
+  for (let serial = 0; serial < 5000; serial++) {
+    const look = personLook(serial, "diner");
+    if (!tall || look.height * look.width > tall.height * tall.width)
+      tall = look;
+    if (!short || look.height * look.width < short.height * short.width)
+      short = look;
+  }
+  if (tall && short) picks.push(tall, short);
+  for (let serial = 0; serial < 6; serial++)
+    picks.push(personLook(serial, "diner"));
+  const people = createPeople(1, null);
+  const feet = people.mesh("foot");
+  feet.geometry.computeBoundingBox();
+  const box = feet.geometry.boundingBox as T.Box3;
+  const matrix = new T.Matrix4();
+  const world = new T.Box3();
+  for (const look of picks) {
+    people.begin();
+    people.add(look, stand, "full");
+    people.end();
+    expect(feet.count).toBe(2);
+    for (let i = 0; i < feet.count; i++) {
+      feet.getMatrixAt(i, matrix);
+      world.copy(box).applyMatrix4(matrix);
+      expect(world.min.y).toBeGreaterThanOrEqual(-0.005);
+      expect(world.min.y).toBeLessThanOrEqual(0.03);
+    }
+  }
 });
