@@ -76,6 +76,9 @@ test("people: the hall draws the owner, workers and queue of each open stall", a
       paused: false,
     };
   }
+  // A new server view, as the edited counts would come with: the floor
+  // re-applies no counts from a position it has already seen.
+  snapshot.hall.position += 1;
   await page.route("**/api/state", (route) =>
     route.fulfill({ json: snapshot }),
   );
@@ -87,12 +90,12 @@ test("people: the hall draws the owner, workers and queue of each open stall", a
   // Returning to the hall keeps the camera where it was last shown. Reset it
   // to Hall 1's overview and zoom all the way out: there both stalls are beyond
   // the detail distance, so each draws at reduced detail: 1 owner + 1 worker
-  // + 1 queued diner.
+  // + its whole queue of 3 diners, drawn simply.
   await page.getByRole("button", { name: "Reset camera", exact: true }).click();
   await expect(host).toHaveAttribute("data-hall-room", "1");
   const zoomOut = page.getByRole("button", { name: "Zoom out", exact: true });
   for (let step = 0; step < 12; step++) await zoomOut.click();
-  await expect.poll(people).toBe(6);
+  await expect.poll(people).toBe(10);
   // Selecting a stall focuses the camera on it, which brings both owned stalls
   // within detail distance. Each: 1 owner + 2 workers + 3 queued diners.
   await page

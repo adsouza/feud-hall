@@ -224,6 +224,50 @@ test("visible diners: a diner who leaves without buying is shown leaving", async
   expect(await drawn(host, "people")).toBe(before);
 });
 
+test("visible diners: at the room overview a joiner stays drawn in the queue", async ({
+  page,
+  hall,
+}) => {
+  test.setTimeout(240_000);
+  const { serve, pause } = await ownStall(page, hall);
+  await serve({
+    waiting: 1,
+    service: "order-a",
+    today: { arrivals: 1, admitted: 1, left: 0 },
+  });
+  const host = await openHall(page);
+  // No stall is selected, and from the room overview every stall is beyond
+  // the detail distance, so the owned stall is drawn simply.
+  await page.getByRole("button", { name: "Reset camera", exact: true }).click();
+  await expect(host).toHaveAttribute("data-hall-room", "1");
+  await expect.poll(() => drawn(host, "walking")).toBe(0);
+  // 1 owner + 1 worker (reduced detail) + 1 queued diner.
+  await expect.poll(() => drawn(host, "people")).toBe(3);
+  await pause();
+  const before = await drawn(host, "people");
+
+  await serve({
+    waiting: 2,
+    service: "order-a",
+    today: { arrivals: 2, admitted: 2, left: 0 },
+  });
+  const entered = await stepUntil(
+    page,
+    async () => (await drawn(host, "walking")) === 1,
+    10_000,
+  );
+  expect(entered).toBeLessThan(Infinity);
+  const arrived = await stepUntil(
+    page,
+    async () => (await drawn(host, "walking")) === 0,
+    60_000,
+  );
+  expect(arrived).toBeLessThan(Infinity);
+  // The joiner stands at the second queue spot, still drawn.
+  expect(await drawn(host, "people")).toBe(before! + 1);
+  expect(await drawn(host, "walking")).toBe(0);
+});
+
 test("visible diners: the floor is empty during cleaning", async ({
   page,
   hall,

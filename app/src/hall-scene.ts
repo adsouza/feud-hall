@@ -128,7 +128,7 @@ type Counter = {
   color: T.Color;
   restaurant: string; // the business the owner look is keyed to
   staff: Look[]; // the owner, then one per staff spot
-  /** Drawn in detail in the last frame; a stall drawn simply shows one queued diner. */
+  /** Drawn in detail in the last frame; a stall drawn simply draws its queue simply. */
   detailed: boolean;
   activity?: Stall["activity"];
   open: boolean;
@@ -904,9 +904,10 @@ export function createHallScene(
   const trayFrom: Point = [0, 0, 0];
 
   /**
-   * Draws one figure the floor model reports, if its room is shown. A
-   * neighbouring room shows only seated diners and the first in each queue; a
-   * stall drawn simply shows only its first queued diner.
+   * Draws one figure the floor model reports, if its room is shown. The
+   * viewer's room shows every figure, a stall's queued diners in full when the
+   * stall is drawn in detail and simply otherwise. A neighbouring room shows
+   * only seated diners and the first in each queue, simply.
    */
   function drawFloorFigure(diner: FloorFigure) {
     const level = shown.get(diner.room);
@@ -922,7 +923,6 @@ export function createHallScene(
       detail = "simple";
     } else if (activity === "queued") {
       const detailed = model?.detailed ?? false;
-      if (!detailed && diner.spot !== 0) return;
       detail = detailed ? "full" : "simple";
       if (detailed && appearance.motion && model)
         faceYaw += staffGlance(floorTime, model.index, (diner.spot ?? 0) + 10);
