@@ -168,7 +168,7 @@ Raised in review, not actioned.
   tallies, leaving a seat avoiding its table, and a queue fall giving a tray-less
   walker via the entrance; the "stall moves" spec asserts `boundFor <= 2` where
   it should assert `== 2` and positions; `GAIT` is duplicated from
-  `hall-scene.ts`; `diner-floor.ts` is 976 lines and its route and leg helpers
+  `hall-scene.ts`; `diner-floor.ts` is 1034 lines (after the final review fixes) and its route and leg helpers
   would split cleanly; a cold route costs about 0.5 ms per miss, so the first
   busy snapshot may stall `apply` for tens of ms; spec helper names `rises` and
   `queueRises` keep old wording and the helper's served guard differs slightly
@@ -180,6 +180,56 @@ Raised in review, not actioned.
   longer sway; the pickup camera has no guard against walkers crossing in front
   of a counter; a collecting figure whose counter model is missing draws oddly;
   the bench cannot show "present throughout".
+
+## Final review
+
+A whole-branch review found two important problems, both fixed:
+
+- **Queues looked one deep at the room overview.** A stall not drawn in detail
+  drew only its first queued diner, while every walker in the viewer's room was
+  drawn, so at the overview a joiner vanished on reaching the queue and a served
+  diner appeared from nowhere. The viewer's room now draws every queued figure,
+  in full when the stall is detailed and simply otherwise; neighbouring rooms
+  keep the first queued diner and the eaters (`7dbe322`). The people-scene
+  overview count is 10, not 6, and a new visible-diners test checks that a
+  joiner is still drawn after reaching the queue at the overview.
+- **Re-applying old data defeated the long-gap baseline.** The scene calls
+  `update` on selection, tablet, pickup and label changes, and each call
+  re-applied the last view, restarting the `STALE_MS` timer. `FloorInput` now
+  carries `snapshot` (the scene passes `hall.position`, the bench its update
+  counter); an apply with the previous snapshot changes no figure because of
+  counts and leaves the gap timer alone, but still removes gone stalls' figures
+  and applies motion turning off (`965f4dc`, `d3aecf1`).
+
+Other fixes from the review:
+
+- A stall that goes away removes every figure with a collect leg still ahead
+  there, not only the one collecting now (`1689901`).
+- Routes are cached room-relative and shared by all rooms, so ten rooms no
+  longer route cold ten times or near the 50,000-entry cap (`86d6fbc`).
+- The "stall moves" test asserts exactly two figures at the new position's
+  spots 0 and 1, and a new test covers a queue fall: the last diner walks out
+  of the entrance without a tray (`7c74dbb`).
+- Documentation: the architecture section states what the tests refute, the
+  `apply(input)` signature and `snapshot`, and what is drawn per room; the
+  design says who takes the tray, what the budget does, that the viewer's room
+  shows whole queues and that the gap is measured between server snapshots;
+  the `PublicView` moduledoc no longer says reasons are never copied in (the
+  closed-day summaries in `demand` keep them and are not sent to clients).
+
+Browser fixtures that serve an edited copy of a real view now give it a new
+`hall.position` (the visible-diners helper and the people-scene frozen view),
+because the floor ignores counts from a position it has already applied.
+
+Deliberately left:
+
+- Two services at one stall in one snapshot show one as a lost diner.
+- Per-frame work covers the whole hall, not only the drawn rooms.
+- `moving()` is hall-wide, so a walker in an undrawn room keeps frames coming.
+- `routeAt` and `toHall` allocate small objects per figure per frame.
+- The property test's oracle mirrors the model's arithmetic.
+- No scene test covers reopening after cleaning or returning from a hidden
+  tab.
 
 ## Known limits
 

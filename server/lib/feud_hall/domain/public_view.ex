@@ -15,11 +15,12 @@ defmodule FeudHall.Domain.PublicView do
 
   Stalls are sorted by stall ID and include closed ones (they still occupy a
   slot). A menu is the public price list. `today` is today's arrival totals:
-  `left` is one integer, the sum of the per-reason counts. Rival cash,
-  warehouse batches, orders, costs, unlocks, policies and random state are
-  never copied in, and neither are the reasons diners left or the per-stall
-  lost-diner counts: the projection names its fields rather than filtering a
-  state map.
+  `left` is one integer, the sum of the per-reason counts, so today's totals
+  carry no reasons and no per-stall lost-diner counts. The closed-day
+  summaries in `demand` keep `left` as the per-reason map; `Management.view/3`
+  does not send them to clients. Rival cash, warehouse batches, orders, costs,
+  unlocks, policies and random state are never copied in: the projection
+  names its fields rather than filtering a state map.
   """
 
   alias FeudHall.Domain.Market
