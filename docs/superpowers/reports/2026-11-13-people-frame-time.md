@@ -115,10 +115,12 @@ first runs gave 30.97 fps, 0 late frames and 7.66 ms mean at `detail=1`, and
 number of figures drawn in one frame: at `detail=1` about fifty stalls are within
 the detail distance and drawn in full.
 
-The densest view holds the scene's pacing ceiling with no late frames, at about
-half a millisecond more CPU-side draw time than the overview. The overview was
-re-run at the same commit as a check: 750 people, 30.96 fps and no late frames at
-both `detail` values (7.82 ms and 7.22 ms mean).
+The densest view holds the scene's pacing ceiling with no late frames. The
+overview was re-run at the same commit as a check: 750 people, 30.96 fps and no
+late frames at both `detail` values, with a mean draw time of 7.82 ms at
+`detail=0` and 7.22 ms at `detail=1`. At `detail=1` the densest view therefore
+costs about 0.4 ms more CPU-side draw time than the overview (7.62 ms against
+7.22 ms) for 550 more figures; run-to-run variation is of the same order.
 
 Limits of this evidence: one workstation (Apple M4) with a capable GPU. Weaker
 integrated GPUs are not covered, and the game design's reference machine is
