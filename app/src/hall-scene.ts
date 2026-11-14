@@ -17,8 +17,12 @@ import {
   toHall,
   toStall,
   type StallPlacement,
+  COUNTER_TRAY,
+  PICKUP_SPOT,
   QUEUE_SPOTS,
   STAFF_SPOTS,
+  collectMs,
+  collectTray,
 } from "./hall-layout";
 import {
   carryPoint,
@@ -82,6 +86,14 @@ type Departure = {
   side: number;
   startedAt: number;
   trayFrom?: Point;
+  // Set for a served diner: the walk to the counter that comes before leaving.
+  collect?: {
+    frame: StallPlacement;
+    fromX: number;
+    fromZ: number;
+    ms: number;
+    opacity: number;
+  };
 };
 type Counter = {
   root: T.Group;
@@ -122,6 +134,11 @@ const TURN_SPEED = 1.8;
 const LOOK_SPEED = 1.15;
 const ARROW_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 const WALK_MS = 1500;
+const GAIT = (Math.PI * 8) / Math.hypot(1.18, 1.4); // the leaving walk's steps per metre
+const PICKUP_FACING = Math.atan2(
+  COUNTER_TRAY[0] - PICKUP_SPOT[0],
+  COUNTER_TRAY[1] - PICKUP_SPOT[1],
+);
 const IDLE_FRAME_MS = 80;
 const SHUTTER_SLATS = 9;
 const SHUTTER_HEIGHT = 0.91;
@@ -831,22 +848,45 @@ export function createHallScene(
     const distance = aisleDistance(diner, now);
     if (distance === 1) return false;
     const [dx, dz] = QUEUE_SPOTS[index];
-    const { x, z } = toHall(
-      model.placement,
-      dx + queueSway(model.index, index, now),
-      dz,
-    );
+    const side = index % 2 === 0 ? -1 : 1;
+    const waitX = dx + queueSway(model.index, index, now);
+    if (carrying) {
+      // Called to the counter, from the aisle if they were still walking in.
+      const fromX =
+        waitX + side * 1.18 * T.MathUtils.smoothstep(distance, 0.05, 1);
+      const fromZ = dz + distance * 1.4;
+      const spot = toHall(model.placement, PICKUP_SPOT[0], PICKUP_SPOT[1]);
+      departures.push({
+        diner,
+        x: spot.x,
+        z: spot.z,
+        yaw: model.placement.yaw,
+        side: 1, // leave to the right, away from the queue
+        startedAt: now,
+        trayFrom: point(
+          model.root.localToWorld(
+            new T.Vector3(COUNTER_TRAY[0], 0.93, COUNTER_TRAY[1]),
+          ),
+        ),
+        collect: {
+          frame: model.placement,
+          fromX,
+          fromZ,
+          ms: collectMs(fromX, fromZ),
+          opacity: 1 - T.MathUtils.smoothstep(distance, 0.14, 1),
+        },
+      });
+      return true;
+    }
+    const { x, z } = toHall(model.placement, waitX, dz);
     departures.push({
       diner,
       x,
       z,
       yaw: model.placement.yaw,
-      side: index % 2 === 0 ? -1 : 1,
+      side,
       // An interrupted arrival heads back from its current point in the aisle.
       startedAt: now - distance * WALK_MS,
-      trayFrom: carrying
-        ? point(model.root.localToWorld(new T.Vector3(0, 0.93, 0.88)))
-        : undefined,
     });
     return true;
   }
@@ -893,8 +933,9 @@ export function createHallScene(
     side: number,
     distance: number,
     departing = false,
-    trayFrom?: Point,
+    carrying = false,
     yaw = 0,
+    turnFrom?: number,
   ) {
     const stride = Math.sin(distance * Math.PI * 8);
     const opacity = 1 - T.MathUtils.smoothstep(distance, 0.14, 1);
@@ -906,53 +947,93 @@ export function createHallScene(
     const heading = Math.atan2(side * 1.18, 1.4);
     figure.x = walking.x;
     figure.z = walking.z;
-    figure.yaw = yaw + (departing ? heading : diner.faceYaw);
+    let facing = departing ? heading : diner.faceYaw;
+    if (turnFrom !== undefined) {
+      // Turn from the counter to the way out, swinging away from the queue.
+      let turn = (heading - turnFrom) % (Math.PI * 2);
+      if (turn > 0) turn -= Math.PI * 2;
+      facing = turnFrom + turn * T.MathUtils.smoothstep(distance, 0, 0.12);
+    }
+    figure.yaw = yaw + facing;
     figure.faceYaw = 0;
     figure.stride = stride;
     figure.walking = true;
-    figure.carrying = Boolean(trayFrom);
+    figure.carrying = carrying;
     people.add(diner.look, figure, "full", opacity);
-    if (trayFrom) {
-      const carry = carryPoint(diner.look, stride);
-      const handover = T.MathUtils.smoothstep(distance, 0, 0.16);
-      dummy.rotation.set(0, figure.yaw, 0);
-      dummy.scale.setScalar(0.75);
+    if (carrying) holdTray(diner.look, opacity);
+  }
+
+  // Draws a tray for the figure just posed: on the counter at `take` 0, in
+  // their hands at 1, and passing between the two in a straight line.
+  function holdTray(look: Look, opacity: number, from?: Point, take = 1) {
+    const carry = carryPoint(look, figure.stride);
+    const x = figure.x + Math.sin(figure.yaw) * carry.forward;
+    const z = figure.z + Math.cos(figure.yaw) * carry.forward;
+    dummy.rotation.set(0, figure.yaw, 0);
+    dummy.scale.setScalar(0.75);
+    if (from)
       dummy.position.set(
-        T.MathUtils.lerp(
-          trayFrom[0],
-          walking.x + Math.sin(figure.yaw) * carry.forward,
-          handover,
-        ),
-        T.MathUtils.lerp(trayFrom[1], carry.y, handover),
-        T.MathUtils.lerp(
-          trayFrom[2],
-          walking.z + Math.cos(figure.yaw) * carry.forward,
-          handover,
-        ),
+        T.MathUtils.lerp(from[0], x, take),
+        T.MathUtils.lerp(from[1], carry.y, take),
+        T.MathUtils.lerp(from[2], z, take),
       );
-      dummy.updateMatrix();
-      const trayIndex = carriedTrays.count++;
-      carriedTrays.setMatrixAt(trayIndex, dummy.matrix);
-      trayOpacity.setX(trayIndex, opacity);
-      dummy.rotation.set(0, 0, 0);
-    }
+    else dummy.position.set(x, carry.y, z);
+    dummy.updateMatrix();
+    const trayIndex = carriedTrays.count++;
+    carriedTrays.setMatrixAt(trayIndex, dummy.matrix);
+    trayOpacity.setX(trayIndex, opacity);
+    dummy.rotation.set(0, 0, 0);
+  }
+
+  function collectDiner(
+    diner: Diner,
+    collect: NonNullable<Departure["collect"]>,
+    elapsed: number,
+    trayFrom?: Point,
+  ) {
+    const step = collectTray(collect.fromX, collect.fromZ, elapsed);
+    const at = toHall(collect.frame, step.x, step.z);
+    // Someone called while still walking in finishes fading in on the way.
+    const opacity = T.MathUtils.lerp(
+      collect.opacity,
+      1,
+      T.MathUtils.clamp(elapsed / 300, 0, 1),
+    );
+    figure.x = at.x;
+    figure.z = at.z;
+    figure.yaw = collect.frame.yaw + step.yaw;
+    figure.faceYaw = 0;
+    figure.stride = step.walking ? Math.sin(step.metres * GAIT) : 0;
+    figure.walking = step.walking;
+    figure.carrying = step.take > 0;
+    people.add(diner.look, figure, "full", opacity);
+    holdTray(diner.look, opacity, trayFrom, step.take);
   }
 
   function drawDepartures(now: number) {
     if (departures.length === 0) return;
     departures = departures.filter(
-      ({ startedAt }) => now - startedAt < WALK_MS,
+      ({ startedAt, collect }) =>
+        now - startedAt < WALK_MS + (collect?.ms ?? 0),
     );
-    for (const { diner, x, z, side, startedAt, trayFrom, yaw } of departures) {
+    for (const departure of departures) {
+      const { diner, x, z, side, startedAt, trayFrom, yaw, collect } =
+        departure;
+      const elapsed = Math.max(0, now - startedAt);
+      if (collect && elapsed < collect.ms) {
+        collectDiner(diner, collect, elapsed, trayFrom);
+        continue;
+      }
       walkDiner(
         diner,
         x,
         z,
         side,
-        Math.max(0, now - startedAt) / WALK_MS,
+        (elapsed - (collect?.ms ?? 0)) / WALK_MS,
         true,
-        trayFrom,
+        Boolean(trayFrom),
         yaw,
+        collect ? PICKUP_FACING : undefined,
       );
     }
   }
@@ -1058,7 +1139,7 @@ export function createHallScene(
             n % 2 === 0 ? -1 : 1,
             distance,
             false,
-            undefined,
+            false,
             yaw,
           );
           continue;

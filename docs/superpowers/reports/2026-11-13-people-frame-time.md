@@ -122,6 +122,25 @@ late frames at both `detail` values, with a mean draw time of 7.82 ms at
 costs about 0.4 ms more CPU-side draw time than the overview (7.62 ms against
 7.22 ms) for 550 more figures; run-to-run variation is of the same order.
 
+## After: served diners walk to the counter
+
+A served diner now leaves the queue, walks to the counter and takes the tray
+there before leaving, so each one is on screen for up to about 1.8 seconds
+longer. With the bench serving every stall once a second, that puts more
+figures in each frame. Same machine, browser and method; 20 seconds after a
+2-second warm-up. The densest view was run twice and the second run kept (the
+first gave 30.96 fps, 0 late frames and 7.95 ms mean); the overview was run
+once.
+
+| view                  | people | frames | fps   | lateShare | meanDrawMs | p95DrawMs |
+| --------------------- | ------ | ------ | ----- | --------- | ---------- | --------- |
+| `near=1&detail=1`     | 1600   | 620    | 30.97 | 0         | 7.88       | 8.7       |
+| overview, `detail=0`  | 1050   | 620    | 30.96 | 0         | 7.47       | 8.4       |
+
+Measured on the working tree that became the commit adding this section. Both
+views stay at the scene's pacing ceiling with no late frames; the densest view
+draws 300 more figures than before for about 0.3 ms more mean draw time.
+
 Limits of this evidence: one workstation (Apple M4) with a capable GPU. Weaker
 integrated GPUs are not covered, and the game design's reference machine is
 still to be agreed. Project 3 (visible diners) re-measures after adding more

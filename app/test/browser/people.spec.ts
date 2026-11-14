@@ -17,7 +17,15 @@ import {
   type Role,
 } from "../../src/people";
 import { createPeople } from "../../src/people-mesh";
-import { QUEUE_SPOTS, STAFF_SPOTS } from "../../src/hall-layout";
+import {
+  COUNTER_TRAY,
+  PICKUP_SPOT,
+  QUEUE_SPOTS,
+  STAFF_SPOTS,
+  TAKE_MS,
+  collectMs,
+  collectTray,
+} from "../../src/hall-layout";
 
 test("people: a look is a pure function of serial and role", () => {
   expect(personLook(42, "diner")).toEqual(personLook(42, "diner"));
@@ -516,6 +524,99 @@ test("people: the queue stands clear of the tray pickup lane", () => {
   // The pickup view looks along the stall's centre line (x = 0) at the tray.
   for (const spot of QUEUE_SPOTS)
     expect(spot[0] + FIGURE_MAX_SPAN / 2).toBeLessThanOrEqual(-0.1);
+});
+
+test("people: the pickup spot is beside the queue and off the pickup view's centre line", () => {
+  expect(PICKUP_SPOT[0] - FIGURE_MAX_SPAN / 2).toBeGreaterThanOrEqual(0.1);
+  // The tray's whole trip, counter to pickup spot, stays clear of everyone waiting.
+  for (let n = 0; n <= 20; n++) {
+    const x = T.MathUtils.lerp(COUNTER_TRAY[0], PICKUP_SPOT[0], n / 20);
+    const z = T.MathUtils.lerp(COUNTER_TRAY[1], PICKUP_SPOT[1], n / 20);
+    for (const spot of QUEUE_SPOTS)
+      expect(Math.hypot(x - spot[0], z - spot[1])).toBeGreaterThanOrEqual(
+        FIGURE_MAX_SPAN / 2 + 0.3,
+      );
+  }
+});
+
+test("people: a diner called for a tray walks to the counter without brushing the queue", () => {
+  // The last diner in the queue is the one served; everyone before them waits.
+  for (const [served, from] of QUEUE_SPOTS.entries()) {
+    const total = collectMs(from[0], from[1]);
+    const start = collectTray(from[0], from[1], 0);
+    expect([start.x, start.z]).toEqual([from[0], from[1]]);
+    const end = collectTray(from[0], from[1], total);
+    expect(end.x).toBeCloseTo(PICKUP_SPOT[0], 9);
+    expect(end.z).toBeCloseTo(PICKUP_SPOT[1], 9);
+    let last = start;
+    for (let ms = 0; ms <= total; ms += 10) {
+      const pose = collectTray(from[0], from[1], ms);
+      // No jumps: a 10 ms step is a few centimetres at most.
+      expect(Math.hypot(pose.x - last.x, pose.z - last.z)).toBeLessThan(0.05);
+      last = pose;
+      for (const waiting of QUEUE_SPOTS.slice(0, served))
+        expect(
+          Math.hypot(pose.x - waiting[0], pose.z - waiting[1]),
+        ).toBeGreaterThanOrEqual(FIGURE_MAX_SPAN);
+    }
+  }
+});
+
+test("people: the tray leaves the counter only once the diner stands at the pickup spot", () => {
+  fc.assert(
+    fc.property(
+      fc.double({ min: -3, max: 1, noNaN: true }),
+      fc.double({ min: 1.5, max: 4, noNaN: true }),
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      (fromX, fromZ, part) => {
+        const total = collectMs(fromX, fromZ);
+        expect(Number.isFinite(total)).toBe(true);
+        expect(total).toBeGreaterThanOrEqual(TAKE_MS);
+        const pose = collectTray(fromX, fromZ, total * part);
+        const there =
+          Math.hypot(pose.x - PICKUP_SPOT[0], pose.z - PICKUP_SPOT[1]) < 1e-9;
+        for (const value of [pose.x, pose.z, pose.yaw, pose.metres, pose.take])
+          expect(Number.isFinite(value)).toBe(true);
+        expect(pose.take).toBeGreaterThanOrEqual(0);
+        expect(pose.take).toBeLessThanOrEqual(1);
+        if (!there) expect(pose.take).toBe(0);
+        if (pose.take > 0) {
+          expect(pose.walking).toBe(false);
+          // Taking the tray, the diner faces it.
+          expect(pose.yaw).toBeCloseTo(
+            Math.atan2(
+              COUNTER_TRAY[0] - PICKUP_SPOT[0],
+              COUNTER_TRAY[1] - PICKUP_SPOT[1],
+            ),
+            9,
+          );
+        }
+        // The hands close on the tray steadily, and hold it by the end.
+        const later = collectTray(fromX, fromZ, total * part + 20);
+        expect(later.take).toBeGreaterThanOrEqual(pose.take);
+        expect(collectTray(fromX, fromZ, total).take).toBe(1);
+        expect(collectTray(fromX, fromZ, total - TAKE_MS).take).toBeCloseTo(
+          0,
+          9,
+        );
+      },
+    ),
+  );
+});
+
+test("people: a walking diner faces the way they are going", () => {
+  const [fromX, fromZ] = QUEUE_SPOTS[2];
+  const along = collectTray(fromX, fromZ, 100);
+  expect(along.walking).toBe(true);
+  expect(along.z).toBe(fromZ); // along their own row first
+  expect(along.x).toBeGreaterThan(fromX);
+  expect(along.yaw).toBeCloseTo(Math.PI / 2, 9); // +x
+  const total = collectMs(fromX, fromZ);
+  const forward = collectTray(fromX, fromZ, total - TAKE_MS - 100);
+  expect(forward.walking).toBe(true);
+  expect(forward.x).toBeCloseTo(PICKUP_SPOT[0], 9); // then up the pickup lane
+  expect(forward.z).toBeLessThan(fromZ);
+  expect(Math.abs(forward.yaw)).toBeCloseTo(Math.PI, 9); // toward the counter
 });
 
 test("people: a frame uploads only the slots in use", () => {

@@ -1339,7 +1339,7 @@ Waiting diner figures vary in clothing color, skin tone, and height. New figures
 
 A diner can click their own served tray on the counter to see two arms reach out from the camera, take the tray, and lower it out of view. F while the scene is focused and a labelled Take tray control offer equivalent access. Only private committed service facts create these personal trays; main/drink share a tray and a served dessert has its own. Collection is cosmetic: service, payment and dessert eligibility never wait for the animation or require another economic command. Reduced motion removes the tray immediately. Keep collected trays gone across live updates and scene remounts for the current client session; recent uncollected completed courses remain visible for 30 real seconds of available hall time.
 
-After a committed handover, a departing customer carries the food tray from the counter. The counter tray represents current handover work, and a customer's tray fades with that customer. A cancellation produces no food-carrying departure.
+After a committed handover, the served customer steps out of the queue, walks along their own row to the counter beside the queue, takes the tray there, and leaves away from the queue carrying it. Neither the customer nor the tray passes through anyone still waiting. The counter tray represents current handover work, and a customer's tray fades with that customer. A cancellation produces no food-carrying departure.
 
 ### Audio and accessibility
 
