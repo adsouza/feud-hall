@@ -160,6 +160,82 @@ test("visitor can dine and sees why ordering is unavailable", async ({
   );
 });
 
+test("choosing a stall and dietary profile does not start a request loop", async ({
+  page,
+  hall,
+}) => {
+  await page.goto(hall.origin);
+  await createGuest(page, "Diner");
+  await page.getByRole("button", { name: "My visit", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "Location", exact: true })
+    .selectOption({ label: "NPC budget" });
+  await page
+    .getByRole("combobox", { name: "Dietary profile" })
+    .selectOption("vegan");
+  // The menu for that stall and profile has arrived.
+  await expect(
+    page.getByRole("combobox", { name: "Main", exact: true }).locator("option"),
+  ).toContainText(["Falafel wrap"]);
+
+  const seen = { state: 0, receipts: 0 };
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/state") seen.state++;
+    if (path === "/api/dining-history") seen.receipts++;
+  });
+  await page.waitForTimeout(2000);
+  // The page polls its state every 850 ms. Receipts reload only when the
+  // account, visit or balance changes, and none of them does here.
+  expect(seen.state).toBeLessThanOrEqual(6);
+  expect(seen.receipts).toBeLessThanOrEqual(1);
+});
+
+test("a choice changed while a refresh is in flight is still fetched", async ({
+  page,
+  hall,
+}) => {
+  // Installed before the page loads, or the page's poll timer is a real one
+  // that this clock cannot stop.
+  await page.clock.install();
+  await page.goto(hall.origin);
+  await createGuest(page, "Diner");
+  await page.getByRole("button", { name: "My visit", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "Location", exact: true })
+    .selectOption({ label: "NPC budget" });
+  const profile = page.getByRole("combobox", { name: "Dietary profile" });
+  await profile.selectOption("vegan");
+  const mains = page
+    .getByRole("combobox", { name: "Main", exact: true })
+    .locator("option");
+  await expect(mains).toContainText(["Falafel wrap"]);
+
+  // Stop the 850 ms poll, so only the page's reaction to a change can fetch.
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  await page.waitForTimeout(300); // let the poll that pausing fired finish
+
+  let release = () => {};
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let arrived = () => {};
+  const inFlight = new Promise<void>((resolve) => (arrived = resolve));
+  let held = false;
+  await page.route("**/api/state?*", async (route) => {
+    if (!held) {
+      held = true;
+      arrived();
+      await released;
+    }
+    await route.continue();
+  });
+  await profile.selectOption("vegetarian");
+  await inFlight;
+  await profile.selectOption("unrestricted");
+  await expect(mains).toHaveCount(1); // no menu for the new choice yet
+  release();
+  await expect(mains).toContainText(["Falafel wrap"]);
+});
+
 test("helper sees selection, automatic handover, and the missed-window explanation", async ({
   page,
   hall,

@@ -610,6 +610,14 @@
       ? { stall_id: orderLocation, profile_id: diet }
       : null,
   );
+  // `checkoutScope` is a new object whenever the view is refreshed. Anything
+  // that fetches because the choice changed must watch this string instead,
+  // or each refresh would trigger the next.
+  let checkoutKey = $derived(
+    checkoutScope
+      ? JSON.stringify([checkoutScope.stall_id, checkoutScope.profile_id])
+      : "",
+  );
   let checkoutMenu = $derived(
     view?.checkout_menu?.stall_id === checkoutScope?.stall_id &&
       view?.checkout_menu?.profile_id === checkoutScope?.profile_id
@@ -915,7 +923,8 @@
   });
 
   $effect(() => {
-    if (receiptScope) void loadReceipts();
+    // Only a new scope reloads receipts; what loadReceipts reads is not tracked.
+    if (receiptScope) untrack(() => void loadReceipts());
     return () => {
       receiptRequest++;
       receipts = null;
@@ -971,7 +980,7 @@
   });
 
   $effect(() => {
-    if (checkoutScope) untrack(() => void refresh());
+    if (checkoutKey) untrack(() => void refresh());
   });
 
   $effect(() => {
@@ -1012,6 +1021,8 @@
   async function refresh() {
     if (refreshRunning) return;
     refreshRunning = true;
+    const requested = checkoutKey;
+    let stale = false;
     try {
       const current = await getView(checkoutScope);
       if (!view || current.hall.position >= view.hall.position) {
@@ -1053,6 +1064,9 @@
       updateRequired = false;
       pollFailures = 0;
       nextPoll = 0;
+      // The choice changed while this request was in flight, and the refresh
+      // that change asked for was skipped above.
+      stale = checkoutKey !== "" && checkoutKey !== requested;
     } catch (error) {
       connected = false;
       updateRequired =
@@ -1062,6 +1076,7 @@
     } finally {
       refreshRunning = false;
     }
+    if (stale) void refresh();
   }
 
   async function heartbeat() {
