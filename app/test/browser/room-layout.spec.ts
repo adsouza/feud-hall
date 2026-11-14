@@ -1,6 +1,13 @@
 import { expect, test } from "./hall";
 import fc from "fast-check";
-import { QUEUE_SPOTS, toHall } from "../../src/hall-layout";
+import {
+  QUEUE_DRAW_MAX,
+  QUEUE_SPOTS,
+  queueSpot,
+  stallBlocks,
+  toHall,
+} from "../../src/hall-layout";
+import { FIGURE_MAX_SPAN } from "../../src/people";
 import {
   DOOR_WIDTH,
   ENTRANCE_WIDTH,
@@ -8,13 +15,19 @@ import {
   ROOM_SIDE,
   SPOTS_PER_ROOM,
   assignSpots,
+  entrance,
   positionKind,
   roomAt,
   roomCentre,
+  routeAt,
+  routeLength,
+  routeWithin,
+  seatSpots,
   spotPlacement,
   tableSpots,
   walkable,
   walkingEntrance,
+  type Point,
   type SpotPlacement,
 } from "../../src/room-layout";
 
@@ -407,4 +420,104 @@ test("rooms: coordinates round trip", () => {
       },
     ),
   );
+});
+
+test("room layout: queue spots continue in rows of two and never overlap", () => {
+  for (let n = 0; n < 4; n++) expect(queueSpot(n)).toEqual(QUEUE_SPOTS[n]);
+  for (let a = 0; a < QUEUE_DRAW_MAX; a++)
+    for (let b = a + 1; b < QUEUE_DRAW_MAX; b++)
+      expect(
+        Math.hypot(
+          queueSpot(a)[0] - queueSpot(b)[0],
+          queueSpot(a)[1] - queueSpot(b)[1],
+        ),
+      ).toBeGreaterThanOrEqual(FIGURE_MAX_SPAN);
+});
+
+test("room layout: every queue spot of every stall is clear of booths, tables and seats", () => {
+  for (const room of [1, 2]) {
+    const placements = Array.from({ length: 15 }, (_, p) =>
+      spotPlacement(room, p),
+    );
+    for (const placement of placements)
+      for (let n = 0; n < QUEUE_DRAW_MAX; n++) {
+        const at = toHall(placement, ...queueSpot(n));
+        expect(roomAt(at.x, at.z)).toBe(room);
+        expect(placements.some((p) => stallBlocks(p, at.x, at.z))).toBe(false);
+        for (const seat of seatSpots(room))
+          expect(Math.hypot(seat.x - at.x, seat.z - at.z)).toBeGreaterThan(0.6);
+      }
+  }
+});
+
+test("room layout: a room has 32 seats, each facing its table", () => {
+  const seats = seatSpots(3);
+  expect(seats).toHaveLength(32);
+  for (const seat of seats) {
+    expect(seat.room).toBe(3);
+    const toTable = Math.atan2(seat.tableX - seat.x, seat.tableZ - seat.z);
+    expect(Math.cos(seat.yaw - toTable)).toBeCloseTo(1, 5);
+  }
+});
+
+test("room layout: the entrance is the middle of the south wall", () => {
+  const c = roomCentre(4),
+    e = entrance(4);
+  expect(e.inside.x).toBeCloseTo(c.x);
+  expect(e.outside.x).toBeCloseTo(c.x);
+  expect(roomAt(e.inside.x, e.inside.z)).toBe(4);
+  expect(roomAt(e.outside.x, e.outside.z)).toBe(null);
+  expect(e.outside.z).toBeGreaterThan(ROOM_SIDE / 2);
+});
+
+test("room layout: routes stay on the floor", () => {
+  const room = 2;
+  const placements = Array.from({ length: 15 }, (_, p) =>
+    spotPlacement(room, p),
+  );
+  const ends: Point[] = [
+    entrance(room).inside,
+    ...seatSpots(room),
+    ...placements.flatMap((p) =>
+      [0, QUEUE_DRAW_MAX - 1].map((n) => toHall(p, ...queueSpot(n))),
+    ),
+  ];
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...ends),
+      fc.constantFrom(...ends),
+      (from, to) => {
+        const route = routeWithin(room, from, to);
+        expect(route[0]).toEqual({ x: from.x, z: from.z });
+        expect(route[route.length - 1]).toEqual({ x: to.x, z: to.z });
+        // Sample every 0.25 along the route, leaving out the first and last metre.
+        const length = routeLength(route);
+        for (let m = 1; m < length - 1; m += 0.25) {
+          const at = routeAt(route, m);
+          expect(roomAt(at.x, at.z)).toBe(room);
+          expect(placements.some((p) => stallBlocks(p, at.x, at.z))).toBe(
+            false,
+          );
+          for (const table of tableSpots(room))
+            expect(Math.hypot(table.x - at.x, table.z - at.z)).toBeGreaterThan(
+              0.62,
+            );
+        }
+        expect(length).toBeLessThan(4 * ROOM_SIDE);
+      },
+    ),
+  );
+});
+
+test("room layout: routeAt runs from the first point to the last", () => {
+  const route = [
+    { x: 0, z: 0 },
+    { x: 3, z: 0 },
+    { x: 3, z: 4 },
+  ];
+  expect(routeLength(route)).toBeCloseTo(7);
+  expect(routeAt(route, 0)).toMatchObject({ x: 0, z: 0 });
+  expect(routeAt(route, 5)).toMatchObject({ x: 3, z: 2 });
+  expect(routeAt(route, 99)).toMatchObject({ x: 3, z: 4 });
+  expect(routeAt(route, 1).yaw).toBeCloseTo(Math.PI / 2);
 });

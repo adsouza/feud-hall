@@ -22,6 +22,22 @@ export const QUEUE_SPOTS: readonly (readonly [number, number])[] = [
   [-1.45, 2.45],
   [-0.55, 2.45],
 ];
+/** Space between two queue rows, as between the rows of `QUEUE_SPOTS`. */
+const QUEUE_ROW = 0.9;
+/**
+ * Queue spot n (0-based) in stall-local coordinates; rows of two, 0.9 apart,
+ * continuing the pattern of QUEUE_SPOTS, which stays as the first four. Every
+ * spot stays left of the centre line, clear of the pickup view and lane.
+ */
+export function queueSpot(n: number): readonly [number, number] {
+  if (!Number.isInteger(n) || n < 0)
+    throw new RangeError(`queue spot ${n} is not a whole number from 0`);
+  if (n < QUEUE_SPOTS.length) return QUEUE_SPOTS[n]!;
+  const [x, z] = QUEUE_SPOTS[2 + (n % 2)]!;
+  return [x, z + QUEUE_ROW * (Math.floor(n / 2) - 1)];
+}
+/** The most queue spots ever drawn at one stall. */
+export const QUEUE_DRAW_MAX = 8;
 /** Where a finished tray waits on the counter, in stall-local coordinates. */
 export const COUNTER_TRAY: readonly [number, number] = [0, 0.88];
 /**

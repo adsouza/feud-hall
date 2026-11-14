@@ -5,6 +5,7 @@ import {
   ENTRANCE_WIDTH,
   ROOM_COUNT,
   ROOM_SIDE,
+  SEAT_OFFSETS,
   roomCentre,
   tableSpots,
 } from "./room-layout";
@@ -19,12 +20,6 @@ const HALF = ROOM_SIDE / 2;
 const GAP = roomCentre(2).x - roomCentre(1).x - ROOM_SIDE;
 /** Tables and four seats per table, for up to three shown rooms. */
 const TABLE_LIMIT = 3 * 12;
-const SEATS = [
-  [0, 0.95],
-  [0, -0.95],
-  [0.95, 0],
-  [-0.95, 0],
-] as const;
 
 export type ShownRoom = { room: number; detail: "full" | "simple" };
 
@@ -129,7 +124,7 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
   const seats = new T.InstancedMesh(
     seatGeometry,
     seat,
-    TABLE_LIMIT * SEATS.length,
+    TABLE_LIMIT * SEAT_OFFSETS.length,
   );
   for (const mesh of [tables, legs, seats]) {
     mesh.count = 0;
@@ -413,7 +408,7 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
         transform.updateMatrix();
         legs.setMatrixAt(count, transform.matrix);
         count++;
-        for (const [dx, dz] of SEATS) {
+        for (const [dx, dz] of SEAT_OFFSETS) {
           const c = Math.cos(spot.yaw),
             s = Math.sin(spot.yaw);
           transform.position.set(
