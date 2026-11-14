@@ -199,6 +199,13 @@ that `Npc.Planner` and `PublicView` reference neither `Hall.Decider`,
 `Hall.Evolver`, nor `Hall.Admission` (the planner sees only its inputs), each
 with a planted-violation sensitivity case.
 
+Known failure: the architecture test "domain modules have no outer-layer…"
+fails on `main` and on the row-of-halls branch. It flags the compile-time
+`File.read!` in `server/lib/feud_hall/domain/content/launch_catalog.ex` and
+stops at that first offender, so it does not check the domain files sorted
+after it. This predates the row of halls. Until the test or the catalog read is
+changed, check new or changed domain files for outer-layer references by hand.
+
 The Project B mutants (`B1`-`B13`, with variants `b`) cover the market (rotation
 tie-break, price clamp, stock decrement, replenishment), arrivals during
 cleaning, diner choice (exposure applied once, dietary compatibility), the
@@ -355,7 +362,10 @@ The HTTP probe provisions 150 occupied stalls, 150 paid helper shifts and 150
 funded dining visits through normal commands. Three bursts each use 450 open
 HTTP connections, with 30 owner heartbeat commands in the first burst. The
 expanded case uses 50 owners with three stalls each and three sessions per
-owner. The probe validates the principal and private scope in each response.
+owner. Because launch halls refuse spots in rooms that are not open, the probe
+leases the quiet spots first in ascending ID order, which opens the ten rooms
+in a chain, and then the rest; for the launch layout that is `s001` to `s150`
+in order. The probe validates the principal and private scope in each response.
 It measures burst latency, with the hall at a fixed game instant. The separate
 launch benchmark advances the economy at one service-second intervals,
 checks contested wholesale, paired trays and dessert service, and compares
@@ -450,6 +460,23 @@ pools, forward-only versions, PostgreSQL replay and snapshot-tail replay.
 The curated `Māori catalog expansion` mutation must fail the same-version
 rejection assertion.
 
+For the [row of rooms](GAME_DESIGN.md#rooms), run each of
+`test/feud_hall/domain/room_layout_test.exs`,
+`test/feud_hall/domain/rooms_test.exs` and
+`test/feud_hall/application/rooms_test.exs` with `--max-cases 1`. The first
+checks each room's class mix and the position of every spot. The second checks
+the opening rule and the worked scarcity rents by example, with bounded
+properties for the open-room prefix, class order, quotes that never fall as a
+class fills, and the cap and gap bounds. The third goes through the application
+boundary: closed-room refusals, a guard-removal case tagged
+`:guard_sensitivity`, held draft rents, waiting-list offers in a newly opened
+room, the version 3 upgrade with genesis and snapshot-tail replay (including a
+snapshot at the head position), the view fields, and a property that no draft
+or lease is ever placed in a room that was closed at that moment.
+`launch_catalog_test.exs` and `event_fixtures_test.exs` cover the catalog
+version, its validation and codec; `recovery_test.exs` restarts a launch hall
+on PostgreSQL across the upgrade and checks it is recorded once.
+
 The web workflow runs frozen Bun install, Prettier, Oxlint, native `bun check`,
 and a Vite production build. It also runs a one-worker Chromium suite for
 changes to the web client, server, or branding assets. The suite exercises
@@ -498,21 +525,31 @@ reports frame delivery. From `app/`, run
 `NODE_OPTIONS=--max-old-space-size=1536 bun run dev -- --port 5199`, then open
 `http://localhost:5199/bench.html?stalls=150&detail=0&seconds=20` and the same
 URL with `detail=1` in a GPU-backed browser window that stays visible and
-focused for the whole run (a hidden tab stops the scene drawing). Add `near=1`
-(default `0`) to start the camera low among the stalls, at `(0, 10, 12)` looking
-at `(0, 1, 0)`, instead of at the whole-hall overview. Each page ends by showing
-a `[data-bench-result]` element holding JSON with `stalls`, `detail`, `near`,
-`seconds`, `frames`, `fps`, `lateShare` (share of intervals between consecutive
-frames longer than 40 ms), `meanDrawMs`, `p95DrawMs`, `people` (the most people
-the scene drew in one measured frame, read from the hall's `data-hall-people`
-attribute), and `renderer`. Every second the bench gives each stall a new
-last-served order, so one diner per stall walks off with a tray and the scene
-keeps animating in both detail modes. It discards a 2-second warm-up and then
-measures for `seconds`. The scene draws a stall in full only when it is
-inspected or, with `detail=1`, within 28 units of the camera. At the overview
-camera no stall is that close, so `detail=0` and `detail=1` draw the same
-reduced-detail figures (one owner, one worker and one queued diner per stall)
-plus the walkers; `near=1&detail=1` is the densest view. The bench always runs
+focused for the whole run (a hidden tab stops the scene drawing). Stall *i*
+takes its room and position from the client fallback (stall IDs in order,
+fifteen to a room); vacant spots of open rooms are "to let" bays.
+`rooms=<1..10>` (default `10`) sets how many rooms are open and
+`room=<1..10>` (default `1`, at most `rooms`) the room shown; the scene draws
+that room and its open neighbours. Add `near=1` (default `0`) to start the
+camera low over the middle of the chosen room, at `(cx, 10, 12)` looking at
+`(cx, 1, 0)` where `cx` is that room's centre, instead of at the room overview.
+`eye=1` stands at eye height west of the room's centre looking east through
+its doorway, and `eye=2` looks south through the entrance onto the street;
+both are for looking, not for the frame bar. Each page ends by showing a
+`[data-bench-result]` element holding JSON with `stalls`, `detail`, `near`,
+`eye`, `room` (the scene's current room), `rooms`, `seconds`, `frames`, `fps`,
+`lateShare` (share of intervals between consecutive frames longer than 40 ms),
+`meanDrawMs`, `p95DrawMs`, `people` (the most people the scene drew in one
+measured frame, read from the hall's `data-hall-people` attribute), and
+`renderer`. Every second the bench gives each stall a new last-served order,
+so one diner per stall walks off with a tray and the scene keeps animating in
+both detail modes. It discards a 2-second warm-up and then measures for
+`seconds`. The scene draws a stall in full only when it is inspected or, with
+`detail=1`, within 28 units of the camera, and draws neighbouring rooms at
+reduced detail (one owner, one worker and one queued diner per open stall)
+plus the walkers. `stalls=150&rooms=10&room=5` shows a full middle room with
+both neighbours full, and adding `near=1&detail=1` gives the densest view. The
+bench always runs
 with motion on, but `detail=0` with motion on cannot occur in the app, which
 turns motion off whenever it reduces detail; the bench's `detail=0` runs are a
 harder case than the app produces.
@@ -582,17 +619,27 @@ in dining history. `tablet-pages.spec.ts` exercises the renderer
 directly with a long view: new errors open their page, routine updates allow
 browsing elsewhere, and repeated errors become visible again.
 
-`app/test/browser/hall-layout.spec.ts` checks corner-first/largest-gap placement,
-the sixteen-stall island threshold, eight-stall cap, balanced splitting, stable logical identities, inward/outward
-headings, room bounds, and independent world-space booth separation at every
-size through 150. A bounded seeded property checks vacancies and coordinate
-transforms. Browser artifacts cover a populated outer ring, multiple compact islands, a tablet that stays pickable when its stall changes island and heading, and 150-stall rendering; these are presentation checks, not a simulation
-capacity benchmark. Run with one worker alongside focused hall-interaction and
-owner-view tests when changing stall orientation or placement.
+`app/test/browser/room-layout.spec.ts` checks the pure room lookup in
+`app/src/room-layout.ts`: 150 distinct placements inside their own rooms, no
+overlapping booths or queues, clear doorways and entrances, counters facing
+into their room, the position-to-class table and each room's class mix, the
+stall-ID fallback (fifteen to a room, independent of input order), walking
+limited to open rooms and doorways between them, table spots clear of queues
+and paths, walking entrances, and coordinate round trips.
+`app/test/browser/hall-rooms.spec.ts` drives the built client and scene:
+Hall 1 of a new hall with its three stalls and twelve "to let" bays, only the
+current room and open neighbours drawn, a closed room not entered, the camera
+leaving a room that closes, moving to a selected stall's room, stalls that
+never move, 150 stalls across ten rooms, the Halls control and `[`/`]` keys,
+the list grouped by room with **View spot** (also without WebGL), the room
+restored on return, Japanese labels, and leasing from a bay with its rent
+explanation. `app/test/browser/rent.spec.ts` checks the rent explanation's
+exact BigInt percentage and both languages. Run each with one worker; they are
+presentation checks, not a frame-rate or simulation capacity benchmark.
 
-`app/test/browser/hall-navigation.spec.ts` checks clear walking entrances and
-open-stall preference through 150 stalls, including closed/empty fallback. Its
-browser probe inspects the actual WebGL view matrix for arrow/Shift entry,
+`app/test/browser/hall-navigation.spec.ts` checks the first arrow entering at
+eye level facing an open stall in the real scene, and the overview kept on
+return with nothing selected. Its browser probe inspects the actual WebGL view matrix for arrow/Shift entry,
 eye height, level heading, continued movement and restoration after navigation.
 
 `tray-pickup.spec.ts` checks private served-course eligibility and deduplication,

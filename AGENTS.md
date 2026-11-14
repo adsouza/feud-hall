@@ -9,7 +9,12 @@ economic core (Milestone 1), durable PostgreSQL event storage, recovery, and
 projections (Milestone 2A), and the shared simulation (Milestone 2B: batched
 wholesale market, simulated diners, automatic kitchen, and basic NPC owners).
 New managed halls use the 25-cuisine launch catalog. Managed launch halls receive
-additive catalog versions through a recorded expansion that preserves pinned terms. The three-cuisine slice
+additive catalog versions through a recorded expansion that preserves pinned terms.
+Launch catalog version 3 splits the hall into a
+[row of ten rooms](docs/GAME_DESIGN.md#rooms) of fifteen spots that open in
+order, with [scarcity rent](docs/GAME_DESIGN.md#scarcity-rent) derived by
+`FeudHall.Domain.Hall.Rooms`; older managed halls gain it through that
+expansion at start-up (see [Deployment](docs/DEPLOYMENT.md#local-management-game)). The three-cuisine slice
 remains available for replay and focused tests. Managed slice halls add launch
 content through a recorded upgrade that preserves existing recipes and stock.
 The local [Project C report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md)

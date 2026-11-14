@@ -1,6 +1,6 @@
 # Feud Hall Game Design
 
-Version 0.33 · Design baseline for implementation planning
+Version 0.34 · Design baseline for implementation planning
 
 Feud Hall is a restaurant-management simulation with offline single-player and persistent online multiplayer halls. Players compete twice: first for wholesale ingredients, then for diners. They choose cuisines and menus, set prices, hire and schedule staff, improve equipment, and expand into additional stalls. Staff perform kitchen work automatically. A successful business balances demand, quality, capacity, and costs while rivals make their own decisions in the same economy.
 
@@ -271,9 +271,46 @@ The following availability and absence policies concern multiplayer. An individu
 
 ## 6. The shared hall and expansion space
 
-The full hall has 150 predefined slots, grouped into visually navigable aisles or neighborhoods. The initial camera frames the occupied area rather than requiring a new player to traverse a mostly empty building. Every location remains part of one economic hall; visual neighborhoods are not separate markets in the first release.
+The full hall has 150 predefined slots, grouped into a row of ten rooms (below). The initial camera frames one room rather than requiring a new player to traverse a mostly empty building. Every location remains part of one economic hall; rooms are not separate markets, and the hall-wide arrival pool does not grow when a room opens.
 
 Shared seating, walkways, signage, and crowds communicate a common place. Proximity to entrances, main walkways, or shared seating can contribute to a location's published foot-traffic exposure. Physical seating capacity and pedestrian collisions remain presentation features in the first release; economic queue capacity and service times are explicit server rules.
+
+### Rooms
+
+In this section a **room** is one of the ten small halls. Player-facing text calls them "Hall 1" to "Hall 10" (「ホール1」 to 「ホール10」); "the hall" keeps meaning the whole economic place.
+
+**Owner decisions (2026-11-13):**
+
+- The hall is a row of ten square rooms, each holding up to 15 stalls around its walls, with the centre kept for tables. There are no island blocks in the middle of the floor.
+- Each room has its own entrance from outside.
+- Neighbouring rooms are joined by doorways that stay shut until the next room is in use. At the start only room 1 is used.
+- The next room opens once every spot of any one quality class is taken across the rooms already open.
+- Location quality is tied to where a stall actually stands.
+- The scene draws roughly one room at a time; directly connected open rooms may be shown too.
+
+**Spots and quality (proposed design defaults).** Each of the 150 spot IDs has a fixed room and a fixed position, so a stall never moves. Room membership is versioned catalog rule data, because the server decides which spots can be leased; the coordinates of a position are client presentation data. The quality class of each spot is unchanged: 40 quiet (`s001`–`s040`), 60 standard (`s041`–`s100`), 35 busy (`s101`–`s135`) and 15 prime (`s136`–`s150`). Fifteen per room does not divide those evenly, so rooms alternate: odd rooms hold 4 quiet, 6 standard, 3 busy and 2 prime; even rooms hold 4 quiet, 6 standard, 4 busy and 1 prime. Within each class, ascending spot IDs fill rooms in order, so room 1 holds `s001`–`s004`, `s041`–`s046`, `s101`–`s103`, `s136` and `s137`.
+
+Quality follows position (designer's call, owner saw it). Positions run clockwise from the north-west corner; the entrance is in the middle of the south wall and the doorways to neighbouring rooms in the middle of the west and east walls.
+
+| Position | Where | Class |
+| --- | --- | --- |
+| 0, 6, 9, 12 | Corners | Quiet |
+| 1–5 | North wall | Standard |
+| 7, 8 and 13, 14 | Beside the east and west doorways | Busy |
+| 10, 11 | Beside the entrance | Prime |
+
+Odd rooms have three busy spots, so position 13 is standard there; even rooms have one prime spot, so position 11 is standard there. The end rooms have a blank wall where a further doorway would be. The exposure factor of each class is unchanged.
+
+**Which rooms are open (proposed design default).** "Open" is derived from committed state and never stored, so the lease check and every view agree:
+
+- Room 1 is always open.
+- Room *k*+1 is open when rooms 1..*k* are open and, for at least one class, every spot of that class in rooms 1..*k* is leased.
+- A room is also open when it, or any later room, holds a lease or a draft reservation. First-location offers are draft reservations. This keeps the row contiguous in halls that had leases in later rooms before the rule arrived, and stops a room closing on a tenant.
+- Drafts do not count as leased for the opening test, so an expiring draft cannot make a room flicker open and shut. A room can close again when a departure reopens a class and the room is empty.
+
+**What a closed room means (rule change).** A spot in a closed room cannot be reserved, leased, offered from the waiting list or chosen by a computer-run owner. Reserving such a spot is refused as unavailable; creating a restaurant or adding a location there is refused with `room_closed`. The lease list, the "to let" bays and the computer-run planner see the same open rooms. When a lease opens the next room, the waiting list is offered spots in it in the same transition, in FIFO order. The newcomer vacancy reserve below is still not implemented in the server; the room rule does not add it.
+
+Odd rooms have two prime spots and even rooms one, so prime is the class most likely to run out first and open the next room while the current one is sparse. **Owner decision (2026-11-13):** a new hall does not start with a computer-run restaurant on a prime spot. The catalog's "premium" computer-run profile prefers standard spots instead of prime, which also applies whenever that profile chooses a spot later. Scarcity rent, below, is the second answer: a strong nudge for classes to fill evenly, not a guarantee.
 
 ### Location quality and lease pricing
 
@@ -281,9 +318,9 @@ Locations differ economically from the first release. A stall on a busy main ais
 
 All initial slots share the same baseline equipment footprint. The tier changes traffic exposure and lease charges, not an undisclosed station capacity or staff-skill bonus. Equipment improvements are priced and shown separately.
 
-Proposed initial tiers illustrate the tradeoff; their values require balance testing:
+Proposed initial tiers illustrate the tradeoff; their values require balance testing. The rents are each class's base rent; the quoted rent rises above it as the class fills (see [scarcity rent](#scarcity-rent)):
 
-| Location tier | Foot-traffic exposure factor | Open-state rent per 24 game hours | Closed holding fee per 24 game hours |
+| Location tier | Foot-traffic exposure factor | Base open-state rent per 24 game hours | Base closed holding fee per 24 game hours |
 | --- | ---: | ---: | ---: |
 | Quiet side aisle | 0.8× | $80 | $8 |
 | Standard aisle | 1.0× | $100 | $10 |
@@ -294,13 +331,45 @@ The exposure factor affects the likelihood of a simulated diner considering/choo
 
 Before confirming a lease, show its exact open and closed rates, prorated costs for the chosen opening schedule, upfront charges, exposure factor and reasons, projected sales as an estimate, and break-even meals at the selected menu margins. Compare the selected location with available cheaper options. At an $8 contribution per meal and the maximum 22-game-hour trading schedule plus two hours of cleaning holding fees, the busy-aisle daily premium is $46.25 (six extra meals) and the prime premium is $111 (fourteen extra meals). With twelve hours open and twelve closed, the respective combined rent/holding premiums are $27.50 and $66, requiring four and nine extra meals. These are cost comparisons, not promises of demand; quotes use the actual schedule and pinned lease terms.
 
-Use published fixed tiers initially rather than bidding for leases. Players choose among available, affordable slots for both their first location and expansions. Keep a useful mix of lower-rent and premium locations in the layout, with the newcomer vacancy reserve applying to affordable locations where possible. If no suitable affordable slot is free, show the actual alternatives or waiting list rather than assigning an unaffordable lease. NPCs pay the same location rates and choose locations within their budgets.
+Leases are quoted, not bid for. Players choose among available, affordable slots in open rooms for both their first location and expansions. Keep a useful mix of lower-rent and premium locations in the layout, with the newcomer vacancy reserve applying to affordable locations where possible. If no suitable affordable slot is free, show the actual alternatives or waiting list rather than assigning an unaffordable lease. NPCs pay the same quoted rates.
 
-Record the accepted slot, exposure profile/version, rent, and holding terms with the lease. Proposed first-release terms remain fixed for that lease; changes to future location pricing do not silently reprice existing leases. Closing reduces the charge to the published location-specific holding fee, so occupying a premium slot still has a higher cost while closed. Acquiring a different location uses the normal lease/setup and surrender rules.
+Record the accepted slot, exposure profile/version, rent, and holding terms with the lease. Proposed first-release terms remain fixed for that lease; changes to future location pricing do not silently reprice existing leases. Closing reduces the charge to the lease's recorded holding fee, so occupying a premium slot still has a higher cost while closed. Acquiring a different location uses the normal lease/setup and surrender rules.
+
+### Scarcity rent
+
+**Owner decision (2026-11-13):** a quality class's rent rises as that class's relative availability falls. This replaces the earlier proposed default of published fixed tiers. The confirmed rule that better locations cost more, shown before choosing, still holds.
+
+Designer's calls the owner saw:
+
+- Only new quotes carry the scarcity rent. A draft reservation or first-location offer holds the rent it was quoted until its existing deadline, and a lease records the rent it was quoted and keeps it. No existing lease, draft or accepted order changes terms, so an owner who signs when a class is nearly full keeps paying more than a neighbour who signs after the next room opens.
+- The rise is capped.
+- A class's quote always stays below the current quote of the next class up.
+
+The quote is computed from committed state, counting only spots in open rooms. For a class with base rent *B*, *total* spots in the open rooms and *leased* of them leased (drafts do not count), with cap *C* in thousandths:
+
+- if *total* ≤ 1 or *leased* ≥ *total* − 1, the raw rent is ⌊*B* × *C* / 1000⌋;
+- otherwise the raw rent is ⌊*B* × (1000 × (*total* − 1) + (*C* − 1000) × *leased*) / (1000 × (*total* − 1))⌋, a straight line from *B* with nothing leased to the cap with one spot left.
+
+Prime's quote is its raw rent. Working down from prime, each lower class's quote is the smaller of its raw rent and the next class up's quote minus the class gap. The holding fee scales by the same factor: ⌊base holding × quote / *B*⌋. Arithmetic is in integer minor units and every division rounds down; the rent shown, quoted and recorded is the same number. Proposed tuning: cap 1.5× (`scarcity_cap_permille` 1,500) and class gap $1.00 (`class_gap` 100), recorded in the catalog's room rule.
+
+Worked figures with only room 1 open (4 quiet, 6 standard, 3 busy, 2 prime spots):
+
+| Leased | Quote |
+| --- | --- |
+| Nothing | Quiet $80, standard $100, busy $150, prime $220 |
+| One of four quiet | Quiet $93.33 |
+| Two of six standard | Standard $120 |
+| One of two prime | Prime $330, holding $33 |
+| Three of four quiet, no standard | Quiet $99, held $1 below standard's $100 by the class gap (raw $120) |
+| Six of six standard, so room 2 opens | Standard $127.27 (six of twelve) |
+
+When a room opens, the class has more spots, the leased share falls, and new quotes drop. The exposure factor does not change: scarcity affects what a spot costs, never how many diners pass it. Computer-run owners use the same quotes. A new hall's three computer-run restaurants stand on `s001` (quiet, $80), `s041` (standard, $100) and `s042` (standard, $110), all in room 1.
+
+Every place that shows a rent shows the current quote, or for a held draft the held rent: the lease list, the "to let" bay, both location forms and the expansion estimate and break-even figures. Each adds one plain line in English and Japanese: how many spots of the class are taken and how far above the usual rent the quote is (the percentage rounded down), that it is the usual rent, or until when a draft holds its rent.
 
 ### Admission and dormant leases
 
-Proposed admission rules reserve the final ten vacant slots for first-location applicants: expansions require at least ten vacancies after the purchase. NPCs may relinquish a lease to admit a human instead of blocking entry, but the incoming owner acquires it only after existing work and lease commitments settle. A human never loses an active lease merely because the hall is popular. Draft reservations use the ten-service-minute setup rule above; draft expiry creates no failed-business record and cannot release an already confirmed lease.
+Proposed admission rules reserve the final ten vacant slots for first-location applicants: expansions require at least ten vacancies after the purchase. The server does not implement this newcomer vacancy reserve yet. NPCs may relinquish a lease to admit a human instead of blocking entry, but the incoming owner acquires it only after existing work and lease commitments settle. A human never loses an active lease merely because the hall is popular. Draft reservations use the ten-service-minute setup rule above; draft expiry creates no failed-business record and cannot release an already confirmed lease.
 
 Proposed waiting-list allocation is FIFO among licensed human principals seeking
 their first current location, including dormant owners reopening without a grant.
@@ -999,7 +1068,7 @@ The public owner history shows restaurant name, cuisines, opening and failure da
 
 Launch with three NPC restaurants occupying three of the 150 slots. A human joining the early hall therefore has several visible rivals. Keep these initial rivals as humans arrive, then retire them gradually after the simultaneous-human threshold is met. At least three operating restaurants outside cleaning is the sparse-population target, not a demand to evict human leases when a mature full hall is quiet. Zero operating restaurants during 03:00–05:00 is required.
 
-NPC profiles initially represent budget volume, dependable mainstream service, and premium quality. Their starting cuisines are drawn from the same twenty-five-cuisine catalog. They buy ingredients, pay costs, employ staff, wait for stations, and earn or lose money under the same rules. Decisions use public market information and their own private state; NPCs cannot read a rival's hidden inventory or future random outcomes.
+NPC profiles initially represent budget volume, dependable mainstream service, and premium quality. A computer-run owner chooses only among vacant, unreserved spots in [open rooms](#rooms): the lowest spot ID of its profile's preferred class, otherwise the lowest vacant spot ID. Budget prefers quiet spots; premium prefers standard spots rather than prime (owner decision, 2026-11-13), so a new hall's three NPC restaurants stand on `s001`, `s041` and `s042` in room 1 and both of its prime spots stay free. Their starting cuisines are drawn from the same twenty-five-cuisine catalog. They buy ingredients, pay costs, employ staff, wait for stations, and earn or lose money under the same rules. Decisions use public market information and their own private state; NPCs cannot read a rival's hidden inventory or future random outcomes.
 
 They do not receive free recurring stock, infinite cash, privileged market allocation, or impossible throughput. Difficulty comes from strategy parameters and planning consistency. Each NPC venture begins with the same standard startup capital and pays its actual kit, lease, stock, and staff costs. Replacement after insolvency is a separately recorded venture under a stable NPC operator identity, so purchase/visitor-payroll limits do not reset. NPCs can choose recovery liquidation or accept bankruptcy rather than receive a hidden rescue top-up. Low-population operating schedules and rosters should provide overlapping coverage, including quiet hours outside cleaning, when economically feasible.
 
@@ -1301,15 +1370,17 @@ The selected stall exposes **Menu**, **Counter**, and **Staff** controls in a to
 
 Each stall has a physical digital tablet mounted on its counter. Diners tap the tablet, or choose Menu/Counter, to bring its screen into readable view. Dish labels wrap at word boundaries (with Japanese-aware breaks), and each price stays intact; fit the complete label and price within the row without clipping. Error messages use word-aware wrapping across rows and red text, with an explicit attention message so color is not the only signal. While the in-world tablet is visible, display refusals, connection problems and uncertain-outcome retry controls there without duplicating a page-top banner that moves the scene. Keep screen-reader announcements and ordinary notifications available outside that tablet flow. A new error automatically opens the page containing its explanation, including after a later-page confirmation; routine live updates do not repeatedly pull the diner back to that page. The screen offers dietary filters, available mains and optional drinks, and a compact server-quoted review with the ordered items and their prices, total, estimated wait and explicit confirmation. Do not list individual ingredients on the tablet review; retain the complete bound ingredient/substitution terms in the confirmation payload. It then displays committed service and any eligible dessert offer. As soon as the server completes the visit, reset the tablet to its initial menu with an empty order selection; do not linger on a served status, recent receipt, expired estimate or old review/loading state. Keep receipts in My visit, and preserve an active dessert choice until it is accepted, declined or expires. Do not insert an order-status section above the Hall scene when an order is accepted or served: keep its position stable, with immersive status on the tablet and conventional progress/history on My visit. Page controls, keyboard navigation, English/Japanese text, and an optional accessible text equivalent support the same actions. Stepping back restores the previous hall camera; do not open a conventional checkout panel for this immersive dining flow. Helpers can inspect a funded offer, accept/leave a shift, stage supplies, yield, and select ready trays at their assigned counter. Owners use the same menu, purchasing, opening/closing, scheduling and staff controls as Business at the selected owned location, including from behind the counter. Owner self-purchase and helper-work restrictions still apply. Tablet and workbench actions use the same authorized use cases as the regular UI; tapping an item alone never purchases it. One shared draft, quote and pending-command state serves every surface, including retrying the same uncertain command on the tablet. Keep the workbench mounted when switching scene size or losing WebGL so inputs, focus and composition survive; narrow screens can place it below the scene.
 
-The first sixteen stalls form an inward-facing ring along the edges of the hall, occupying the four corners first and then the midpoints of the largest remaining perimeter gaps. Corner stalls face diagonally inward; all other outer-ring stalls face perpendicular to their wall, including those beside corners. Further stalls form compact outward-facing islands in the center, with at most eight stalls per island, filling corners and then side gaps. Split into additional balanced islands when that cap would be exceeded: nine interior stalls form islands of five and four; seventeen form islands of six, six and five. Pack islands into a compact group with clear aisles between them and the outer perimeter. Refill outer-ring vacancies first. Island membership and position may change as islands split or rebalance; preserve the selected stall, drafts and its local camera view through that change. The rendered room expands to maintain spacing, while logical lease locations, traffic and rent retain their existing identity.
+The hall is drawn as the [row of rooms](#rooms) in section 6. Each stall stands at its spot's fixed position in its room and never moves when other stalls arrive or leave. Corner stalls face the room's centre diagonally; wall stalls face straight out from their wall. The centre of each room holds tables and seats as scenery, clear of the queues and of the paths between the doorways and the entrance. The entrance in the middle of each room's south wall is an open doorway onto the street. Doorways to open neighbouring rooms are open; a doorway toward a closed room holds a shut door, and the end rooms have a blank wall instead. A vacant spot in an open room is an open bay with a "to let" sign.
 
-The stalls sit inside a four-walled hall with street-facing windows and a ceiling. When the camera is outside, the nearby walls and ceiling cut away to keep the stalls visible. From inside, the windows look onto a tree-lined street with hills beyond.
+The scene has a current room. It draws that room in full, open rooms directly next door at reduced detail, and nothing beyond them; a room two doorways away is not drawn. The viewer moves between rooms by walking through an open doorway, with the **Halls** control below the scene (one button per room, closed rooms disabled with the reason), or with `[` and `]` while the scene has focus. Selecting a stall anywhere moves the camera to its room. An owner's first view frames the room of their first stall; a visitor's frames room 1. If the current room closes, the camera moves to the highest open room at or below it. Selecting a "to let" bay with the pointer, or **View spot** in the list, opens a spot panel with its class, exposure, rent, holding and set-up fees, the rent line from [scarcity rent](#scarcity-rent), and the existing reserve or lease action when the viewer may take it. The bays are selectable by pointer only inside the 3D view; the list's **View spot** buttons are the keyboard and no-WebGL route. The list view groups stalls and vacant spots under a heading per open room, and the location pickers group their options by room.
+
+Each room has walls with street-facing windows and a ceiling. When the camera is outside, the nearby walls and ceiling cut away to keep the stalls visible. From inside, the windows look onto a tree-lined street with hills beyond.
 
 Stall fronts and side walls show an illustration of a dish from the stall's cuisine. The stripe below the counter carries the localized cuisine name. The artwork and label represent the cuisine across menu changes and trading hours.
 
 The first arrow key from an overview/orbit view enters walking at eye level in a clear aisle facing an open stall, preferring the selected stall when it is open. Start with a level viewing angle rather than inheriting the overview’s downward pitch or clamping its distant position onto the floor. If no stall is open, face a closed counter; an empty hall uses a level central view. Subsequent movement and returning to a saved walking view preserve the player’s position.
 
-With the 3D view focused, Up and Down walk forward and backward at aisle height. Left and Right turn in place. Holding Shift with Up or Down tilts the view, and holding Shift with Left or Right steps sideways. Walking stays on the hall floor and around stalls.
+With the 3D view focused, Up and Down walk forward and backward at aisle height. Left and Right turn in place. Holding Shift with Up or Down tilts the view, and holding Shift with Left or Right steps sideways. Walking stays on the floor of open rooms and around stalls; it passes through doorways between open rooms but not through a shut door or out of the entrance.
 
 Owners can choose **Inside my stall** in Hall to look outward from behind their
 own counter, selecting a location when their restaurant has expanded. Drag or
@@ -1329,7 +1400,7 @@ Closed stalls display a counter placard with the next expected reopening in hall
 
 ### Performance and truthful animation
 
-Use instancing and level of detail for crowds and repeated objects. Render the selected neighborhood in detail and distant areas more simply. A full hall must not require every client to animate every diner or receive every restaurant's private state.
+Use instancing and level of detail for crowds and repeated objects. Render the current room in detail, open neighbouring rooms more simply, and other rooms not at all. A full hall must not require every client to animate every diner or receive every restaurant's private state.
 
 Server events describe order and station state, work remaining, effective speed, and hall time. Clients animate between updates. A completed visual progress bar does not award money before the server confirms service. On reconnection, animation rebuilds from current authoritative state rather than replaying hours of effects.
 
@@ -1501,6 +1572,10 @@ Proposed initial targets are sub-500 ms server-side acknowledgement for ordinary
 74. Large displays provide useful simultaneous business/hall/detail context without another simulation subscription, duplicated editor, or extra economic action. Phone backgrounding, network change, and resumption obey ordinary absence/recovery rules, keep stale views explicit, and cannot enable automation, resume a safety-stopped stall, or repeat a purchase. Reference-device rendering and input performance are measured rather than inferred from a desktop screenshot.
 75. A helper can prioritize a real ready tray with a visible wait and serve-by limit. Staging and service share one worker and counter. When readiness, staging, expiry, or closure coincide, at most one setup credit is earned and consumed, no service rule is bypassed, and wages and licensing proof follow the existing contracts.
 76. Diners can compare viable orders, track a tray while browsing, and act on an eligible dessert from either view. Filtering, changing views, and looking at a receipt or tasting list create no visits or charges. An absent diner, failed renderer, or repeated pickup interaction leaves committed service, charges, and offer deadlines identical.
+77. Room 1 is open in an empty hall. Leasing the last spot of a class in the open rooms opens the next room; a draft on that spot does not; a surrender that reopens the class closes an empty next room; a lease or draft keeps its room and every earlier room open; rooms open in a chain and never beyond ten. Open rooms are always a contiguous prefix that covers every lease and draft.
+78. A reservation, lease, first-location offer or computer-run placement in a closed room is refused through the application boundary, and removing the room rule from the catalog makes the same reservation succeed. No draft or lease is ever produced in a room that was closed at that moment. A lease that opens a room offers it to the earliest compatible waiting-list entry in the same batch, and no offer is made for a closed room.
+79. Scarcity quotes match the worked figures, including the cap, a class held below the next class up by the class gap, and a room opening lowering new quotes. Within fixed open rooms a class's quote never falls as it fills, and class order is preserved. A lease made from a draft records the draft's rent, not the higher current quote; an existing lease's rent and its later operating charges are unchanged by later quotes.
+80. A managed hall that had leases in later rooms before the room rule arrived keeps every lease, spot and rent, and every room up to the highest lease is open. The upgrade records one catalog event, a repeat is refused, and a pinned spot missing from the launch layout stops the upgrade without an event. Events before the upgrade replay under the old rule, and live, genesis-replay and snapshot-tail state agree after it, including a snapshot at the head position and a PostgreSQL restart that does not record a second upgrade.
 
 ### Property-based testing
 
@@ -1572,7 +1647,9 @@ The owner has resolved the central concept, population, time, absence policy, fa
 | Item | Proposed baseline or required next decision |
 | --- | --- |
 | Maximum locations per restaurant | Three; validate expansion value and newcomer access at 150 total slots. |
-| Newcomer vacancy reserve | Ten slots unavailable to expansion; adjust from admission and waiting-list results. |
+| Newcomer vacancy reserve | Ten slots unavailable to expansion; adjust from admission and waiting-list results. Not implemented in the server yet. |
+| Rooms | Ten rooms of 15 spots each (catalog `rules.rooms`: `count` 10, `per_room` 15), with the odd/even class mix in [Rooms](#rooms). The number of rooms and spots per room are proposed; the row of rooms and the opening rule are owner decisions (2026-11-13). |
+| Scarcity rent | Cap 1.5× base rent (`scarcity_cap_permille` 1,500) with one spot of a class left in the open rooms, rising in a straight line from base; each class's quote at least $1.00 below the next class up (`class_gap` 100). Tune how strongly it spreads leases across classes. |
 | Waiting-list allocation | Compatible FIFO for licensed first-location/reopening applicants; one entry per principal, ten-service-minute draft offer, no payment before confirmation, explicit rejoin at the tail after a missed/declined offer. |
 | Presence grace period | Two available-service minutes before default closure; recovery does not charge outage time. |
 | NPC retirement | At least 13 distinct present owners for five service minutes latches eligibility; at most one retirement per game day, preserving three distinct operating businesses when feasible. |
@@ -1592,8 +1669,8 @@ The owner has resolved the central concept, population, time, absence policy, fa
 | Visitor shifts | One counter-helper role; five-service-minute default, up to ten; a proposed two-game-minute/five-service-second selection window followed by two-game-minute handover. Missing selection or the upper fifteen-service-second actionable-idle limit ends control. Pay attended coverage/standby once, backed by payroll and persistent employer/hall transfer limits. |
 | Invitation quota and earning | Confirmed: one per 7 cumulative qualifying game days (7 real hours of qualifying time, with additional elapsed time for cleaning). Proposed: cap three available plus outstanding, seeds three; one simulated main served in the preceding game day plus staffed/solvent trading with a feasible main. Accrue once per owner and pause closed/ineligible time. |
 | Invitation validity | 72 unaccelerated service hours, paused for platform outages; not three accelerated game days. |
-| Location exposure and rent | Proposed tiers: quiet 0.8×/$80, standard 1.0×/$100, busy 1.25×/$150, prime 1.5×/$220 per full open game day. Tune affordable and premium strategies against the same finite demand pool. |
-| Closed holding cost | Proposed 10% of the slot's quoted full-day open rent; validate that normal absence does not rapidly destroy a new business. |
+| Location exposure and rent | Proposed tiers: quiet 0.8×/$80, standard 1.0×/$100, busy 1.25×/$150, prime 1.5×/$220 base rent per full open game day, before scarcity. Tune affordable and premium strategies against the same finite demand pool. |
+| Closed holding cost | Proposed 10% of the slot's quoted full-day open rent (scaled with the scarcity quote); validate that normal absence does not rapidly destroy a new business. |
 | Starter finances | Example $5,000 capital, $2,200 setup, $400 stock; balance all twenty-five cuisine kits. |
 | Substitution balance | Most primary ingredients have a direct approved alternative; target cheaper typical cost or more dependable supply, never unlimited supply. Proposed quality loss: three points per substituted line, capped at nine on a normalized 100-point score. Tune with value/premium strategies and shortages; publish explicit signature-ingredient exceptions. |
 | Dessert flow | Confirmed optional second course after a served main at the same stall. Proposed dessert cash unlock, 30-service-second human choice window, one accepted dessert per visit, normalized main:dessert scoring weight 2:1, and no added arrival or meal count. Tune seeded appetite, remaining budget, costs, and shared station contention. |
@@ -1665,6 +1742,7 @@ Primary design source: the 174-page PDF supplied as `feud-hall-design-discussion
 | Owner Indigenous cuisine addition, November 10, 2026 | Add Haudenosaunee, Diné (Navajo), Lakota, and Coast Salish to the launch roster. The existing five recipes per cuisine bring the total to 24 cuisines and 125 recipes. Specific menus, ingredients, and map footprints remain proposals. |
 | Owner Māori cuisine addition, November 10, 2026 | Add Māori as the twenty-fifth cuisine, retaining three savory recipes, one dessert and one drink per cuisine (125 recipes total). Dish choices are the game adaptations described in the menu notes. |
 | Owner execution-mode decision, November 11, 2026 | Servers are required only for multiplayer. Single-player runs locally/offline and pauses while closed; no wall-time catch-up is charged. Offline implementation and local storage/runtime qualification remain outstanding. |
+| Owner row-of-halls decisions, November 13, 2026 | The hall becomes a row of ten square rooms of up to 15 stalls with tables in the centre, each with its own entrance; doorways stay shut until the next room is in use, which happens once every spot of one class is taken in the open rooms; quality is tied to position; the scene draws about one room at a time. A new hall starts with no computer-run restaurant on a prime spot. A class's rent rises as its availability falls, replacing fixed tiers. Position mapping, opening details, rent formula and tuning are proposed; see [Rooms](#rooms) and [Scarcity rent](#scarcity-rent). |
 
 The PDF's final “complete specification” responses do not replace the earlier decisions or provide a complete working implementation. Several code blocks are visibly clipped. This document does not adopt their claims of guaranteed shutdown persistence, independently rounded customer allocations, repeated ingredient deductions, permanent prestige benefits, or unqualified local-runtime claims. It supplies explicit contracts for those areas instead.
 
