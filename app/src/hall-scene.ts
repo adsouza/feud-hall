@@ -1847,6 +1847,9 @@ export function createHallScene(
           }
       } else if (
         initialized &&
+        // A saved camera on the first update is already in this hall's
+        // units: only a floor that was laid out before can have grown.
+        floorSignature !== "" &&
         (floorTop.scale.x !== layout.floorWidth ||
           floorTop.scale.z !== layout.floorDepth)
       ) {

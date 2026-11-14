@@ -1,4 +1,5 @@
 import * as T from "three";
+import type { Page } from "@playwright/test";
 import { test, expect, state } from "./hall";
 import {
   hallLayout,
@@ -78,12 +79,9 @@ type Probe = Window & {
   hallViewMatrix: number[];
   __THREE_DEVTOOLS__: EventTarget;
 };
-test("every first arrow enters at eye level facing an open stall, then walking resumes", async ({
-  page,
-  hall,
-}, info) => {
-  // Observe the camera at the real draw boundary using Three's existing devtools hook.
-  await page.addInitScript(() => {
+// Observe the camera at the real draw boundary using Three's existing devtools hook.
+function observeCamera(page: Page) {
+  return page.addInitScript(() => {
     const probe = window as unknown as Probe;
     probe.__THREE_DEVTOOLS__ = new EventTarget();
     probe.__THREE_DEVTOOLS__.addEventListener("observe", (event) => {
@@ -98,6 +96,12 @@ test("every first arrow enters at eye level facing an open stall, then walking r
       };
     });
   });
+}
+test("every first arrow enters at eye level facing an open stall, then walking resumes", async ({
+  page,
+  hall,
+}, info) => {
+  await observeCamera(page);
   await page.goto(hall.origin);
   const snapshot = await state(page);
   snapshot.hall.stalls[0]["open?"] = false;
@@ -191,4 +195,38 @@ test("every first arrow enters at eye level facing an open stall, then walking r
   await host
     .locator("canvas")
     .screenshot({ path: info.outputPath("walking-entry.png") });
+});
+
+test("returning to the hall with nothing selected keeps the overview camera", async ({
+  page,
+  hall,
+}) => {
+  await observeCamera(page);
+  await page.goto(hall.origin);
+  const host = page.locator("[data-hall-canvas]");
+  await expect(host.locator("canvas")).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "Location", exact: true }),
+  ).toHaveValue("");
+  // Null until the current scene has drawn a frame.
+  const position = async () => {
+    const values = await page.evaluate(
+      () => (window as unknown as Probe).hallViewMatrix,
+    );
+    if (values?.length !== 16) return null;
+    const world = new T.Matrix4().fromArray(values).invert();
+    return new T.Vector3().setFromMatrixPosition(world);
+  };
+  await expect.poll(position).not.toBeNull();
+  const before = (await position())!;
+  // Remounting hands the saved camera to a new scene, whose first update
+  // must not rescale it as if the hall had grown from nothing.
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.evaluate(() => {
+    (window as unknown as Probe).hallViewMatrix = [];
+  });
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await expect
+    .poll(async () => (await position())?.distanceTo(before) ?? Infinity)
+    .toBeLessThan(1e-5);
 });
