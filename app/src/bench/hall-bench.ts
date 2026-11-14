@@ -6,6 +6,10 @@
 // (eye=2: looking south through the entrance onto the street).
 // room=<1..10> picks the room to show (default 1) and rooms=<1..10> how many
 // rooms are open (default 10). Vacant spots of open rooms are "to let" bays.
+// floor=1 also sends today's diner totals and a queue limit of six, so the
+// floor has deeper queues and diners who walk in and out without buying, on
+// top of the served diners who sit and eat (floor=0, the default, sends
+// neither, as a server without them does).
 import type { Stall } from "../api";
 import {
   createHallScene,
@@ -29,6 +33,7 @@ const near = number("near", 0, 0, 1) === 1;
 const eye = number("eye", 0, 0, 2);
 const open = number("rooms", 10, 1, 10);
 const room = Math.min(number("room", 1, 1, 10), open);
+const floor = number("floor", 0, 0, 1) === 1;
 const centre = roomCentre(room).x;
 // Low over the middle of the room, so many stalls are within the scene's
 // detail distance (28 units) instead of all being drawn at reduced detail.
@@ -65,6 +70,10 @@ function id(index: number) {
   return `bench-${index}`;
 }
 
+/** With floor=1: each stall's queue, and walk-outs a second per open room. */
+const FLOOR_WAITING = 6;
+const WALK_OUTS_PER_ROOM = 2;
+
 function stall(index: number, service: number): Stall {
   return {
     stall_id: id(index),
@@ -77,7 +86,7 @@ function stall(index: number, service: number): Stall {
     "open?": true,
     last_service: `bench-service-${service}`,
     activity: {
-      waiting: 4,
+      waiting: floor ? FLOOR_WAITING : 4,
       cooking: 2,
       handover: false,
       staffed: true,
@@ -107,6 +116,19 @@ function appearance(service: number): Appearance {
     rooms: { count: 10, open },
     vacancies,
     toLetLabel: "To let",
+    serving: true,
+    // Each second every stall serves one diner and admits one more, and some
+    // arrivals in every open room leave without buying.
+    ...(floor
+      ? {
+          today: {
+            arrivals: service * (count + WALK_OUTS_PER_ROOM * open),
+            admitted: service * count,
+            left: 0,
+          },
+          queueLimit: FLOOR_WAITING,
+        }
+      : {}),
   };
 }
 
@@ -116,6 +138,8 @@ let measuring = false;
 const draws: number[] = [];
 const stamps: number[] = [];
 let people = 0; // the most people the scene drew in one measured frame
+let walking = 0; // the most floor figures drawn walking (or collecting)
+let seated = 0; // the most floor figures drawn seated
 const scene = createHallScene(
   host,
   {
@@ -135,16 +159,23 @@ const scene = createHallScene(
       draws.push(drawMs);
       stamps.push(performance.now());
       people = Math.max(people, Number(host.getAttribute("data-hall-people")));
+      walking = Math.max(
+        walking,
+        Number(host.getAttribute("data-hall-walking")),
+      );
+      seated = Math.max(seated, Number(host.getAttribute("data-hall-seated")));
     },
   },
   eye ? EYE_CAMERA : near ? NEAR_CAMERA : undefined,
 );
 
-// Give every stall a new last_service each second. The scene reads a changed
-// value as a served order and sends one diner per stall off carrying a tray.
-// A departure walk lasts 1500 ms, so a 1000 ms cadence always has walkers in
-// flight and the scene keeps drawing in both detail modes. The first update
-// only sets the initial value; the second is the first to count as served.
+// Give every stall a new last_service each second. The floor reads a changed
+// value as a served order: one diner per stall collects a tray and goes to a
+// seat (or straight out once the room's seats are taken), and the waiting
+// count, unchanged, brings one more diner to the queue. A 1000 ms cadence
+// always has diners collecting or walking, so the scene keeps drawing in both
+// detail modes. The first update only sets the initial values (a baseline);
+// the second is the first to count as served.
 let service = 0;
 scene.update(appearance(service));
 if (!near && !eye) scene.showRoom(room);
@@ -192,6 +223,7 @@ setTimeout(
       eye,
       room: scene.room(),
       rooms: open,
+      floor: floor ? 1 : 0,
       seconds,
       frames,
       fps: span > 0 ? round((frames - 1) / span) : 0,
@@ -199,6 +231,8 @@ setTimeout(
       meanDrawMs: frames ? round(draws.reduce((a, b) => a + b, 0) / frames) : 0,
       p95DrawMs: round(percentile(sorted, 0.95)),
       people,
+      walking,
+      seated,
       renderer: renderer(),
     };
     const out = document.createElement("pre");

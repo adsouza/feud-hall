@@ -73,8 +73,13 @@ export type FloorFigure = {
    * absent.
    */
   take?: number;
-  /** The stall whose counter the tray comes from, while `take` is present. */
+  /**
+   * The stall whose counter the tray comes from, while `take` is present; the
+   * stall whose queue the figure stands in, while queued.
+   */
   stall?: string;
+  /** Present while queued: the queue spot (0-based) the figure stands at. */
+  spot?: number;
   /** Present while seated: where the tray rests on the table. */
   seat?: Seat;
   opacity: number;
@@ -112,6 +117,8 @@ type Stand = {
   x: number;
   z: number;
   yaw: number;
+  /** The queue spot this stands at. */
+  spot: number;
   /** Where a walk away from this spot starts routing. */
   out: Point;
 };
@@ -252,6 +259,7 @@ function standAt(placement: SpotPlacement, n: number, start: number): Stand {
     x: at.x,
     z: at.z,
     yaw: placement.yaw + Math.atan2(-dx, -dz),
+    spot: n,
     out: spotOut(placement, n),
   };
 }
@@ -271,6 +279,7 @@ function place(figure: Figure, leg: Leg, now: number, out: FloorFigure) {
   out.carrying = false;
   out.take = undefined;
   out.stall = undefined;
+  out.spot = undefined;
   out.seat = undefined;
   if (leg.kind === "walk") {
     const metres = walkedMetres(leg, now);
@@ -297,6 +306,8 @@ function place(figure: Figure, leg: Leg, now: number, out: FloorFigure) {
     out.z = leg.z;
     out.yaw = leg.yaw;
     out.activity = "queued";
+    out.stall = figure.stall ?? undefined;
+    out.spot = leg.spot;
   } else {
     out.x = leg.seat.x;
     out.z = leg.seat.z;

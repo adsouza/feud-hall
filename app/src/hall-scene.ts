@@ -13,15 +13,13 @@ import {
   toHall,
   toStall,
   COUNTER_TRAY,
-  PICKUP_SPOT,
-  QUEUE_SPOTS,
+  QUEUE_DRAW_MAX,
   STAFF_SPOTS,
-  collectMs,
-  collectTray,
 } from "./hall-layout";
 import {
   ROOM_COUNT,
   ROOM_SIDE,
+  SPOTS_PER_ROOM,
   assignSpots,
   roomAt,
   roomCentre,
@@ -32,11 +30,13 @@ import {
 } from "./room-layout";
 import {
   carryPoint,
-  personLook,
+  seatedTrayPoint,
   staffLooks,
+  type Detail,
   type Look,
   type Pose,
 } from "./people";
+import { ROOM_BUDGET, createDinerFloor, type FloorFigure } from "./diner-floor";
 import { createFaceTexture, createPeople } from "./people-mesh";
 
 type Point = [number, number, number];
@@ -95,29 +95,12 @@ export type Appearance = {
   /** Vacant spots of open rooms; drawn as "to let" bays. */
   vacancies?: HallVacancy[];
   toLetLabel: string;
-};
-type Diner = {
-  look: Look;
-  faceYaw: number;
-  arrivalStartedAt?: number;
-};
-type Departure = {
-  diner: Diner;
-  yaw: number;
-  x: number;
-  z: number;
-  side: number;
-  startedAt: number;
-  room: number;
-  trayFrom?: Point;
-  // Set for a served diner: the walk to the counter that comes before leaving.
-  collect?: {
-    frame: SpotPlacement;
-    fromX: number;
-    fromZ: number;
-    ms: number;
-    opacity: number;
-  };
+  /** The hall is open to diners (`hall.access === "open"`). */
+  serving: boolean;
+  /** Today's diner totals; absent from servers that do not send them. */
+  today?: { arrivals: number; admitted: number; left: number };
+  /** How many may wait at one stall; absent: four are drawn. */
+  queueLimit?: number;
 };
 type Counter = {
   root: T.Group;
@@ -140,10 +123,8 @@ type Counter = {
   color: T.Color;
   restaurant: string; // the business the owner look is keyed to
   staff: Look[]; // the owner, then one per staff spot
-  queue: Diner[];
-  visibleDiners: number;
-  nextDiner: number;
-  lastService?: string | null;
+  /** Drawn in detail in the last frame; a stall drawn simply shows one queued diner. */
+  detailed: boolean;
   activity?: Stall["activity"];
   open: boolean;
 };
@@ -164,18 +145,14 @@ const WALK_SPEED = 3.2;
 const TURN_SPEED = 1.8;
 const LOOK_SPEED = 1.15;
 const ARROW_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
-const WALK_MS = 1500;
-const GAIT = (Math.PI * 8) / Math.hypot(1.18, 1.4); // the leaving walk's steps per metre
-const PICKUP_FACING = Math.atan2(
-  COUNTER_TRAY[0] - PICKUP_SPOT[0],
-  COUNTER_TRAY[1] - PICKUP_SPOT[1],
-);
 const IDLE_FRAME_MS = 80;
 const SHUTTER_SLATS = 9;
 const SHUTTER_HEIGHT = 0.91;
 const SHUTTER_FONT = '900 79px "Noto Sans JP", system-ui, sans-serif';
-const QUEUE_LIMIT = STALL_LIMIT * QUEUE_SPOTS.length;
-const ACTOR_LIMIT = STALL_LIMIT * (QUEUE_SPOTS.length + 1 + STAFF_SPOTS.length);
+/** Owners and staff behind every counter. */
+const STAFF_LIMIT = STALL_LIMIT * (1 + STAFF_SPOTS.length);
+/** Floor figures in the three rooms drawn at once: full queues and the budget. */
+const FLOOR_LIMIT = 3 * (SPOTS_PER_ROOM * QUEUE_DRAW_MAX + ROOM_BUDGET);
 const hues = [
   "#ffba57",
   "#fc7988",
@@ -467,7 +444,8 @@ export function createHallScene(
       }),
   );
   const stalls = new Map<string, Counter>();
-  let departures: Departure[] = [];
+  // Every diner drawn stands for one the server committed; see diner-floor.ts.
+  const floor = createDinerFloor();
   const buildings = new T.Group();
   const cuisineArt = createCuisineArt(buildings, STALL_LIMIT, () => draw());
   const hallShell = createHallShell(scene, () => draw());
@@ -787,9 +765,7 @@ export function createHallScene(
         stall.stall_id,
         STAFF_SPOTS.length,
       ),
-      queue: [],
-      visibleDiners: 0,
-      nextDiner: hash(stall.stall_id),
+      detailed: false,
       open: false,
     };
     paintSign(result, stall);
@@ -806,14 +782,10 @@ export function createHallScene(
 
   const faces = createFaceTexture();
   // Walkers are the only people who fade.
-  const people = createPeople(
-    ACTOR_LIMIT + QUEUE_LIMIT * 2,
-    faces,
-    QUEUE_LIMIT * 2,
-  );
+  const people = createPeople(STAFF_LIMIT + FLOOR_LIMIT, faces, FLOOR_LIMIT);
   const carriedGeometry = pickupGeometry.clone();
   const trayOpacity = new T.InstancedBufferAttribute(
-    new Float32Array(QUEUE_LIMIT),
+    new Float32Array(FLOOR_LIMIT),
     1,
   ).setUsage(T.DynamicDrawUsage);
   carriedGeometry.setAttribute("instanceTrayOpacity", trayOpacity);
@@ -843,7 +815,7 @@ export function createHallScene(
   const carriedTrays = new T.InstancedMesh(
     carriedGeometry,
     carriedMaterial,
-    QUEUE_LIMIT,
+    FLOOR_LIMIT,
   );
   const steamGeometry = new T.SphereGeometry(0.115, 6, 4);
   const steam = new T.InstancedMesh(
@@ -888,152 +860,18 @@ export function createHallScene(
     figure.yaw = yaw;
     figure.faceYaw = faceYaw;
     figure.stride = 0;
-    figure.walking = figure.carrying = false;
+    figure.walking = figure.carrying = figure.seated = false;
     people.add(look, figure, detailed ? "full" : "simple");
   }
 
-  function queueSway(index: number, position: number, now: number) {
-    return Math.sin(now / 500 + index + position) * 0.045;
-  }
-
-  function aisleDistance(diner: Diner, now: number) {
-    return diner.arrivalStartedAt === undefined
-      ? 0
-      : T.MathUtils.clamp(1 - (now - diner.arrivalStartedAt) / WALK_MS, 0, 1);
-  }
-
-  function departDiner(
-    model: Counter,
-    index: number,
-    now: number,
-    carrying: boolean,
-  ) {
-    if (departures.length >= QUEUE_LIMIT) return false;
-    const diner = model.queue[index];
-    const distance = aisleDistance(diner, now);
-    if (distance === 1) return false;
-    const [dx, dz] = QUEUE_SPOTS[index];
-    const side = index % 2 === 0 ? -1 : 1;
-    const waitX = dx + queueSway(model.index, index, now);
-    if (carrying) {
-      // Called to the counter, from the aisle if they were still walking in.
-      const fromX =
-        waitX + side * 1.18 * T.MathUtils.smoothstep(distance, 0.05, 1);
-      const fromZ = dz + distance * 1.4;
-      const spot = toHall(model.placement, PICKUP_SPOT[0], PICKUP_SPOT[1]);
-      departures.push({
-        diner,
-        x: spot.x,
-        z: spot.z,
-        room: model.placement.room,
-        yaw: model.placement.yaw,
-        side: 1, // leave to the right, away from the queue
-        startedAt: now,
-        trayFrom: point(
-          model.root.localToWorld(
-            new T.Vector3(COUNTER_TRAY[0], 0.93, COUNTER_TRAY[1]),
-          ),
-        ),
-        collect: {
-          frame: model.placement,
-          fromX,
-          fromZ,
-          ms: collectMs(fromX, fromZ),
-          opacity: 1 - T.MathUtils.smoothstep(distance, 0.14, 1),
-        },
-      });
-      return true;
-    }
-    const { x, z } = toHall(model.placement, waitX, dz);
-    departures.push({
-      diner,
-      x,
-      z,
-      room: model.placement.room,
-      yaw: model.placement.yaw,
-      side,
-      // An interrupted arrival heads back from its current point in the aisle.
-      startedAt: now - distance * WALK_MS,
-    });
-    return true;
-  }
-
-  function updateQueue(
-    model: Counter,
-    waiting: number,
-    now: number,
-    served = false,
-  ) {
-    const count = Math.min(waiting, QUEUE_SPOTS.length);
-    const animateQueue = appearance.motion && !document.hidden;
-    if (animateQueue) {
-      for (let n = count; n < model.visibleDiners; n++) {
-        if (departDiner(model, n, now, served)) served = false;
-      }
-      // A completed customer can be replaced before the next view arrives.
-      if (served && model.visibleDiners > 0) {
-        const index = Math.min(model.visibleDiners, count) - 1;
-        if (index >= 0 && departDiner(model, index, now, true)) {
-          model.queue.splice(index, 1);
-        }
-      }
-    }
-    model.queue.length = Math.min(model.queue.length, count);
-    model.visibleDiners = Math.min(model.visibleDiners, count);
-    if (!animateQueue) {
-      for (const diner of model.queue) diner.arrivalStartedAt = undefined;
-    }
-    while (model.queue.length < count) {
-      const [dx, dz] = QUEUE_SPOTS[model.queue.length];
-      model.queue.push({
-        look: personLook(model.nextDiner++, "diner"),
-        faceYaw: Math.atan2(-dx, -dz),
-        arrivalStartedAt: animateQueue && hasHallView ? now : undefined,
-      });
-    }
-  }
-
-  function walkDiner(
-    diner: Diner,
-    x: number,
-    z: number,
-    side: number,
-    distance: number,
-    departing = false,
-    carrying = false,
-    yaw = 0,
-    turnFrom?: number,
-  ) {
-    const stride = Math.sin(distance * Math.PI * 8);
-    const opacity = 1 - T.MathUtils.smoothstep(distance, 0.14, 1);
-    const walking = toHall(
-      { x, z, yaw },
-      side * 1.18 * T.MathUtils.smoothstep(distance, 0.05, 1),
-      distance * 1.4,
-    );
-    const heading = Math.atan2(side * 1.18, 1.4);
-    figure.x = walking.x;
-    figure.z = walking.z;
-    let facing = departing ? heading : diner.faceYaw;
-    if (turnFrom !== undefined) {
-      // Turn from the counter to the way out, swinging away from the queue.
-      let turn = (heading - turnFrom) % (Math.PI * 2);
-      if (turn > 0) turn -= Math.PI * 2;
-      facing = turnFrom + turn * T.MathUtils.smoothstep(distance, 0, 0.12);
-    }
-    figure.yaw = yaw + facing;
-    figure.faceYaw = 0;
-    figure.stride = stride;
-    figure.walking = true;
-    figure.carrying = carrying;
-    people.add(diner.look, figure, "full", opacity);
-    if (carrying) holdTray(diner.look, opacity);
-  }
-
   // Draws a tray for the figure just posed: on the counter at `take` 0, in
-  // their hands at 1, and passing between the two in a straight line.
+  // their hands at 1, and passing between the two in a straight line; or, for
+  // a seated figure, resting on the table in front of them.
   function holdTray(look: Look, opacity: number, from?: Point, take = 1) {
-    const carry = carryPoint(look, figure.stride);
+    if (carriedTrays.count >= FLOOR_LIMIT) return;
+    const carry = figure.seated
+      ? seatedTrayPoint(look)
+      : carryPoint(look, figure.stride);
     const x = figure.x + Math.sin(figure.yaw) * carry.forward;
     const z = figure.z + Math.cos(figure.yaw) * carry.forward;
     dummy.rotation.set(0, figure.yaw, 0);
@@ -1052,58 +890,60 @@ export function createHallScene(
     dummy.rotation.set(0, 0, 0);
   }
 
-  function collectDiner(
-    diner: Diner,
-    collect: NonNullable<Departure["collect"]>,
-    elapsed: number,
-    trayFrom?: Point,
-  ) {
-    const step = collectTray(collect.fromX, collect.fromZ, elapsed);
-    const at = toHall(collect.frame, step.x, step.z);
-    // Someone called while still walking in finishes fading in on the way.
-    const opacity = T.MathUtils.lerp(
-      collect.opacity,
-      1,
-      T.MathUtils.clamp(elapsed / 300, 0, 1),
-    );
-    figure.x = at.x;
-    figure.z = at.z;
-    figure.yaw = collect.frame.yaw + step.yaw;
-    figure.faceYaw = 0;
-    figure.stride = step.walking ? Math.sin(step.metres * GAIT) : 0;
-    figure.walking = step.walking;
-    figure.carrying = step.take > 0;
-    people.add(diner.look, figure, "full", opacity);
-    holdTray(diner.look, opacity, trayFrom, step.take);
-  }
+  // Per frame: what drawFloorFigure counts, and the clock it glances by.
+  let floorTime = 0;
+  let floorWalking = 0;
+  let floorSeated = 0;
+  let drawnWalking = -1;
+  let drawnSeated = -1;
+  const trayFrom: Point = [0, 0, 0];
 
-  function drawDepartures(now: number) {
-    if (departures.length === 0) return;
-    departures = departures.filter(
-      ({ startedAt, collect }) =>
-        now - startedAt < WALK_MS + (collect?.ms ?? 0),
-    );
-    for (const departure of departures) {
-      const { diner, x, z, side, startedAt, trayFrom, yaw, collect, room } =
-        departure;
-      if (!shown.has(room)) continue;
-      const elapsed = Math.max(0, now - startedAt);
-      if (collect && elapsed < collect.ms) {
-        collectDiner(diner, collect, elapsed, trayFrom);
-        continue;
-      }
-      walkDiner(
-        diner,
-        x,
-        z,
-        side,
-        (elapsed - (collect?.ms ?? 0)) / WALK_MS,
-        true,
-        Boolean(trayFrom),
-        yaw,
-        collect ? PICKUP_FACING : undefined,
-      );
+  /**
+   * Draws one figure the floor model reports, if its room is shown. A
+   * neighbouring room shows only seated diners and the first in each queue; a
+   * stall drawn simply shows only its first queued diner.
+   */
+  function drawFloorFigure(diner: FloorFigure) {
+    const level = shown.get(diner.room);
+    if (!level) return;
+    const { activity } = diner;
+    const model =
+      diner.stall === undefined ? undefined : stalls.get(diner.stall);
+    let detail: Detail = appearance.detail ? "full" : "simple";
+    let faceYaw = diner.faceYaw;
+    if (level === "simple") {
+      if (activity !== "seated" && !(activity === "queued" && diner.spot === 0))
+        return;
+      detail = "simple";
+    } else if (activity === "queued") {
+      const detailed = model?.detailed ?? false;
+      if (!detailed && diner.spot !== 0) return;
+      detail = detailed ? "full" : "simple";
+      if (detailed && appearance.motion && model)
+        faceYaw += staffGlance(floorTime, model.index, (diner.spot ?? 0) + 10);
     }
+    figure.x = diner.x;
+    figure.z = diner.z;
+    figure.yaw = diner.yaw;
+    figure.faceYaw = faceYaw;
+    figure.stride = diner.stride;
+    figure.walking =
+      activity === "walking" || (activity === "collecting" && diner.take === 0);
+    figure.carrying = diner.carrying;
+    figure.seated = activity === "seated";
+    const before = people.count;
+    people.add(diner.look, figure, detail, diner.opacity);
+    if (people.count === before) return; // faded out, or no room left
+    if (activity === "walking" || activity === "collecting") floorWalking++;
+    else if (activity === "seated") floorSeated++;
+    if (activity === "collecting" && diner.take !== undefined && model) {
+      const counter = toHall(model.placement, COUNTER_TRAY[0], COUNTER_TRAY[1]);
+      trayFrom[0] = counter.x;
+      trayFrom[1] = 0.93;
+      trayFrom[2] = counter.z;
+      holdTray(diner.look, diner.opacity, trayFrom, diner.take);
+    } else if (diner.carrying || figure.seated)
+      holdTray(diner.look, diner.opacity);
   }
 
   let appearance: Appearance = {
@@ -1122,6 +962,7 @@ export function createHallScene(
     tabletLabel: "",
     tabletHint: "",
     toLetLabel: "",
+    serving: false,
   };
   let hover = "";
   // The room the viewer is in, the open rooms, and how each drawn room is drawn.
@@ -1155,7 +996,7 @@ export function createHallScene(
     for (const [id, model] of stalls) {
       const level = shown.get(model.placement.room);
       if (!level) {
-        model.visibleDiners = 0;
+        model.detailed = false;
         continue;
       }
       const nearby =
@@ -1206,38 +1047,7 @@ export function createHallScene(
           );
         }
       }
-      model.visibleDiners = Math.min(
-        model.queue.length,
-        detailed ? QUEUE_SPOTS.length : 1,
-      );
-      for (let n = 0; n < model.visibleDiners; n++) {
-        const diner = model.queue[n];
-        const [dx, dz] = QUEUE_SPOTS[n];
-        const sway = appearance.motion ? queueSway(model.index, n, now) : 0;
-        const distance = aisleDistance(diner, now);
-        const position = toHall(model.placement, dx + sway, dz);
-        if (distance > 0) {
-          walkDiner(
-            diner,
-            position.x,
-            position.z,
-            n % 2 === 0 ? -1 : 1,
-            distance,
-            false,
-            false,
-            yaw,
-          );
-          continue;
-        }
-        stand(
-          diner.look,
-          position.x,
-          position.z,
-          yaw + diner.faceYaw,
-          glance ? staffGlance(time, model.index, n + 10) : 0,
-          detailed,
-        );
-      }
+      model.detailed = detailed;
       if (!activity) continue;
       if (detailed && activity.cooking > 0) {
         for (let n = 0; n < Math.min(2, activity.cooking); n++) {
@@ -1255,11 +1065,21 @@ export function createHallScene(
       }
     }
     steam.count = puffs;
-    drawDepartures(now);
+    floorTime = time;
+    floorWalking = floorSeated = 0;
+    floor.figures(now, drawFloorFigure);
     people.end();
     if (people.count !== drawnPeople) {
       drawnPeople = people.count;
       host.setAttribute("data-hall-people", String(drawnPeople));
+    }
+    if (floorWalking !== drawnWalking) {
+      drawnWalking = floorWalking;
+      host.setAttribute("data-hall-walking", String(drawnWalking));
+    }
+    if (floorSeated !== drawnSeated) {
+      drawnSeated = floorSeated;
+      host.setAttribute("data-hall-seated", String(drawnSeated));
     }
     if (carriedTrays.count > 0) trayOpacity.needsUpdate = true;
     steam.instanceMatrix.needsUpdate = true;
@@ -1296,7 +1116,7 @@ export function createHallScene(
       pickupHands.active ||
       heldArrows.size > 0 ||
       (appearance.motion &&
-        (departures.length > 0 || (appearance.detail && active)));
+        (floor.moving(performance.now()) || (appearance.detail && active)));
     const idleMotion =
       !activeMotion &&
       appearance.motion &&
@@ -1966,10 +1786,8 @@ export function createHallScene(
   function visibility() {
     if (document.hidden) {
       stopWalking();
-      departures = [];
-      for (const model of stalls.values()) {
-        for (const diner of model.queue) diner.arrivalStartedAt = undefined;
-      }
+      // Nothing is applied while hidden: the next view is a fresh baseline.
+      floor.clear();
     }
     schedule();
     if (!document.hidden) draw();
@@ -1994,7 +1812,6 @@ export function createHallScene(
       });
       if (next.tablet) activeTablet.update(next.tablet);
       if (!next.motion) {
-        departures = [];
         if (pickupHands.active) {
           pickupHands.finish();
           actions.collected();
@@ -2004,7 +1821,6 @@ export function createHallScene(
       const ids = new Set(next.stalls.map((stall) => stall.stall_id));
       for (const [id, model] of stalls) {
         if (!ids.has(id)) {
-          updateQueue(model, 0, now);
           discardCounter(model);
           stalls.delete(id);
         }
@@ -2024,10 +1840,6 @@ export function createHallScene(
           const previous = model;
           discardCounter(previous);
           model = createCounter(stall, previous.index, previous.placement);
-          model.queue = previous.queue;
-          model.visibleDiners = previous.visibleDiners;
-          model.nextDiner = previous.nextDiner;
-          model.lastService = previous.lastService;
           stalls.set(stall.stall_id, model);
         }
         if (!model) {
@@ -2062,12 +1874,6 @@ export function createHallScene(
           next.tablet?.stall === stall.stall_id
             ? activeTablet.material
             : idleTablet.material;
-        const served =
-          model.lastService !== undefined &&
-          Boolean(stall.last_service) &&
-          stall.last_service !== model.lastService;
-        updateQueue(model, stall.activity?.waiting ?? 0, now, served);
-        model.lastService = stall.last_service ?? null;
         model.activity = stall.activity;
         model.open = stall["open?"];
         model.shutters.visible = !model.open;
@@ -2099,6 +1905,26 @@ export function createHallScene(
       if (walking && !stalls.has(walking)) walking = null;
       if (readingMenu && !stalls.has(readingMenu)) readMenu("");
       hasHallView = true;
+      if (!document.hidden)
+        floor.apply({
+          now,
+          serving: next.serving,
+          today: next.today,
+          queueLimit: next.queueLimit,
+          openRooms,
+          stalls: next.stalls.map((stall) => {
+            const spot = spots.get(stall.stall_id)!;
+            return {
+              id: stall.stall_id,
+              room: spot.room,
+              position: spot.position,
+              waiting: stall.activity?.waiting ?? 0,
+              lastService: stall.last_service ?? null,
+            };
+          }),
+          animate: next.motion,
+          browse: next.detail,
+        });
       updateBays(next);
       paintToLet(next.toLetLabel);
       // A room that closes, with the viewer in it: go to the highest open room

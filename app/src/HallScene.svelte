@@ -16,6 +16,9 @@
     stalls,
     rooms,
     vacancies,
+    serving,
+    today,
+    queueLimit,
     room = $bindable(saved?.room ?? 1),
     onVacancy,
     ownedStalls,
@@ -40,6 +43,9 @@
     stalls: Stall[];
     rooms?: { count: number; open: number };
     vacancies?: HallVacancy[];
+    serving: boolean;
+    today?: { arrivals: number; admitted: number; left: number };
+    queueLimit?: number;
     room?: number;
     onVacancy: (stallId: string) => void;
     ownedStalls: Stall[];
@@ -145,6 +151,9 @@
       stalls,
       rooms,
       vacancies,
+      serving,
+      today,
+      queueLimit,
       toLetLabel: t("toLet"),
       ownedStalls: ownedStalls.map((stall) => stall.stall_id),
       selected,

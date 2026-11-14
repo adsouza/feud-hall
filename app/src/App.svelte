@@ -2509,6 +2509,9 @@
               stalls={view.hall.stalls}
               rooms={view.hall.rooms}
               vacancies={view.hall.vacancies}
+              serving={view.hall.access === "open"}
+              today={view.hall.today}
+              queueLimit={view.hall.queue_limit}
               onVacancy={viewSpot}
               ownedStalls={view.hall.stalls.filter((stall) =>
                 restaurant?.stalls.some((owned) => owned.id === stall.stall_id),

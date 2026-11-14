@@ -88,6 +88,38 @@ test("floor: the first snapshot fills queues standing, with no walkers", () => {
   });
 });
 
+test("floor: a queued figure names its stall and spot, and only while queued", () => {
+  const floor = createDinerFloor();
+  floor.apply(input({ waiting: { s03: 3, s07: 2 } }));
+  const spots = (figures: FloorFigure[], id: string) =>
+    figures
+      .filter((f) => f.activity === "queued" && f.stall === id)
+      .map((f) => f.spot)
+      .sort();
+  let figures = all(floor, 0);
+  expect(spots(figures, "s03")).toEqual([0, 1, 2]);
+  expect(spots(figures, "s07")).toEqual([0, 1]);
+  for (const f of figures) {
+    const position = IDS.indexOf(f.stall!);
+    const at = toHall(spotPlacement(1, position), ...queueSpot(f.spot!));
+    expect(f.x).toBeCloseTo(at.x, 9);
+    expect(f.z).toBeCloseTo(at.z, 9);
+  }
+  // s03 serves: the diner at its last spot collects, and is no longer queued.
+  floor.apply(
+    input({ now: STEP, waiting: { s03: 2, s07: 2 }, served: { s03: "a" } }),
+  );
+  figures = all(floor, STEP);
+  expect(spots(figures, "s03")).toEqual([0, 1]);
+  const collecting = figures.filter((f) => f.activity === "collecting");
+  expect(collecting).toHaveLength(1);
+  expect(collecting[0]!.stall).toBe("s03");
+  expect(collecting[0]!.spot).toBeUndefined();
+  expect(
+    figures.filter((f) => f.activity !== "queued" && f.spot !== undefined),
+  ).toEqual([]);
+});
+
 /** Independent oracles for the property below. */
 function queueRises(previous: FloorInput, step: FloorInput) {
   const cap = Math.min(step.queueLimit ?? 4, 8);
