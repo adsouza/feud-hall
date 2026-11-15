@@ -102,6 +102,30 @@ defmodule FeudHall.CustomerSimTest do
              row(Stats.verdict(:a, one_closed), "A ref open during checked hours")
   end
 
+  test "the owner-stall mean rush rows are reported without a bound and leave the reference rows alone" do
+    one = Stats.new(%{measured_days: 1, reference: "ref"})
+    two = Stats.new(%{measured_days: 1, reference: "ref", owners: ["ref", "extra"]})
+
+    feed_both = fn stats, hour ->
+      Stats.add(stats, sample(1, hour, %{"ref" => stall(2, true), "extra" => stall(5, true), "npc" => stall(6, true)}))
+    end
+
+    for hour <- [12, 19], label = "#{hour}:00-#{hour + 1}:00" do
+      with_extra = Stats.verdict(:a, feed_both.(two, hour))
+      # (2 + 5) / 2: the computer-run stall is not an owner stall.
+      assert %{value: 3.5, low: nil, high: nil, pass: true} = row(with_extra, "A owner stalls mean waiting #{label}")
+      assert %{value: 2.0, low: 2.5, high: 4.5, pass: false} = row(with_extra, "A ref waiting #{label}")
+
+      alone = Stats.verdict(:a, feed_both.(one, hour))
+      assert %{value: 2.0, pass: true} = row(alone, "A owner stalls mean waiting #{label}")
+    end
+
+    # A wildly out-of-range mean still passes: the row is reported, never judged.
+    crowded = Stats.add(two, sample(1, 12, %{"ref" => stall(6, true), "extra" => stall(6, true)}))
+    assert row(Stats.verdict(:a, crowded), "A owner stalls mean waiting 12:00-13:00").pass
+    refute Enum.any?(Stats.verdict(:b, crowded), &(&1.check =~ "owner stalls"))
+  end
+
   test "profit charges arrears, carries the distressed flag and lists warnings" do
     midnight = fn stats, day, cash, arrears, revenue ->
       Stats.add(stats, sample(day, 0, %{}, %{ledger: %{"r" => %{cash: cash, revenue: revenue, arrears: arrears}}}))
@@ -237,6 +261,142 @@ defmodule FeudHall.CustomerSimTest do
     assert {:error, message} = CLI.parse(~w(--run a --cuisine atlantis))
     assert message =~ "--cuisine"
     assert {:error, _} = CLI.parse(~w(--run b --cuisine coast_salish))
+  end
+
+  test "--extra-stalls is parsed for run A, 0 to 8, and refused otherwise" do
+    assert {:ok, %{extra_stalls: 0}} = CLI.parse(~w(--run a))
+    assert {:ok, %{extra_stalls: 2}} = CLI.parse(~w(--run a --extra-stalls 2))
+    assert {:ok, %{extra_stalls: 8}} = CLI.parse(~w(--run a --extra-stalls 8))
+    assert {:ok, %{extra_stalls: 0}} = CLI.parse(~w(--run b --extra-stalls 0))
+    assert {:error, message} = CLI.parse(~w(--run a --extra-stalls 9))
+    assert message =~ "--extra-stalls must be 0..8"
+    assert {:error, _} = CLI.parse(~w(--run a --extra-stalls -1))
+    assert {:error, message} = CLI.parse(~w(--run b --extra-stalls 1))
+    assert message =~ "run a only"
+  end
+
+  test "extra owners take unused cuisines by distance of the starter price from the median, never the reference's" do
+    # Unused prices 800, 900, 950, 1000, 1300: the median is 950 ("c").
+    state =
+      reference_state(%{"a" => 1300, "b" => 900, "c" => 950, "d" => 1000, "e" => 800, "taken" => 950}, ["taken"])
+
+    assert Hall.reference_cuisine(state) == "c"
+    # Distances: b 50, d 50 (the lower price first), e 150, a 350.
+    assert Hall.extra_cuisines(state, "c", 0) == []
+    assert Hall.extra_cuisines(state, "c", 3) == ["b", "d", "e"]
+    assert Hall.extra_cuisines(state, "c", 4) == ["b", "d", "e", "a"]
+    # With another reference the median cuisine itself comes first.
+    assert Hall.extra_cuisines(state, "a", 2) == ["c", "b"]
+
+    assert catch_throw(Hall.extra_cuisines(state, "c", 5)) ==
+             {:refused, "extra-stalls", {:no_unused_cuisine, %{wanted: 5, available: 4}}}
+  end
+
+  @tag timeout: 180_000
+  test "--extra-stalls 2 adds two more owners like the reference, each on its own cuisine, through commands only" do
+    result = run!(%{run: :a, days: 1, extra_stalls: 2})
+    assert result.problems == []
+    state = HallAuthority.state(result.authority).hall
+
+    assert map_size(state.restaurants) == 6
+    assert Enum.count(state.restaurants, fn {_, r} -> r.owner_kind == :npc end) == 3
+    assert [%{restaurant_id: "reference"} = reference, extra1, extra2] = result.owners
+    assert reference == result.reference
+    assert [extra1.restaurant_id, extra2.restaurant_id] == ["extra-1", "extra-2"]
+
+    npc_cuisines = for {_, %{owner_kind: :npc, cuisine: c}} <- state.restaurants, do: c
+
+    unused =
+      for {_, %{starter: true, kind: :main} = recipe} <- LaunchCatalog.catalog().recipes,
+          recipe.cuisine not in npc_cuisines,
+          do: {recipe.suggested_price, recipe.cuisine}
+
+    expected =
+      unused
+      |> Enum.reject(fn {_price, cuisine} -> cuisine == reference.cuisine end)
+      |> Enum.sort_by(fn {price, cuisine} -> {abs(price - reference.price), price, cuisine} end)
+      |> Enum.take(2)
+      |> Enum.map(&elem(&1, 1))
+
+    assert [extra1.cuisine, extra2.cuisine] == expected
+    assert length(Enum.uniq([reference.cuisine | expected] ++ npc_cuisines)) == 6
+
+    for owner <- result.owners do
+      sid = owner.stall_id
+      assert state.layout[sid] == :standard
+      assert Rooms.open?(state, sid)
+      lease = state.management.leases[sid]
+      assert {lease.start_hour, lease.end_hour} == {10, 20}
+      assert map_size(lease.workers) == 3
+      assert lease.unattended
+      restaurant = state.restaurants[owner.restaurant_id]
+      assert restaurant.owner_kind == :principal
+      assert restaurant.cuisine == owner.cuisine
+      [{recipe_id, price}] = Map.to_list(restaurant.menu)
+      recipe = state.catalog.recipes[recipe_id]
+      assert recipe.starter and recipe.kind == :main and recipe.cuisine == owner.cuisine
+      assert price == recipe.suggested_price
+      assert Enum.map(owner.restock, & &1.product) == recipe.lines |> Enum.map(& &1.product) |> Enum.sort()
+      assert result.stats.stalls[sid].npc == false
+    end
+
+    assert length(Enum.uniq(Enum.map(result.owners, & &1.stall_id))) == 3
+
+    # Nothing reached the hall except through a command: every committed batch has a receipt
+    # that accounts for its events, and each owner's set-up is among them under its own device.
+    {store_mod, store} = HallAuthority.store(result.authority)
+    {:ok, batches} = store_mod.read_from(store, 0)
+    events = Enum.sum(for batch <- batches, do: length(batch.events) + length(batch.control_events))
+
+    receipts =
+      for batch <- batches do
+        assert {:ok, receipt} = store_mod.receipt(store, batch.command_id)
+        receipt.event_count
+      end
+
+    assert Enum.sum(receipts) == events
+    ids = MapSet.new(batches, & &1.command_id)
+
+    for device <- ["reference-owner", "extra-owner-1", "extra-owner-2"],
+        step <- ~w(register reserve create staff open) do
+      assert MapSet.member?(ids, "#{device}:#{step}"), "#{device}:#{step}"
+    end
+
+    # The scale a measured day's arrivals used is the one its opening midnight recorded:
+    # the day before's equivalents, or the floor of three when they are fewer.
+    closed = for batch <- batches, %{type: :day_closed} = e <- batch.events, do: e
+    assert [%{day: 0} = warm_up, %{day: 1} = day1] = closed
+    assert warm_up.scale_millis == max(warm_up.equivalents_millis, 3_000)
+    assert day1.scale_millis == max(day1.equivalents_millis, 3_000)
+
+    args = %{run: :a, tuning: :current, via: :init, days: 1, seed: @seed, set: [], extra_stalls: 2}
+    json = Jason.decode!(CLI.json(result, args))
+    assert [day0, measured] = json["summary"]["days"]
+    assert day0["equivalents_millis"] == warm_up.equivalents_millis
+    assert measured["arrival_scale_millis"] == warm_up.scale_millis
+    assert measured["equivalents_millis"] == day1.equivalents_millis
+    # 90 arrivals per equivalent at today's values: the day's arrivals follow the recorded scale.
+    assert_in_delta measured["arrivals"], 90 * warm_up.scale_millis / 1_000, 1
+    assert length(json["owners"]) == 3
+    assert length(json["checked_hours"]) == 6
+
+    for row <- json["checked_hours"], key <- ~w(waiting_12 waiting_19 busy_12 busy_19 waiting_10 waiting_14_17) do
+      assert is_number(row[key]), "#{row["stall"]} #{key}"
+    end
+
+    assert [%{"hour" => 12} = noon, %{"hour" => 19}] = json["rush_hours"]
+    assert_in_delta noon["arrivals_per_open_stall"], noon["arrivals_per_day"] / noon["open_stalls"], 0.01
+  end
+
+  @tag timeout: 180_000
+  test "with enough owner stalls the hall passes three equivalents and the next day's scale follows them" do
+    result = run!(%{run: :a, days: 0, extra_stalls: 4})
+    {store_mod, store} = HallAuthority.store(result.authority)
+    {:ok, batches} = store_mod.read_from(store, 0)
+    assert [%{day: 0} = warm_up] = for(batch <- batches, %{type: :day_closed} = e <- batch.events, do: e)
+    assert warm_up.equivalents_millis > 3_000
+    assert warm_up.scale_millis == warm_up.equivalents_millis
+    assert HallAuthority.state(result.authority).hall.demand.supply_scale_millis == warm_up.scale_millis
   end
 
   @tag timeout: 180_000

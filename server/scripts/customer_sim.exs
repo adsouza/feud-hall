@@ -2,14 +2,15 @@
 #
 #   mix run --no-start scripts/customer_sim.exs -- --run a|b --tuning current|chosen|PATH \
 #     --days N --seed S [--via init|retune] [--hours START-END] [--cuisine ID] \
-#     [--set KEY=VALUE ...] [--json PATH]
+#     [--extra-stalls N] [--set KEY=VALUE ...] [--json PATH]
 #
 # A real hall authority runs in memory (no web endpoint, no database) with a
 # manual clock, ticked once per service second as the live hall is. The only
 # writes are commands: the hall's own initialisation, the computer-run owners
-# the authority creates, and in run A one reference owner playing through the
-# same management boundary a client uses. Everything measured is read from the
-# authority's committed state.
+# the authority creates, and in run A one reference owner (plus `--extra-stalls`
+# more owners set up the same way) playing through the same management boundary
+# a client uses. Everything measured is read from the authority's committed
+# state and events.
 
 defmodule FeudHall.CustomerSim.Clock do
   @moduledoc false
@@ -182,12 +183,19 @@ defmodule FeudHall.CustomerSim.Stats do
   alias FeudHall.Domain.{Clock, Inventory}
   alias FeudHall.Domain.Hall.Progression
 
-  @doc "A fresh accumulator. `meta`: `measured_days`, `reference` (stall ID or nil)."
+  @doc """
+  A fresh accumulator. `meta`: `measured_days`, `reference` (stall ID or nil)
+  and `owners` (the stall IDs of the reference and every extra owner; the
+  reference alone unless given).
+  """
   def new(meta) do
     %{
       measured_days: Map.fetch!(meta, :measured_days),
       reference: Map.get(meta, :reference),
+      owners: Map.get(meta, :owners, List.wrap(Map.get(meta, :reference))),
       stalls: Map.get(meta, :stalls, %{}),
+      day_scales: %{},
+      owner_short: %{},
       hours: %{},
       stall_hours: %{},
       hall_hours: %{},
@@ -202,7 +210,15 @@ defmodule FeudHall.CustomerSim.Stats do
   @doc "Sets the event tally (`FeudHall.CustomerSim.Store.accounts/1`)."
   def put_accounts(stats, accounts), do: %{stats | accounts: accounts}
 
-  def put_meta(stats, meta), do: Map.merge(stats, Map.take(meta, [:reference, :stalls]))
+  def put_meta(stats, meta), do: Map.merge(stats, Map.take(meta, [:reference, :owners, :stalls]))
+
+  @doc """
+  Sets what the hall recorded about each day's scale, by hall day:
+  `equivalents_millis` (the day's own business equivalents, recorded by the
+  `day_closed` at its end) and `arrival_scale_millis` (the scale its arrivals
+  used, fixed at the midnight that opened it).
+  """
+  def put_day_scales(stats, day_scales), do: %{stats | day_scales: day_scales}
 
   @doc "The hall's cumulative counters before anything happened."
   def counters,
@@ -225,13 +241,15 @@ defmodule FeudHall.CustomerSim.Stats do
       ledger: nil,
       distressed: [],
       market_zero: [],
-      reference_short: nil
+      reference_short: nil,
+      owner_short: %{}
     }
   end
 
   @doc """
   The observation of `state` and the counters it leaves. `reference` is the
-  reference stall ID, or nil. Reads only; never changes the hall.
+  reference stall ID, or nil; `owners` the stall IDs of every owner stall (the
+  reference and the extras). Reads only; never changes the hall.
 
   Per stall: `waiting`, `cooking` and `handover` from
   `Management.queue_activity/1` (the hall view's own `activity` counts), and
@@ -241,7 +259,7 @@ defmodule FeudHall.CustomerSim.Stats do
   admitted visits that ended with no course served: the difference is
   `left_after_admission`.
   """
-  def observe(state, counters, reference) do
+  def observe(state, counters, reference, owners \\ []) do
     at = state.now
     delta_at = max(at - 1, 0)
     stats = state.stats
@@ -281,7 +299,8 @@ defmodule FeudHall.CustomerSim.Stats do
       ledger: if(rem(at, Clock.day()) == 0, do: midnight_ledger(state)),
       distressed: for({id, _} <- Enum.sort(state.restaurants), Progression.distressed?(state, id), do: id),
       market_zero: for({p, _} <- Enum.sort(state.catalog.products), Map.get(state.market.stock, p, 0) == 0, do: p),
-      reference_short: reference_short(state, reference, stalls)
+      reference_short: reference_short(state, reference, stalls),
+      owner_short: Map.new(owners, &{&1, reference_short(state, &1, stalls)})
     }
 
     {observation,
@@ -307,8 +326,8 @@ defmodule FeudHall.CustomerSim.Stats do
     end)
   end
 
-  # The reference stall's menu products whose unreserved, unexpired stock is
-  # below one portion's quantity, while the stall is open; nil while closed.
+  # An owner stall's menu products whose unreserved, unexpired stock is below
+  # one portion's quantity, while the stall is open; nil while closed.
   defp reference_short(_state, nil, _stalls), do: nil
 
   defp reference_short(state, sid, stalls) do
@@ -402,9 +421,16 @@ defmodule FeudHall.CustomerSim.Stats do
           products -> %{open: 1, short: bit(products != []), products: Map.new(products, &{&1, 1})}
         end
 
+      owner_short =
+        Enum.reduce(obs.owner_short, stats.owner_short, fn
+          {_sid, nil}, acc -> acc
+          {sid, products}, acc -> Map.update(acc, sid, bit(products != []), &(&1 + bit(products != [])))
+        end)
+
       %{
         stats
         | stall_hours: stall_hours,
+          owner_short: owner_short,
           hall_hours: Map.update(stats.hall_hours, key, hall, &sum_maps(&1, hall)),
           market_zero: Map.update(stats.market_zero, day, zero, &sum_maps(&1, zero)),
           reference_short:
@@ -537,8 +563,18 @@ defmodule FeudHall.CustomerSim.Stats do
       check("A ref waiting 14:00-17:00", window(stats, [14, 15, 16], ref).waiting, 0.5, 2),
       check("A hall waiting per stall 00:00-03:00", hall_window(stats, [0, 1, 2]), nil, 0.3),
       check("A ref open instants short of an ingredient", short, nil, 0),
-      open_check(stats, ref)
+      open_check(stats, ref),
+      owner_mean(stats, 12),
+      owner_mean(stats, 19)
     ]
+  end
+
+  # Reported, never judged: the mean over the owner stalls (the reference and
+  # any extras) of each stall's time-averaged orders waiting in a rush hour.
+  defp owner_mean(stats, hour) do
+    values = Enum.map(stats.owners, &window(stats, [hour], &1).waiting)
+    mean = if values == [], do: 0.0, else: Enum.sum(values) / length(values)
+    check("A owner stalls mean waiting #{hour}:00-#{hour + 1}:00", mean, nil, nil)
   end
 
   @checked_hours [10, 12, 14, 15, 16, 19]
@@ -609,9 +645,13 @@ defmodule FeudHall.CustomerSim.Stats do
         counts = totals(stats, [day])
         short = Map.get(stats.reference_short, day, %{open: 0, short: 0, products: %{}})
 
+        scale = Map.get(stats.day_scales, day, %{})
+
         Map.merge(counts, %{
           day: day,
           warm_up: day == 0,
+          equivalents_millis: Map.get(scale, :equivalents_millis),
+          arrival_scale_millis: Map.get(scale, :arrival_scale_millis),
           served_share: round4(ratio(counts.served, counts.arrivals)),
           profit: profit(stats, day),
           market_zero_ticks: Map.get(stats.market_zero, day, %{}),
@@ -622,6 +662,69 @@ defmodule FeudHall.CustomerSim.Stats do
       end
 
     %{hours: hours, days: days}
+  end
+
+  @doc """
+  For every stall, over the measured days, what the verdict reads for the
+  reference stall: time-averaged orders waiting and counter-busy share in the
+  checked hours, the share of the checked hours it was open, and for an owner
+  stall the open instants it was short of an ingredient (nil for a
+  computer-run stall, which is not sampled for it).
+  """
+  def checked_hours(stats) do
+    for sid <- stats.stalls |> Map.keys() |> Enum.sort() do
+      meta = stats.stalls[sid]
+      rush = fn hour -> window(stats, [hour], sid) end
+
+      {n, open} =
+        for day <- measured(stats),
+            hour <- @checked_hours,
+            s = Map.get(stats.stall_hours, {day, hour, sid}),
+            s != nil,
+            reduce: {0, 0} do
+          {n, open} -> {n + s.samples, open + s.open}
+        end
+
+      %{
+        stall: sid,
+        restaurant: meta.restaurant,
+        npc: meta.npc,
+        cuisine: meta.cuisine,
+        waiting_12: round4(rush.(12).waiting),
+        waiting_19: round4(rush.(19).waiting),
+        busy_12: round4(rush.(12).busy),
+        busy_19: round4(rush.(19).busy),
+        waiting_10: round4(rush.(10).waiting),
+        waiting_14_17: round4(window(stats, [14, 15, 16], sid).waiting),
+        open_share: round4(ratio(open, n)),
+        short: if(sid in stats.owners, do: Map.get(stats.owner_short, sid, 0))
+      }
+    end
+  end
+
+  @doc """
+  For each rush hour (12:00 and 19:00), over the measured days: arrivals in
+  the hour per day, the time-averaged number of stalls open during it, and
+  the first divided by the second.
+  """
+  def rush_hours(stats) do
+    days = measured(stats)
+
+    for hour <- [12, 19] do
+      arrivals = Enum.sum(for day <- days, do: totals_for(stats, day, hour).arrivals)
+
+      open =
+        for day <- days, {{^day, ^hour, _sid}, s} <- stats.stall_hours, reduce: 0.0 do
+          acc -> acc + s.open / s.samples
+        end
+
+      %{
+        hour: hour,
+        arrivals_per_day: round4(ratio(arrivals, length(days)) / 1),
+        open_stalls: round4(ratio(open, length(days)) / 1),
+        arrivals_per_open_stall: if(open > 0, do: round4(arrivals / open), else: 0.0)
+      }
+    end
   end
 
   defp totals_for(stats, day, hour),
@@ -717,6 +820,9 @@ defmodule FeudHall.CustomerSim.Hall do
   names another): a registered
   principal admitted by the admin the way a seeded owner is, who then issues
   ordinary owner commands through `HallAuthority.management_execute/3`.
+  `extra_stalls` adds that many more owners at the same instant, each set up
+  by the same commands with the same hours and restock rule, on the first free
+  standard spot of an open room and on its own cuisine (`extra_cuisines/3`).
   `--via retune` applies the tuning with `retune_rules` at 12:00 of the
   warm-up day, so it is in force from the first measured midnight.
   """
@@ -729,8 +835,11 @@ defmodule FeudHall.CustomerSim.Hall do
   alias FeudHall.Infrastructure.HallAuthority
 
   @scope "customer-sim"
-  @device "reference-owner"
-  @restaurant "reference"
+  @reference %{device: "reference-owner", restaurant: "reference", name: "Reference", seed: "sim:seed-reference"}
+  @max_extra_stalls 8
+
+  @doc "The most extra owner stalls a run may ask for."
+  def max_extra_stalls, do: @max_extra_stalls
 
   def ticks_per_hour, do: div(HallClock.service_ms(HallClock.hour()), 1_000)
   def ticks_per_day, do: div(HallClock.service_ms(HallClock.day()), 1_000)
@@ -739,7 +848,8 @@ defmodule FeudHall.CustomerSim.Hall do
   Runs the hall: one warm-up day and `days` measured days, one tick per
   service second. Options: `run` (`:a | :b`), `tuning`, `via` (`:init |
   :retune`), `days`, `seed`, and optionally `hours`, `cuisine` (the reference
-  owner's cuisine, overriding the default), `observer` (called as
+  owner's cuisine, overriding the default), `extra_stalls` (run A only, 0 to
+  #{@max_extra_stalls}), `observer` (called as
   `observer.(tick, authority)` after each tick's commands) and `progress`
   (called with `{day, stats}` at each midnight).
 
@@ -785,14 +895,21 @@ defmodule FeudHall.CustomerSim.Hall do
     admin(authority, "sim:init", {:initialize_hall, init})
     admin(authority, "sim:visitor-play", {:enable_visitor_play, %{}})
 
+    extra = Map.get(opts, :extra_stalls) || 0
+
+    if extra not in 0..@max_extra_stalls or (extra > 0 and opts.run != :a),
+      do: throw({:refused, "extra-stalls", {:bad_count, extra}})
+
     stats = Stats.new(%{measured_days: opts.days})
-    {obs, counters} = Stats.observe(hall(authority), Stats.counters(), nil)
+    first = hall(authority)
+    initial_scale = first.demand.supply_scale_millis
+    {obs, counters} = Stats.observe(first, Stats.counters(), nil)
     stats = Stats.add(stats, obs)
     last = (opts.days + 1) * ticks_per_day()
     {start, _finish} = hours = Map.get(opts, :hours, default_hours())
 
-    {stats, _counters, reference} =
-      Enum.reduce(1..last, {stats, counters, nil}, fn tick, {stats, counters, reference} ->
+    {stats, _counters, owners} =
+      Enum.reduce(1..last, {stats, counters, []}, fn tick, {stats, counters, owners} ->
         :atomics.put(clock, 1, tick * 1_000)
 
         case HallAuthority.tick(authority) do
@@ -800,10 +917,10 @@ defmodule FeudHall.CustomerSim.Hall do
           {:error, reason} -> throw({:tick_failed, tick, reason})
         end
 
-        reference =
+        owners =
           if opts.run == :a and tick == start * ticks_per_hour(),
-            do: open_reference(authority, hours, opts[:cuisine]),
-            else: reference
+            do: open_owners(authority, hours, opts[:cuisine], extra),
+            else: owners
 
         if opts.via == :retune and tick == 12 * ticks_per_hour() do
           admin(authority, "sim:retune", {:retune_rules, %{tuning: opts.tuning}})
@@ -811,22 +928,25 @@ defmodule FeudHall.CustomerSim.Hall do
 
         if observer = opts[:observer], do: observer.(tick, authority)
         state = hall(authority)
-        {obs, counters} = Stats.observe(state, counters, reference && reference.stall_id)
+        {obs, counters} = Stats.observe(state, counters, reference_stall(owners), Enum.map(owners, & &1.stall_id))
         stats = Stats.add(stats, obs)
 
         if rem(tick, ticks_per_day()) == 0 do
-          stats = Stats.put_meta(stats, %{reference: reference && reference.stall_id, stalls: stall_meta(state)})
+          stats = Stats.put_meta(stats, owner_meta(owners, state))
           if progress = opts[:progress], do: progress.({div(tick, ticks_per_day()), stats})
-          {stats, counters, reference}
+          {stats, counters, owners}
         else
-          {stats, counters, reference}
+          {stats, counters, owners}
         end
       end)
 
     stats =
       stats
-      |> Stats.put_meta(%{reference: reference && reference.stall_id, stalls: stall_meta(hall(authority))})
+      |> Stats.put_meta(owner_meta(owners, hall(authority)))
       |> Stats.put_accounts(Store.accounts(money))
+      |> Stats.put_day_scales(day_scales(authority, initial_scale))
+
+    reference = List.first(owners)
 
     served = Enum.sum(for day <- 0..opts.days, do: Stats.day_served(stats, day))
 
@@ -843,6 +963,7 @@ defmodule FeudHall.CustomerSim.Hall do
       stats: stats,
       authority: authority,
       reference: reference,
+      owners: owners,
       tuning: opts.tuning,
       hours: hours,
       problems: problems
@@ -851,6 +972,30 @@ defmodule FeudHall.CustomerSim.Hall do
 
   defp hall(authority), do: HallAuthority.state(authority).hall
 
+  defp reference_stall([reference | _]), do: reference.stall_id
+  defp reference_stall([]), do: nil
+
+  defp owner_meta(owners, state),
+    do: %{reference: reference_stall(owners), owners: Enum.map(owners, & &1.stall_id), stalls: stall_meta(state)}
+
+  # What the hall recorded about each day's scale, read from the committed
+  # `day_closed` events: the one at the end of day D carries D's business
+  # equivalents and the scale for day D + 1's arrivals. Day 0 runs at the scale
+  # the hall started with (the floor).
+  defp day_scales(authority, initial_scale) do
+    {store_mod, store} = HallAuthority.store(authority)
+    {:ok, batches} = store_mod.read_from(store, 0)
+    closed = for batch <- batches, %{type: :day_closed} = event <- batch.events, do: event
+
+    Enum.reduce(closed, %{0 => %{arrival_scale_millis: initial_scale}}, fn event, acc ->
+      acc
+      |> Map.update(event.day, %{equivalents_millis: event.equivalents_millis}, fn day ->
+        Map.put(day, :equivalents_millis, event.equivalents_millis)
+      end)
+      |> Map.put(event.day + 1, %{arrival_scale_millis: event.scale_millis})
+    end)
+  end
+
   defp stall_meta(state) do
     Map.new(state.stalls, fn {sid, stall} ->
       restaurant = state.restaurants[stall.restaurant]
@@ -858,12 +1003,6 @@ defmodule FeudHall.CustomerSim.Hall do
     end)
   end
 
-  # The reference owner: registers, is admitted as a seeded owner is, leases
-  # the first free standard spot in room 1 (by spot ID), creates a default
-  # restaurant (its starter main at the suggested price, three starter staff),
-  # sets the staff schedule to `hours`, trades unattended with no cash floor (the
-  # restock policy only runs for an unattended open stall), sets a restock
-  # policy for every product of the starter main, and opens.
   @doc """
   The reference schedule unless `--hours` says otherwise: ten hours, the
   longest the three starter staff work before their protective break (after
@@ -871,40 +1010,60 @@ defmodule FeudHall.CustomerSim.Hall do
   """
   def default_hours, do: {10, 20}
 
-  defp open_reference(authority, {start, finish}, override) do
+  # The reference owner first, then the extra owners; cuisines are settled
+  # before any command so a shortage refuses the run before it changes the hall.
+  defp open_owners(authority, hours, override, extra) do
     state = hall(authority)
     cuisine = reference_cuisine(state, override)
+    extras = extra_cuisines(state, cuisine, extra)
+    reference = open_owner(authority, @reference, hours, cuisine, &reference_spot/1)
+
+    more =
+      for {extra_cuisine, n} <- Enum.with_index(extras, 1) do
+        who = %{device: "extra-owner-#{n}", restaurant: "extra-#{n}", name: "Extra #{n}", seed: "sim:seed-extra-#{n}"}
+        open_owner(authority, who, hours, extra_cuisine, &extra_spot(&1, n, extra))
+      end
+
+    [reference | more]
+  end
+
+  # An owner: registers, is admitted as a seeded owner is, leases a free
+  # standard spot (the reference the first in room 1 by spot ID, an extra owner
+  # the first in any open room), creates a default restaurant (its starter main
+  # at the suggested price, three starter staff), sets the staff schedule to
+  # `hours`, trades unattended with no cash floor (the restock policy only runs
+  # for an unattended open stall), sets a restock policy for every product of
+  # the starter main, and opens.
+  defp open_owner(authority, who, {start, finish}, cuisine, spot) do
+    state = hall(authority)
     starter = starter_mains(state.catalog)[cuisine]
-    sid = reference_spot(state)
+    sid = spot.(state)
+    client = &client(authority, who.device, &1, &2)
 
-    client(authority, "register", {:bootstrap_guest, %{name: "Reference Owner"}})
-    principal = Identity.principal_for_device(Identity.get(HallAuthority.state(authority).control), @device)
-    admin(authority, "sim:seed-reference", {:seed_owner, %{principal: principal, reviewer?: false}})
-    client(authority, "reserve", {:reserve_stall, %{stall_id: sid}})
+    client.("register", {:bootstrap_guest, %{name: "#{who.name} Owner"}})
+    principal = Identity.principal_for_device(Identity.get(HallAuthority.state(authority).control), who.device)
+    admin(authority, who.seed, {:seed_owner, %{principal: principal, reviewer?: false}})
+    client.("reserve", {:reserve_stall, %{stall_id: sid}})
 
-    client(
-      authority,
+    client.(
       "create",
-      {:create_restaurant, %{stall_id: sid, restaurant_id: @restaurant, cuisine: cuisine, name: "Reference Kitchen"}}
+      {:create_restaurant,
+       %{stall_id: sid, restaurant_id: who.restaurant, cuisine: cuisine, name: "#{who.name} Kitchen"}}
     )
 
-    client(authority, "staff", {:set_staff_schedule, %{stall_id: sid, start_hour: start, end_hour: finish}})
-    client(authority, "unattended", {:set_unattended_policy, %{stall_id: sid, enabled: true, cash_floor: 0}})
+    client.("staff", {:set_staff_schedule, %{stall_id: sid, start_hour: start, end_hour: finish}})
+    client.("unattended", {:set_unattended_policy, %{stall_id: sid, enabled: true, cash_floor: 0}})
     policies = restock_policies(hall(authority), starter)
 
     for policy <- policies do
-      client(
-        authority,
-        "restock:#{policy.product}",
-        {:set_restock_policy, Map.put(policy, :restaurant_id, @restaurant)}
-      )
+      client.("restock:#{policy.product}", {:set_restock_policy, Map.put(policy, :restaurant_id, who.restaurant)})
     end
 
-    client(authority, "open", {:open_stall, %{stall_id: sid}})
+    client.("open", {:open_stall, %{stall_id: sid}})
 
     %{
       stall_id: sid,
-      restaurant_id: @restaurant,
+      restaurant_id: who.restaurant,
       cuisine: cuisine,
       recipe: starter.id,
       price: starter.suggested_price,
@@ -955,6 +1114,33 @@ defmodule FeudHall.CustomerSim.Hall do
     end
   end
 
+  @doc """
+  The cuisines of `count` extra owners: the unused cuisines other than the
+  reference's, nearest first by the distance of the starter main's suggested
+  price from the median unused price (the price `reference_cuisine/1` picks),
+  then the lower price, then the cuisine ID. Refuses the run when fewer than
+  `count` are left.
+  """
+  def extra_cuisines(_state, _reference, 0), do: []
+
+  def extra_cuisines(state, reference, count) do
+    unused = unused_starters(state)
+    median = unused[reference_cuisine(state)].suggested_price
+
+    ordered =
+      unused
+      |> Map.delete(reference)
+      |> Enum.sort_by(fn {cuisine, recipe} ->
+        {abs(recipe.suggested_price - median), recipe.suggested_price, cuisine}
+      end)
+      |> Enum.map(&elem(&1, 0))
+
+    if length(ordered) < count,
+      do: throw({:refused, "extra-stalls", {:no_unused_cuisine, %{wanted: count, available: length(ordered)}}})
+
+    Enum.take(ordered, count)
+  end
+
   defp unused_starters(state) do
     taken = MapSet.new(Map.values(state.restaurants), & &1.cuisine)
     Map.reject(starter_mains(state.catalog), fn {cuisine, _recipe} -> MapSet.member?(taken, cuisine) end)
@@ -969,6 +1155,19 @@ defmodule FeudHall.CustomerSim.Hall do
       quote = spot.tier == :standard and Management.lease_quote(state, spot.slot_id, summary)
       if quote && quote.room == 1, do: spot.slot_id
     end) || throw({:refused, "reference-spot", :no_standard_spot_in_room_1})
+  end
+
+  # The first free standard spot (by spot ID) the hall will quote a lease for, which it
+  # does only in an open room.
+  defp extra_spot(state, n, wanted) do
+    summary = Rooms.summary(state)
+
+    state.catalog.layout
+    |> Enum.sort_by(& &1.slot_id)
+    |> Enum.find_value(fn spot ->
+      spot.tier == :standard and Management.lease_quote(state, spot.slot_id, summary) != nil and spot.slot_id
+    end) ||
+      throw({:refused, "extra-stalls", {:no_standard_spot_in_an_open_room, %{wanted: wanted, placed: n - 1}}})
   end
 
   # Generous enough not to run out while the market can supply: the stock
@@ -1011,9 +1210,9 @@ defmodule FeudHall.CustomerSim.Hall do
     accepted!(id, HallAuthority.execute(authority, envelope))
   end
 
-  defp client(authority, suffix, command) do
-    id = "#{@device}:#{suffix}"
-    accepted!(id, HallAuthority.management_execute(authority, @device, %{command_id: id, command: command}))
+  defp client(authority, device, suffix, command) do
+    id = "#{device}:#{suffix}"
+    accepted!(id, HallAuthority.management_execute(authority, device, %{command_id: id, command: command}))
   end
 
   defp accepted!(_id, {:accepted, %{outcome: :accepted}} = result), do: result
@@ -1029,7 +1228,8 @@ defmodule FeudHall.CustomerSim.CLI do
   @runs %{"a" => :a, "b" => :b}
   @vias %{"init" => :init, "retune" => :retune}
   @usage "usage: mix run --no-start scripts/customer_sim.exs -- --run a|b --tuning current|chosen|PATH " <>
-           "--days N --seed S [--via init|retune] [--hours START-END] [--cuisine ID] [--set KEY=VALUE ...] [--json PATH]"
+           "--days N --seed S [--via init|retune] [--hours START-END] [--cuisine ID] [--extra-stalls N] " <>
+           "[--set KEY=VALUE ...] [--json PATH]"
 
   def main(argv) do
     started = System.monotonic_time(:millisecond)
@@ -1041,7 +1241,7 @@ defmodule FeudHall.CustomerSim.CLI do
       IO.puts(
         "Run #{args.run}, tuning #{args.tuning}#{sets} (version #{tuning.version}), via #{args.via}, seed #{args.seed}, " <>
           "1 warm-up day + #{args.days} measured, reference hours #{hours_label(args.hours)}, " <>
-          "reference cuisine #{args.cuisine || "by median starter price"}"
+          "reference cuisine #{args.cuisine || "by median starter price"}, extra owner stalls #{args.extra_stalls}"
       )
 
       opts = %{
@@ -1052,6 +1252,7 @@ defmodule FeudHall.CustomerSim.CLI do
         seed: args.seed,
         hours: args.hours,
         cuisine: args.cuisine,
+        extra_stalls: args.extra_stalls,
         progress: &progress(&1, args.days)
       }
 
@@ -1068,7 +1269,7 @@ defmodule FeudHall.CustomerSim.CLI do
           end
 
         {:error, reason} ->
-          IO.puts(:stderr, "Run failed: #{inspect(reason)}")
+          IO.puts(:stderr, "Run failed: #{failure(reason)}")
           System.halt(1)
       end
     else
@@ -1077,6 +1278,14 @@ defmodule FeudHall.CustomerSim.CLI do
         System.halt(1)
     end
   end
+
+  defp failure({:refused, "extra-stalls", {:no_unused_cuisine, %{wanted: wanted, available: available}}}),
+    do: "the hall cannot place #{wanted} extra stalls: only #{available} unused cuisines are left"
+
+  defp failure({:refused, "extra-stalls", {:no_standard_spot_in_an_open_room, %{wanted: wanted, placed: placed}}}),
+    do: "the hall cannot place #{wanted} extra stalls: no free standard spot in an open room after #{placed}"
+
+  defp failure(reason), do: inspect(reason)
 
   def parse(argv) do
     argv = Enum.drop_while(argv, &(&1 == "--"))
@@ -1089,6 +1298,7 @@ defmodule FeudHall.CustomerSim.CLI do
       via: :string,
       hours: :string,
       cuisine: :string,
+      extra_stalls: :integer,
       set: :keep,
       json: :string
     ]
@@ -1104,7 +1314,8 @@ defmodule FeudHall.CustomerSim.CLI do
           set: Keyword.get_values(opts, :set),
           json: opts[:json],
           hours: parse_hours(Keyword.get(opts, :hours)),
-          cuisine: opts[:cuisine]
+          cuisine: opts[:cuisine],
+          extra_stalls: Keyword.get(opts, :extra_stalls, 0)
         }
 
         cond do
@@ -1128,6 +1339,12 @@ defmodule FeudHall.CustomerSim.CLI do
 
           args.cuisine != nil and args.cuisine not in cuisines() ->
             {:error, "--cuisine must be one of #{Enum.join(cuisines(), ", ")}\n" <> @usage}
+
+          args.extra_stalls not in 0..Hall.max_extra_stalls() ->
+            {:error, "--extra-stalls must be 0..#{Hall.max_extra_stalls()}\n" <> @usage}
+
+          args.extra_stalls > 0 and args.run != "a" ->
+            {:error, "--extra-stalls applies to run a only\n" <> @usage}
 
           true ->
             {:ok, %{args | run: @runs[args.run], via: @vias[args.via]}}
@@ -1245,12 +1462,16 @@ defmodule FeudHall.CustomerSim.CLI do
       tuning: result.tuning,
       reference_hours: Tuple.to_list(result.hours),
       reference_cuisine_option: Map.get(args, :cuisine),
+      extra_stalls: Map.get(args, :extra_stalls, 0),
       git_commit: git_commit(),
       reference:
         result.reference &&
           Map.take(result.reference, [:stall_id, :restaurant_id, :cuisine, :recipe, :price, :restock]),
+      owners: Enum.map(result.owners, &Map.take(&1, [:stall_id, :restaurant_id, :cuisine, :recipe, :price])),
       stalls: stats.stalls,
       summary: Stats.summary(stats),
+      checked_hours: Stats.checked_hours(stats),
+      rush_hours: Stats.rush_hours(stats),
       verdict: Stats.verdict(args.run, stats),
       warnings: Stats.warnings(stats),
       problems: Enum.map(result.problems, &inspect/1)
@@ -1277,6 +1498,13 @@ defmodule FeudHall.CustomerSim.CLI do
         "Reference stall #{r.stall_id} (#{r.restaurant_id}), cuisine #{r.cuisine} " <>
           "(#{if report.reference_cuisine_option, do: "--cuisine", else: "median starter price among unused cuisines"}), " <>
           "main #{r.recipe} at #{r.price}"
+      )
+    end
+
+    for extra <- Enum.drop(report.owners, 1) do
+      IO.puts(
+        "Extra owner stall #{extra.stall_id} (#{extra.restaurant_id}), cuisine #{extra.cuisine}, " <>
+          "main #{extra.recipe} at #{extra.price}"
       )
     end
 
@@ -1314,6 +1542,11 @@ defmodule FeudHall.CustomerSim.CLI do
           "served #{d.served} served share #{f(d.served_share)} left #{reasons(d.left_on_arrival)} | #{reasons(d.left_after_admission)}"
       )
 
+      IO.puts(
+        "  business equivalents #{millis(d.equivalents_millis)}; scale used for this day's arrivals " <>
+          "#{millis(d.arrival_scale_millis)} (the day before's equivalents or the floor, whichever is larger)"
+      )
+
       if d.profit == %{}, do: IO.puts("  profit: -")
 
       for {id, p} <- Enum.sort(d.profit) do
@@ -1336,6 +1569,31 @@ defmodule FeudHall.CustomerSim.CLI do
             "#{inspect(d.reference_short_products)}"
         )
       end
+    end
+
+    IO.puts(
+      "\nChecked hours per stall (measured days): orders waiting w, counter busy b, share of the checked hours open,"
+    )
+
+    IO.puts("and for an owner stall the open instants short of an ingredient")
+
+    for c <- report.checked_hours do
+      IO.puts(
+        "  #{c.stall} #{c.restaurant}: w12 #{f(c.waiting_12)} w19 #{f(c.waiting_19)} b12 #{f(c.busy_12)} b19 #{f(c.busy_19)} " <>
+          "w10 #{f(c.waiting_10)} w14-17 #{f(c.waiting_14_17)} open #{f(c.open_share)}" <>
+          if(c.short == nil, do: "", else: " short #{c.short}")
+      )
+    end
+
+    IO.puts(
+      "\nRush hours (measured days): arrivals in the hour per day, stalls open (time average), arrivals per open stall"
+    )
+
+    for r <- report.rush_hours do
+      IO.puts(
+        "  #{pad(r.hour)}:00 arrivals #{f(r.arrivals_per_day)} open stalls #{f(r.open_stalls)} " <>
+          "arrivals per open stall #{f(r.arrivals_per_open_stall)}"
+      )
     end
 
     IO.puts("\nVerdict (measured days):")
@@ -1363,6 +1621,8 @@ defmodule FeudHall.CustomerSim.CLI do
   defp reasons(map) when map_size(map) == 0, do: "-"
   defp reasons(map), do: map |> Enum.sort() |> Enum.map_join(",", fn {k, v} -> "#{k}:#{v}" end)
   defp f(v), do: :erlang.float_to_binary(v / 1, decimals: 2)
+  defp millis(nil), do: "-"
+  defp millis(v), do: :erlang.float_to_binary(v / 1000, decimals: 3)
   defp pad(n), do: String.pad_leading(Integer.to_string(n), 2, "0")
 end
 
