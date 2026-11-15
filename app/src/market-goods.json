@@ -1,0 +1,1769 @@
+{
+  "adzuki_paste": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#5a2a2a",
+    "variant": "plain"
+  },
+  "adzuki_paste_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#5a2a2a",
+    "variant": "shelf",
+    "beside": "adzuki_paste"
+  },
+  "aji_amarillo": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#e8a020",
+    "variant": "plain"
+  },
+  "aji_amarillo_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#e8a020",
+    "variant": "shelf",
+    "beside": "aji_amarillo"
+  },
+  "akkawi_vegetarian": {
+    "vendor": "dairy",
+    "shape": "block",
+    "colour": "#efe6cc",
+    "variant": "plain"
+  },
+  "akkawi_vegetarian_frozen": {
+    "vendor": "dairy",
+    "shape": "block",
+    "colour": "#efe6cc",
+    "variant": "frozen",
+    "beside": "akkawi_vegetarian"
+  },
+  "apple": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#c8372d",
+    "variant": "plain"
+  },
+  "apple_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#c8372d",
+    "variant": "frozen",
+    "beside": "apple"
+  },
+  "arequipe": {
+    "vendor": "dairy",
+    "shape": "jar",
+    "colour": "#b5702a",
+    "variant": "plain"
+  },
+  "arequipe_value": {
+    "vendor": "dairy",
+    "shape": "jar",
+    "colour": "#b5702a",
+    "variant": "value",
+    "beside": "arequipe"
+  },
+  "banana": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#f2d649",
+    "variant": "plain"
+  },
+  "banana_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#f2d649",
+    "variant": "frozen",
+    "beside": "banana"
+  },
+  "barberries": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#b3262e",
+    "variant": "plain"
+  },
+  "barley": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d8c79a",
+    "variant": "plain"
+  },
+  "barley_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d8c79a",
+    "variant": "value",
+    "beside": "barley"
+  },
+  "basil": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#3f8f3a",
+    "variant": "plain"
+  },
+  "basil_frozen": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#3f8f3a",
+    "variant": "frozen",
+    "beside": "basil"
+  },
+  "beef": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#a8322d",
+    "variant": "plain"
+  },
+  "beef_frozen": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#a8322d",
+    "variant": "frozen",
+    "beside": "beef"
+  },
+  "berbere": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#b3401f",
+    "variant": "plain"
+  },
+  "berbere_value": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#b3401f",
+    "variant": "value",
+    "beside": "berbere"
+  },
+  "bingfen_base": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#e0d8c0",
+    "variant": "plain"
+  },
+  "bison": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#8a2f2a",
+    "variant": "plain"
+  },
+  "bison_frozen": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#8a2f2a",
+    "variant": "frozen",
+    "beside": "bison"
+  },
+  "black_beans": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#2a2a30",
+    "variant": "plain"
+  },
+  "black_beans_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#2a2a30",
+    "variant": "shelf",
+    "beside": "black_beans"
+  },
+  "black_tea_leaf": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#3a2a1a",
+    "variant": "plain"
+  },
+  "black_tea_leaf_value": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#3a2a1a",
+    "variant": "value",
+    "beside": "black_tea_leaf"
+  },
+  "blue_cornmeal": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#4a4f7a",
+    "variant": "plain"
+  },
+  "blue_cornmeal_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#4a4f7a",
+    "variant": "value",
+    "beside": "blue_cornmeal"
+  },
+  "bread": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#c99a5a",
+    "variant": "plain"
+  },
+  "bread_frozen": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#c99a5a",
+    "variant": "frozen",
+    "beside": "bread"
+  },
+  "breadcrumbs": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8b070",
+    "variant": "plain"
+  },
+  "breadcrumbs_value": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8b070",
+    "variant": "value",
+    "beside": "breadcrumbs"
+  },
+  "brown_sugar": {
+    "vendor": "pantry",
+    "shape": "sack",
+    "colour": "#8a5a2a",
+    "variant": "plain"
+  },
+  "bulgur": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#c9a060",
+    "variant": "plain"
+  },
+  "bulgur_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#c9a060",
+    "variant": "value",
+    "beside": "bulgur"
+  },
+  "butter": {
+    "vendor": "dairy",
+    "shape": "block",
+    "colour": "#f2e28a",
+    "variant": "plain"
+  },
+  "butter_frozen": {
+    "vendor": "dairy",
+    "shape": "block",
+    "colour": "#f2e28a",
+    "variant": "frozen",
+    "beside": "butter"
+  },
+  "butter_masala_sauce": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#e07a2a",
+    "variant": "plain"
+  },
+  "butter_masala_sauce_shelf_stable": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#e07a2a",
+    "variant": "shelf",
+    "beside": "butter_masala_sauce"
+  },
+  "cabbage": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#8fbf6a",
+    "variant": "plain"
+  },
+  "cabbage_frozen": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#8fbf6a",
+    "variant": "frozen",
+    "beside": "cabbage"
+  },
+  "cardamom": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#9aa66a",
+    "variant": "plain"
+  },
+  "char_siu_sauce": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#8f2a1e",
+    "variant": "plain"
+  },
+  "char_siu_sauce_value": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#8f2a1e",
+    "variant": "value",
+    "beside": "char_siu_sauce"
+  },
+  "chicken_breast_frozen": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#e6b07a",
+    "variant": "frozen",
+    "beside": "chicken_thigh"
+  },
+  "chicken_broth": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#e6c070",
+    "variant": "plain"
+  },
+  "chicken_broth_chilled": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#e6c070",
+    "variant": "shelf",
+    "beside": "chicken_broth"
+  },
+  "chicken_thigh": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#e6b07a",
+    "variant": "plain"
+  },
+  "chickpea_flour": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d8b85a",
+    "variant": "plain"
+  },
+  "chickpea_flour_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d8b85a",
+    "variant": "value",
+    "beside": "chickpea_flour"
+  },
+  "chickpeas_canned": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d8bf80",
+    "variant": "shelf",
+    "beside": "chickpeas_dried"
+  },
+  "chickpeas_dried": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d8bf80",
+    "variant": "plain"
+  },
+  "chole_masala": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#a8431f",
+    "variant": "plain"
+  },
+  "chole_masala_basic": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#a8431f",
+    "variant": "value",
+    "beside": "chole_masala"
+  },
+  "cilantro": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#4c9a45",
+    "variant": "plain"
+  },
+  "cinnamon": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#a65b2a",
+    "variant": "plain"
+  },
+  "cinnamon_value": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#a65b2a",
+    "variant": "value",
+    "beside": "cinnamon"
+  },
+  "clams": {
+    "vendor": "fishmonger",
+    "shape": "shellfish",
+    "colour": "#c9b99a",
+    "variant": "plain"
+  },
+  "clams_frozen": {
+    "vendor": "fishmonger",
+    "shape": "shellfish",
+    "colour": "#c9b99a",
+    "variant": "frozen",
+    "beside": "clams"
+  },
+  "cocoa": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#5a3220",
+    "variant": "plain"
+  },
+  "cocoa_value": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#5a3220",
+    "variant": "value",
+    "beside": "cocoa"
+  },
+  "coconut_grated": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f4f0e4",
+    "variant": "plain"
+  },
+  "coconut_grated_frozen": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f4f0e4",
+    "variant": "frozen",
+    "beside": "coconut_grated"
+  },
+  "coconut_milk": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#f2efe6",
+    "variant": "plain"
+  },
+  "coconut_milk_chilled": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#f2efe6",
+    "variant": "shelf",
+    "beside": "coconut_milk"
+  },
+  "coffee_beans": {
+    "vendor": "spices",
+    "shape": "sack",
+    "colour": "#4a2f1f",
+    "variant": "plain"
+  },
+  "coffee_beans_value": {
+    "vendor": "spices",
+    "shape": "sack",
+    "colour": "#4a2f1f",
+    "variant": "value",
+    "beside": "coffee_beans"
+  },
+  "condensed_milk": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#f0e4c0",
+    "variant": "plain"
+  },
+  "condensed_milk_value": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#f0e4c0",
+    "variant": "value",
+    "beside": "condensed_milk"
+  },
+  "corn_tortillas": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#e8c860",
+    "variant": "plain"
+  },
+  "corn_tortillas_frozen": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#e8c860",
+    "variant": "frozen",
+    "beside": "corn_tortillas"
+  },
+  "cornmeal": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#e8c84a",
+    "variant": "plain"
+  },
+  "cornmeal_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#e8c84a",
+    "variant": "value",
+    "beside": "cornmeal"
+  },
+  "couscous": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#e6d09a",
+    "variant": "plain"
+  },
+  "couscous_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#e6d09a",
+    "variant": "value",
+    "beside": "couscous"
+  },
+  "cowpeas": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#d8c8a0",
+    "variant": "plain"
+  },
+  "cowpeas_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#d8c8a0",
+    "variant": "shelf",
+    "beside": "cowpeas"
+  },
+  "culinary_cedar": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#4a6b3a",
+    "variant": "plain"
+  },
+  "dry_fry_seasoning_vegetarian": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#b8431f",
+    "variant": "plain"
+  },
+  "eggplant": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#5b3a6e",
+    "variant": "plain"
+  },
+  "eggplant_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#5b3a6e",
+    "variant": "frozen",
+    "beside": "eggplant"
+  },
+  "eggs": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#e8d9b8",
+    "variant": "plain"
+  },
+  "eggs_chilled": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#e8d9b8",
+    "variant": "shelf",
+    "beside": "eggs"
+  },
+  "evaporated_milk": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#f2ead0",
+    "variant": "plain"
+  },
+  "evaporated_milk_value": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#f2ead0",
+    "variant": "value",
+    "beside": "evaporated_milk"
+  },
+  "falafel_seasoning": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#8f9a3a",
+    "variant": "plain"
+  },
+  "filtered_water": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#bfe0ee",
+    "variant": "plain"
+  },
+  "ginger": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#d9b26a",
+    "variant": "plain"
+  },
+  "ginger_frozen": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#d9b26a",
+    "variant": "frozen",
+    "beside": "ginger"
+  },
+  "glass_noodles": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#e8e4d8",
+    "variant": "plain"
+  },
+  "glass_noodles_value": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#e8e4d8",
+    "variant": "value",
+    "beside": "glass_noodles"
+  },
+  "glutinous_rice": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f0ece0",
+    "variant": "plain"
+  },
+  "glutinous_rice_flour": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f4f0e8",
+    "variant": "plain"
+  },
+  "glutinous_rice_flour_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f4f0e8",
+    "variant": "value",
+    "beside": "glutinous_rice_flour"
+  },
+  "glutinous_rice_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f0ece0",
+    "variant": "value",
+    "beside": "glutinous_rice"
+  },
+  "gochujang_vegan": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#b0301f",
+    "variant": "plain"
+  },
+  "gochujang_vegan_value": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#b0301f",
+    "variant": "value",
+    "beside": "gochujang_vegan"
+  },
+  "golden_syrup": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#d8921e",
+    "variant": "plain"
+  },
+  "golden_syrup_value": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#d8921e",
+    "variant": "value",
+    "beside": "golden_syrup"
+  },
+  "green_beans": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#5a9a3a",
+    "variant": "plain"
+  },
+  "green_beans_frozen": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#5a9a3a",
+    "variant": "frozen",
+    "beside": "green_beans"
+  },
+  "green_lipped_mussels": {
+    "vendor": "fishmonger",
+    "shape": "shellfish",
+    "colour": "#3f7a5a",
+    "variant": "plain"
+  },
+  "green_lipped_mussels_frozen": {
+    "vendor": "fishmonger",
+    "shape": "shellfish",
+    "colour": "#3f7a5a",
+    "variant": "frozen",
+    "beside": "green_lipped_mussels"
+  },
+  "green_tea_leaf": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#6a8a3a",
+    "variant": "plain"
+  },
+  "green_tea_leaf_value": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#6a8a3a",
+    "variant": "value",
+    "beside": "green_tea_leaf"
+  },
+  "greenthread": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#7aa04a",
+    "variant": "plain"
+  },
+  "guascas": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#5f9f4f",
+    "variant": "plain"
+  },
+  "halibut": {
+    "vendor": "fishmonger",
+    "shape": "fish",
+    "colour": "#d8d8cc",
+    "variant": "plain"
+  },
+  "halibut_frozen": {
+    "vendor": "fishmonger",
+    "shape": "fish",
+    "colour": "#d8d8cc",
+    "variant": "frozen",
+    "beside": "halibut"
+  },
+  "hibiscus": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#a8203a",
+    "variant": "plain"
+  },
+  "honey": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#d99a1e",
+    "variant": "plain"
+  },
+  "honey_value": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#d99a1e",
+    "variant": "value",
+    "beside": "honey"
+  },
+  "huckleberries": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#3b3f7a",
+    "variant": "plain"
+  },
+  "huckleberries_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#3b3f7a",
+    "variant": "frozen",
+    "beside": "huckleberries"
+  },
+  "injera": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#b8a08a",
+    "variant": "plain"
+  },
+  "injera_frozen": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#b8a08a",
+    "variant": "frozen",
+    "beside": "injera"
+  },
+  "jamun_mix": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8b46a",
+    "variant": "plain"
+  },
+  "jamun_mix_basic": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8b46a",
+    "variant": "value",
+    "beside": "jamun_mix"
+  },
+  "jasmine_tea_leaf": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#b8c88a",
+    "variant": "plain"
+  },
+  "kashk": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#e8e0c8",
+    "variant": "plain"
+  },
+  "kashk_chilled": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#e8e0c8",
+    "variant": "shelf",
+    "beside": "kashk"
+  },
+  "kataifi_pastry": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8a850",
+    "variant": "plain"
+  },
+  "kataifi_pastry_frozen": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8a850",
+    "variant": "frozen",
+    "beside": "kataifi_pastry"
+  },
+  "kawakawa_leaf": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#3f8f4f",
+    "variant": "plain"
+  },
+  "kelp": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#2f4a3a",
+    "variant": "plain"
+  },
+  "kelp_value": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#2f4a3a",
+    "variant": "value",
+    "beside": "kelp"
+  },
+  "kidney_beans": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#8a2a2a",
+    "variant": "plain"
+  },
+  "kidney_beans_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#8a2a2a",
+    "variant": "shelf",
+    "beside": "kidney_beans"
+  },
+  "kung_pao_sauce": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#8f3a1a",
+    "variant": "plain"
+  },
+  "lamb": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#c0605a",
+    "variant": "plain"
+  },
+  "lamb_frozen": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#c0605a",
+    "variant": "frozen",
+    "beside": "lamb"
+  },
+  "lemon_juice": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#e8dc4a",
+    "variant": "plain"
+  },
+  "lemon_juice_bottled": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#e8dc4a",
+    "variant": "shelf",
+    "beside": "lemon_juice"
+  },
+  "lentils_brown": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#8a6a3a",
+    "variant": "plain"
+  },
+  "lentils_green": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#8a6a3a",
+    "variant": "value",
+    "beside": "lentils_brown"
+  },
+  "lime_juice": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#a8d048",
+    "variant": "plain"
+  },
+  "lime_juice_chilled": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#a8d048",
+    "variant": "shelf",
+    "beside": "lime_juice"
+  },
+  "mango": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#f0a030",
+    "variant": "plain"
+  },
+  "mango_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#f0a030",
+    "variant": "frozen",
+    "beside": "mango"
+  },
+  "maple_syrup": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#a8601e",
+    "variant": "plain"
+  },
+  "maple_syrup_value": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#a8601e",
+    "variant": "value",
+    "beside": "maple_syrup"
+  },
+  "mapo_sauce_vegetarian": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#b02a1a",
+    "variant": "plain"
+  },
+  "mapo_sauce_vegetarian_shelf_stable": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#b02a1a",
+    "variant": "shelf",
+    "beside": "mapo_sauce_vegetarian"
+  },
+  "milk_powder": {
+    "vendor": "dairy",
+    "shape": "bottle",
+    "colour": "#f4f0e6",
+    "variant": "shelf",
+    "beside": "milk_whole"
+  },
+  "milk_whole": {
+    "vendor": "dairy",
+    "shape": "bottle",
+    "colour": "#f4f0e6",
+    "variant": "plain"
+  },
+  "minced_meat": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#b5453d",
+    "variant": "plain"
+  },
+  "minced_meat_frozen": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#b5453d",
+    "variant": "frozen",
+    "beside": "minced_meat"
+  },
+  "mint": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#3fae6a",
+    "variant": "plain"
+  },
+  "mixed_berries": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#8a2f5f",
+    "variant": "plain"
+  },
+  "mixed_berries_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#8a2f5f",
+    "variant": "frozen",
+    "beside": "mixed_berries"
+  },
+  "mushrooms": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#b9a58a",
+    "variant": "plain"
+  },
+  "mushrooms_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#b9a58a",
+    "variant": "frozen",
+    "beside": "mushrooms"
+  },
+  "naan": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#d9b878",
+    "variant": "plain"
+  },
+  "naan_packaged": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#d9b878",
+    "variant": "shelf",
+    "beside": "naan"
+  },
+  "nettles": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#2f6f3a",
+    "variant": "plain"
+  },
+  "okra": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#7aa04a",
+    "variant": "plain"
+  },
+  "okra_frozen": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#7aa04a",
+    "variant": "frozen",
+    "beside": "okra"
+  },
+  "olive_oil": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#a8b02a",
+    "variant": "plain"
+  },
+  "olive_oil_value": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#a8b02a",
+    "variant": "value",
+    "beside": "olive_oil"
+  },
+  "onion": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#d6b36a",
+    "variant": "plain"
+  },
+  "onion_diced_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#d6b36a",
+    "variant": "frozen",
+    "beside": "onion"
+  },
+  "pad_thai_pantry": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#c8651e",
+    "variant": "plain"
+  },
+  "pad_thai_pantry_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#c8651e",
+    "variant": "shelf",
+    "beside": "pad_thai_pantry"
+  },
+  "palm_oil": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#c85a1a",
+    "variant": "plain"
+  },
+  "palm_oil_value": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#c85a1a",
+    "variant": "value",
+    "beside": "palm_oil"
+  },
+  "palm_sugar": {
+    "vendor": "pantry",
+    "shape": "sack",
+    "colour": "#a86a2a",
+    "variant": "plain"
+  },
+  "palm_sugar_value": {
+    "vendor": "pantry",
+    "shape": "sack",
+    "colour": "#a86a2a",
+    "variant": "value",
+    "beside": "palm_sugar"
+  },
+  "pandan": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#3d8f4a",
+    "variant": "plain"
+  },
+  "paneer": {
+    "vendor": "dairy",
+    "shape": "block",
+    "colour": "#f0ead8",
+    "variant": "plain"
+  },
+  "paneer_frozen": {
+    "vendor": "dairy",
+    "shape": "block",
+    "colour": "#f0ead8",
+    "variant": "frozen",
+    "beside": "paneer"
+  },
+  "panela": {
+    "vendor": "pantry",
+    "shape": "sack",
+    "colour": "#b5762a",
+    "variant": "plain"
+  },
+  "panela_value": {
+    "vendor": "pantry",
+    "shape": "sack",
+    "colour": "#b5762a",
+    "variant": "value",
+    "beside": "panela"
+  },
+  "pasta": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#e8c86a",
+    "variant": "plain"
+  },
+  "pasta_value": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#e8c86a",
+    "variant": "value",
+    "beside": "pasta"
+  },
+  "pastry_shell": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8b070",
+    "variant": "plain"
+  },
+  "pastry_shell_frozen": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8b070",
+    "variant": "frozen",
+    "beside": "pastry_shell"
+  },
+  "peanuts_roasted": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#c08a50",
+    "variant": "plain"
+  },
+  "pho_pantry": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#8a5a2a",
+    "variant": "plain"
+  },
+  "pho_pantry_value": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#8a5a2a",
+    "variant": "value",
+    "beside": "pho_pantry"
+  },
+  "pineapple": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#e0b83a",
+    "variant": "plain"
+  },
+  "pineapple_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#e0b83a",
+    "variant": "frozen",
+    "beside": "pineapple"
+  },
+  "pita": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#e4c68f",
+    "variant": "plain"
+  },
+  "pita_packaged": {
+    "vendor": "pantry",
+    "shape": "loaf",
+    "colour": "#e4c68f",
+    "variant": "shelf",
+    "beside": "pita"
+  },
+  "plantain": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#c9c25a",
+    "variant": "plain"
+  },
+  "plantain_frozen": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#c9c25a",
+    "variant": "frozen",
+    "beside": "plantain"
+  },
+  "pork": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#e0908a",
+    "variant": "plain"
+  },
+  "pork_frozen": {
+    "vendor": "butcher",
+    "shape": "cut",
+    "colour": "#e0908a",
+    "variant": "frozen",
+    "beside": "pork"
+  },
+  "potato": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#b68b57",
+    "variant": "plain"
+  },
+  "potato_frozen": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#b68b57",
+    "variant": "frozen",
+    "beside": "potato"
+  },
+  "prairie_mint": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#5fb07a",
+    "variant": "plain"
+  },
+  "prairie_turnip": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#c9b48a",
+    "variant": "plain"
+  },
+  "preserved_lemon": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#e0c84a",
+    "variant": "plain"
+  },
+  "puha": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#4e8a4a",
+    "variant": "plain"
+  },
+  "puha_frozen": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#4e8a4a",
+    "variant": "frozen",
+    "beside": "puha"
+  },
+  "purple_corn": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#5b2d62",
+    "variant": "plain"
+  },
+  "red_lentils": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d9602a",
+    "variant": "plain"
+  },
+  "red_lentils_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d9602a",
+    "variant": "value",
+    "beside": "red_lentils"
+  },
+  "red_sumac_berries": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#9b1f2e",
+    "variant": "plain"
+  },
+  "reshteh_noodles": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8c490",
+    "variant": "plain"
+  },
+  "reshteh_noodles_value": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#d8c490",
+    "variant": "value",
+    "beside": "reshteh_noodles"
+  },
+  "rice_broken": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f0ead6",
+    "variant": "value",
+    "beside": "rice_long"
+  },
+  "rice_lentil_batter": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#e8e0c8",
+    "variant": "plain"
+  },
+  "rice_lentil_batter_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#e8e0c8",
+    "variant": "shelf",
+    "beside": "rice_lentil_batter"
+  },
+  "rice_long": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f0ead6",
+    "variant": "plain"
+  },
+  "rice_noodles": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#f0ece0",
+    "variant": "plain"
+  },
+  "rice_noodles_value": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#f0ece0",
+    "variant": "value",
+    "beside": "rice_noodles"
+  },
+  "rice_roll_base": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#f0ece0",
+    "variant": "plain"
+  },
+  "rice_roll_base_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#f0ece0",
+    "variant": "shelf",
+    "beside": "rice_roll_base"
+  },
+  "saffron": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#e07b1a",
+    "variant": "plain"
+  },
+  "salmon": {
+    "vendor": "fishmonger",
+    "shape": "fish",
+    "colour": "#e8785a",
+    "variant": "plain"
+  },
+  "salmon_frozen": {
+    "vendor": "fishmonger",
+    "shape": "fish",
+    "colour": "#e8785a",
+    "variant": "frozen",
+    "beside": "salmon"
+  },
+  "sambar_pantry": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#c8871e",
+    "variant": "plain"
+  },
+  "sambar_pantry_value": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#c8871e",
+    "variant": "value",
+    "beside": "sambar_pantry"
+  },
+  "scallion": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#7bb55a",
+    "variant": "plain"
+  },
+  "scallion_frozen": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#7bb55a",
+    "variant": "frozen",
+    "beside": "scallion"
+  },
+  "semolina": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#e8d27a",
+    "variant": "plain"
+  },
+  "semolina_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#e8d27a",
+    "variant": "value",
+    "beside": "semolina"
+  },
+  "sencha_leaf": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#7a9a3a",
+    "variant": "plain"
+  },
+  "sencha_leaf_value": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#7a9a3a",
+    "variant": "value",
+    "beside": "sencha_leaf"
+  },
+  "sesame": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#e8dcb0",
+    "variant": "plain"
+  },
+  "sesame_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#e8dcb0",
+    "variant": "value",
+    "beside": "sesame"
+  },
+  "shawarma_marinade": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#c8902a",
+    "variant": "plain"
+  },
+  "spinach": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#2f7a3a",
+    "variant": "plain"
+  },
+  "spinach_frozen": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#2f7a3a",
+    "variant": "frozen",
+    "beside": "spinach"
+  },
+  "squash": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#e09a2b",
+    "variant": "plain"
+  },
+  "squash_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#e09a2b",
+    "variant": "frozen",
+    "beside": "squash"
+  },
+  "steamed_corn": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#e8c547",
+    "variant": "plain"
+  },
+  "steamed_corn_frozen": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#e8c547",
+    "variant": "frozen",
+    "beside": "steamed_corn"
+  },
+  "strawberries": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#d6334b",
+    "variant": "plain"
+  },
+  "strawberries_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#d6334b",
+    "variant": "frozen",
+    "beside": "strawberries"
+  },
+  "sugar": {
+    "vendor": "pantry",
+    "shape": "sack",
+    "colour": "#f4f0e8",
+    "variant": "plain"
+  },
+  "sugar_beet": {
+    "vendor": "pantry",
+    "shape": "sack",
+    "colour": "#f4f0e8",
+    "variant": "value",
+    "beside": "sugar"
+  },
+  "sweet_potato": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#b4643c",
+    "variant": "plain"
+  },
+  "sweet_potato_frozen": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#b4643c",
+    "variant": "frozen",
+    "beside": "sweet_potato"
+  },
+  "sweet_soy_sauce": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#2a1a14",
+    "variant": "plain"
+  },
+  "sweet_soy_sauce_value": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#2a1a14",
+    "variant": "value",
+    "beside": "sweet_soy_sauce"
+  },
+  "tahini": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#c8a870",
+    "variant": "plain"
+  },
+  "tahini_basic": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#c8a870",
+    "variant": "value",
+    "beside": "tahini"
+  },
+  "tapioca": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f2eee0",
+    "variant": "plain"
+  },
+  "tapioca_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f2eee0",
+    "variant": "value",
+    "beside": "tapioca"
+  },
+  "teriyaki_sauce": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#4a2514",
+    "variant": "plain"
+  },
+  "teriyaki_sauce_value": {
+    "vendor": "pantry",
+    "shape": "bottle",
+    "colour": "#4a2514",
+    "variant": "value",
+    "beside": "teriyaki_sauce"
+  },
+  "thai_green_curry_paste": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#5f9a3a",
+    "variant": "plain"
+  },
+  "thai_green_curry_paste_chilled": {
+    "vendor": "pantry",
+    "shape": "jar",
+    "colour": "#5f9a3a",
+    "variant": "shelf",
+    "beside": "thai_green_curry_paste"
+  },
+  "tikka_masala": {
+    "vendor": "spices",
+    "shape": "jar",
+    "colour": "#d0561f",
+    "variant": "plain"
+  },
+  "tofu_firm": {
+    "vendor": "greengrocer",
+    "shape": "block",
+    "colour": "#f0e8d0",
+    "variant": "plain"
+  },
+  "tofu_firm_frozen": {
+    "vendor": "greengrocer",
+    "shape": "block",
+    "colour": "#f0e8d0",
+    "variant": "frozen",
+    "beside": "tofu_firm"
+  },
+  "tomato": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#d9402f",
+    "variant": "plain"
+  },
+  "tomato_frozen": {
+    "vendor": "greengrocer",
+    "shape": "round",
+    "colour": "#d9402f",
+    "variant": "frozen",
+    "beside": "tomato"
+  },
+  "udon_noodles": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#f2ecdc",
+    "variant": "plain"
+  },
+  "udon_noodles_frozen": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#f2ecdc",
+    "variant": "frozen",
+    "beside": "udon_noodles"
+  },
+  "vegetable_broth": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#c8a050",
+    "variant": "plain"
+  },
+  "vegetable_broth_chilled": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#c8a050",
+    "variant": "shelf",
+    "beside": "vegetable_broth"
+  },
+  "vegetable_mix": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#6aa84f",
+    "variant": "plain"
+  },
+  "vegetable_mix_frozen": {
+    "vendor": "greengrocer",
+    "shape": "leafy",
+    "colour": "#6aa84f",
+    "variant": "frozen",
+    "beside": "vegetable_mix"
+  },
+  "vegetarian_cheese": {
+    "vendor": "dairy",
+    "shape": "block",
+    "colour": "#f0d070",
+    "variant": "plain"
+  },
+  "vegetarian_cheese_frozen": {
+    "vendor": "dairy",
+    "shape": "block",
+    "colour": "#f0d070",
+    "variant": "frozen",
+    "beside": "vegetarian_cheese"
+  },
+  "wafers": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#e8d0a0",
+    "variant": "plain"
+  },
+  "wafers_value": {
+    "vendor": "pantry",
+    "shape": "carton",
+    "colour": "#e8d0a0",
+    "variant": "value",
+    "beside": "wafers"
+  },
+  "wheat_flour": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f2eadb",
+    "variant": "plain"
+  },
+  "wheat_flour_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#f2eadb",
+    "variant": "value",
+    "beside": "wheat_flour"
+  },
+  "white_corn_hulled": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#efe8d2",
+    "variant": "plain"
+  },
+  "white_corn_hulled_frozen": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#efe8d2",
+    "variant": "frozen",
+    "beside": "white_corn_hulled"
+  },
+  "white_fish": {
+    "vendor": "fishmonger",
+    "shape": "fish",
+    "colour": "#e6e2d4",
+    "variant": "plain"
+  },
+  "white_fish_frozen": {
+    "vendor": "fishmonger",
+    "shape": "fish",
+    "colour": "#e6e2d4",
+    "variant": "frozen",
+    "beside": "white_fish"
+  },
+  "wild_onions": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#d8d0a0",
+    "variant": "plain"
+  },
+  "yam_flour": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d8c8a8",
+    "variant": "plain"
+  },
+  "yam_flour_value": {
+    "vendor": "grains",
+    "shape": "sack",
+    "colour": "#d8c8a8",
+    "variant": "value",
+    "beside": "yam_flour"
+  },
+  "yogurt_plain": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#f6f3ea",
+    "variant": "plain"
+  },
+  "yogurt_shelf_stable": {
+    "vendor": "dairy",
+    "shape": "carton",
+    "colour": "#f6f3ea",
+    "variant": "shelf",
+    "beside": "yogurt_plain"
+  },
+  "zucchini": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#4f8a3c",
+    "variant": "plain"
+  },
+  "zucchini_frozen": {
+    "vendor": "greengrocer",
+    "shape": "root",
+    "colour": "#4f8a3c",
+    "variant": "frozen",
+    "beside": "zucchini"
+  }
+}

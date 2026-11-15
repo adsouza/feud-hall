@@ -420,6 +420,13 @@ const en = {
   mughlai_punjabi: "Mughlai / Punjabi",
   sichuan: "Sichuan",
   levantine: "Levantine",
+  vendor_greengrocer: "Greengrocer",
+  vendor_butcher: "Butcher",
+  vendor_fishmonger: "Fishmonger",
+  vendor_dairy: "Dairy and eggs",
+  vendor_grains: "Grains and nuts",
+  vendor_spices: "Spices and tea",
+  vendor_pantry: "Bakery and pantry",
 } as const;
 export type Key = keyof typeof en;
 
@@ -837,6 +844,13 @@ const ja: Record<Key, string> = {
   mughlai_punjabi: "ムグライ・パンジャーブ",
   sichuan: "四川",
   levantine: "レバント",
+  vendor_greengrocer: "青果店",
+  vendor_butcher: "精肉店",
+  vendor_fishmonger: "鮮魚店",
+  vendor_dairy: "乳製品・卵",
+  vendor_grains: "穀物・ナッツ",
+  vendor_spices: "スパイス・茶",
+  vendor_pantry: "パン・食料品",
 };
 
 const recipeNames: Record<string, [string, string]> = {
