@@ -480,8 +480,8 @@ version, its validation and codec; `recovery_test.exs` restarts a launch hall
 on PostgreSQL across the upgrade and checks it is recorded once.
 
 The web workflow runs frozen Bun install, Prettier, Oxlint, native `bun check`,
-and a Vite production build. It also runs the Chromium suite, split by test
-into six parallel shards of one worker each, for
+and a Vite production build. It also runs the Chromium suite in six parallel
+one-worker shards, for
 changes to the web client, server, or branding assets. The suite exercises
 dining, helper handover, invitation and cuisine selection, and NPC startup
 recovery through the built client, Phoenix, and disposable PostgreSQL databases.
@@ -509,7 +509,10 @@ rendering. They do not qualify hardware or 150-stall frame rates. The focused
 `visitor_play_test.exs` file checks replay, payroll, tasting privacy, and
 staging across different readiness boundaries. The curated mutation
 `M5 staged setup credit can be reused` checks the one-use invariant.
-CI retains failure traces and hall logs. A separate Svelte template type-check
+`test/browser/run-shard.ts I/N` deals the listed test locations round-robin
+so slow hall files spread across shards (Playwright's `--shard` keeps them
+together); append `--list` to see a shard's tests. CI retains failure traces
+and hall logs. A separate Svelte template type-check
 and broader cross-browser coverage remain release qualification work.
 
 `hall-interactions.spec.ts` checks in-hall ordering and committed meal receipts,

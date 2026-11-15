@@ -41,7 +41,8 @@ jobs:
       - run: bun run --bun build
 
   browser:
-    # One Chromium worker per shard; Playwright splits the tests evenly.
+    # One Chromium worker per shard. run-shard.ts deals test locations
+    # round-robin, so the slow hall files spread across every shard.
     name: browser (${{ matrix.shard }}/6)
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -94,7 +95,7 @@ jobs:
         env:
           MIX_ENV: test
       - run: bun run playwright install --with-deps chromium
-      - run: bun run test:browser --shard=${{ matrix.shard }}/6
+      - run: bun run ./test/browser/run-shard.ts ${{ matrix.shard }}/6
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
