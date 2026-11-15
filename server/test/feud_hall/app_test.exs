@@ -19,11 +19,12 @@ defmodule FeudHall.AppTest do
   # The two-VM probe: what one VM writes, a freshly started VM must decode with `[:safe]`. A mid-day
   # hall (kitchen, counter, market requests, NPCs, demand) and receipts of an accepted and a rejected
   # command carry atoms from every domain module, so decoding depends on those modules being loaded
-  # first. The child VM never starts the application; it only runs the preload.
+  # first. The child VM never starts the application; it only runs the preload. The hall's catalog
+  # is retuned and one receipt is a refused retune, so `Tuning` and `Retune` atoms are covered too.
   describe "a freshly started VM" do
     alias FeudHall.Application.CommandWorkflow
     alias FeudHall.Domain.Control
-    alias FeudHall.Domain.Content.SliceCatalog
+    alias FeudHall.Domain.Content.{SliceCatalog, Tuning}
     alias FeudHall.Infrastructure.{InMemoryEventStore, Snapshot}
 
     defp receipts do
@@ -33,7 +34,12 @@ defmodule FeudHall.AppTest do
       {:accepted, accepted, rt} = CommandWorkflow.execute(rt, init)
       bad = env.("bad", {:principal, "alice"}, {:open_stall, %{stall_id: "nope"}})
       {:rejected, rejected, _rt} = CommandWorkflow.execute(rt, bad)
-      [accepted, rejected]
+      retune = env.("retune", {:system, :admin}, {:retune_rules, %{tuning: %{}}})
+
+      {:rejected, %{outcome: {:rejected, :retune_unavailable}} = retune_refused, _rt} =
+        CommandWorkflow.execute(rt, retune)
+
+      [accepted, rejected, retune_refused]
     end
 
     defp child(path, preload?) do
@@ -67,6 +73,9 @@ defmodule FeudHall.AppTest do
       # Every leave reason, as the day's counters would hold them: atoms only `Choice` defines.
       left = Map.new(FeudHall.Domain.Choice.leave_reasons(), &{&1, 1})
       hall = update_in(hall, [:demand, :today, :left], &Map.merge(&1, left))
+      # A retuned catalog: keys only `Tuning` defines.
+      hall = update_in(hall.catalog, &Tuning.put(&1, %{Tuning.of(&1) | version: 2}))
+      assert hall.catalog.rules.tuning == %{version: 2}
       control = Control.replay([%{type: :availability_started, epoch_id: "e1"}], nil)
       snapshot = Snapshot.take(%{hall: hall, control: control}, 7)
       receipts = receipts()
@@ -87,6 +96,18 @@ defmodule FeudHall.AppTest do
 
     test "without the preload the same bytes are refused, which is what the preload prevents", ctx do
       assert {{:error, :incompatible_snapshot}, {:error, :unknown_atom}} = child(ctx.path, false)
+    end
+
+    # `Snapshot.load/1` itself loads the modules whose atoms a cold recovery may meet first: a
+    # retuned catalog's keys are defined only in `Tuning`.
+    test "without the preload, a snapshot still decodes a retuned catalog's keys", ctx do
+      npc = %{fallback_trays_per_day: 10, expected_use: "even_share", starter_shifts: %{"budget" => [5, 17]}}
+      hall = %{catalog: %{rules: %{tuning: %{version: 2}, npc: npc}}}
+      snapshot = Snapshot.take(%{hall: hall, control: %{}}, 3)
+      path = Path.join(Path.dirname(ctx.path), "retuned.bin")
+      File.write!(path, :erlang.term_to_binary({snapshot, :erlang.term_to_binary([])}))
+
+      assert {{:ok, %{position: 3, state: %{hall: ^hall}}}, {:ok, []}} = child(path, false)
     end
   end
 end

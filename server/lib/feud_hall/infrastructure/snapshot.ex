@@ -67,8 +67,10 @@ defmodule FeudHall.Infrastructure.Snapshot do
   # a well-formed body that `[:safe]` still refuses names atoms this build does not define:
   # it was written by another release, so it is incompatible. Atoms are never created here.
   defp decode(<<131, _::binary>> = body) do
-    # A cold recovery can load a snapshot before any counter-play event is decoded.
+    # A cold recovery can load a snapshot before any counter-play or retune event is decoded;
+    # a retuned catalog carries keys only `Tuning` defines.
     Code.ensure_loaded!(FeudHall.Domain.Hall.CounterPlay)
+    Code.ensure_loaded!(FeudHall.Domain.Content.Tuning)
     {:ok, :erlang.binary_to_term(body, [:safe])}
   rescue
     ArgumentError -> {:error, :incompatible_snapshot}
