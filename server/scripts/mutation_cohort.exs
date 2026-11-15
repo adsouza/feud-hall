@@ -3,6 +3,11 @@
 # Usage (from server/):  elixir scripts/mutation_cohort.exs <empty-work-dir>
 #                        elixir scripts/mutation_cohort.exs --check
 #                        elixir scripts/mutation_cohort.exs <empty-work-dir> --match <name-fragment>
+#                        elixir scripts/mutation_cohort.exs <empty-work-dir> --shard <I>/<N>
+#
+# `--shard I/N` runs the I-th of N contiguous slices of the cohort in list
+# order (mutants of one area share focused files, so each slice's baseline
+# stays small). The N slices together are exactly the whole cohort.
 #
 # `--check` only counts how often each patch's source string occurs in the
 # checkout (it must be exactly once) and runs nothing else.
@@ -244,6 +249,32 @@ defmodule MutationCohort do
     selected = Enum.filter(mutants(), fn {name, _, _, _, _} -> String.contains?(name, fragment) end)
     if selected == [], do: abort("no mutants match #{inspect(fragment)}")
     run_cohort(work, selected)
+  end
+
+  def run([work, "--shard", spec]) do
+    {index, count} = parse_shard(spec)
+    selected = shard(mutants(), index, count)
+    if selected == [], do: abort("shard #{spec} of #{length(mutants())} mutants is empty")
+    run_cohort(work, selected)
+  end
+
+  # Slice I of N covers [floor((I-1)*M/N), floor(I*M/N)), so sizes differ by at most one.
+  # Start and length, not a range: Enum.slice reads a range ending at -1 as "to the end".
+  def shard(list, index, count) do
+    total = length(list)
+    first = div((index - 1) * total, count)
+    Enum.slice(list, first, div(index * total, count) - first)
+  end
+
+  defp parse_shard(spec) do
+    with [i, n] <- String.split(spec, "/"),
+         {index, ""} <- Integer.parse(i),
+         {count, ""} <- Integer.parse(n),
+         true <- count >= 1 and index in 1..count//1 do
+      {index, count}
+    else
+      _ -> abort("--shard expects I/N with 1 <= I <= N, got #{inspect(spec)}")
+    end
   end
 
   defp run_cohort(work, cohort) do
