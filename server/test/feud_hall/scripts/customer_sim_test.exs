@@ -102,6 +102,50 @@ defmodule FeudHall.CustomerSimTest do
              row(Stats.verdict(:a, one_closed), "A ref open during checked hours")
   end
 
+  test "profit charges arrears, carries the distressed flag and lists warnings" do
+    midnight = fn stats, day, cash, arrears, revenue ->
+      Stats.add(stats, sample(day, 0, %{}, %{ledger: %{"r" => %{cash: cash, revenue: revenue, arrears: arrears}}}))
+    end
+
+    stats =
+      %{measured_days: 1}
+      |> Stats.new()
+      |> midnight.(1, 1_000, 0, 5_000)
+      |> Stats.add(sample(1, 14, %{}, %{distressed: ["r"]}))
+      |> midnight.(2, 700, 250, 5_000)
+
+    assert %{profit: -550, cash_change: -300, arrears_change: 250, distressed: true} = Stats.profit(stats, 1)["r"]
+    # No events recorded: the 250 newly in arrears is explained, the 300 that left cash is not.
+    assert [{:profit_unexplained, %{day: 1, restaurant: "r", remainder: -300}}] = Stats.inconsistencies(stats)
+
+    # 300 left cash: 50 of purchases and 250 of rent and wages paid; another 250 went into arrears.
+    stats = Stats.put_accounts(stats, %{{1, "r"} => %{purchases: 50, rent_and_wages_paid: 250}})
+
+    assert %{revenue: 0, purchases: 50, rent_and_wages_charged: 500, other: 0, remainder: 0, unreadable: 0} =
+             Stats.profit(stats, 1)["r"]
+
+    assert Stats.inconsistencies(stats) == []
+    [day1] = Enum.filter(Stats.summary(stats).days, &(&1.day == 1))
+    assert %{profit: -550, distressed: true} = day1.profit["r"]
+    assert Stats.warnings(stats) == [%{restaurant: "r", distressed_days: [1], arrears_at_end: 250}]
+
+    # An unreadable event turns a mismatch into a printed remainder instead of a failure.
+    unreadable = Stats.put_accounts(stats, %{{1, :any} => %{unreadable: 1}})
+    assert %{unreadable: 1, remainder: -300} = Stats.profit(unreadable, 1)["r"]
+    assert Stats.inconsistencies(unreadable) == []
+  end
+
+  @tag timeout: 180_000
+  test "two run A executions with a measured day give byte-identical JSON" do
+    args = %{run: :a, tuning: :current, via: :init, days: 1, seed: @seed, set: []}
+    first = run!(%{run: :a, days: 1})
+    second = run!(%{run: :a, days: 1})
+    assert first.problems == []
+    json = CLI.json(first, args)
+    assert json == CLI.json(second, args)
+    assert length(Jason.decode!(json)["summary"]["hours"]) == 24
+  end
+
   @tag timeout: 180_000
   test "a run is deterministic and acts only through commands" do
     first = run!(%{})

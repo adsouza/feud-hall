@@ -37,6 +37,123 @@ defmodule FeudHall.CustomerSim.Sink do
     do: table |> :ets.tab2list() |> Enum.sort() |> Enum.map(fn {_, name, fields} -> {name, fields} end)
 end
 
+defmodule FeudHall.CustomerSim.Store do
+  @moduledoc """
+  The in-memory event store, unchanged, plus a read-only tally of the money
+  each committed batch records, per restaurant and hall day, in a public ETS
+  table owned by the driver.
+
+  A batch belongs to the hall day of its last millisecond before the batch's
+  `hall_ms` (a batch at exactly midnight belongs to the day that ends there),
+  so the tally matches the state the driver samples at each midnight; batches
+  at hall time 0 come before day 0's opening sample and are tallied as day -1.
+
+  Amounts are copied from the events, never recomputed:
+
+    * `:purchases` - `market_cleared` fills' `cost`, `stock_purchased.cost`;
+    * `:rent_and_wages_paid` - `operating_costs_charged.amount` (rent and the
+      staff wages are charged together; the event does not split them);
+    * `:fees` - `stall_leased.setup_fee`, `worker_hired.amount`;
+    * `:capex` - `recipe_unlocked.cost`, `location_equipped.cost`,
+      `location_refitted.cost`, less `equipment_salvaged.amount`;
+    * `:grant` - `starter_grant_issued.amount`;
+    * `:salvage` - `stock_salvaged.amount`;
+    * `:debt_settled` - `distress_cleared.released_debt`;
+    * `:unreadable` - a count of `helper_shift_ended` events, whose wages are
+      debited from a restaurant the event does not name (key `:any`).
+  """
+  @behaviour FeudHall.Application.EventStore
+
+  alias FeudHall.Domain.Clock
+  alias FeudHall.Infrastructure.InMemoryEventStore, as: Inner
+
+  defstruct [:inner, :table]
+
+  def new(table), do: %__MODULE__{inner: Inner.new(), table: table}
+
+  def fail_next(s, mode), do: %{s | inner: Inner.fail_next(s.inner, mode)}
+
+  @impl true
+  def head(s), do: Inner.head(s.inner)
+  @impl true
+  def stream_versions(s, stream), do: Inner.stream_versions(s.inner, stream)
+  @impl true
+  def read_from(s, position), do: Inner.read_from(s.inner, position)
+  @impl true
+  def receipt(s, id), do: Inner.receipt(s.inner, id)
+  @impl true
+  def held_epoch(s), do: Inner.held_epoch(s.inner)
+  @impl true
+  def snapshots(s), do: Inner.snapshots(s.inner)
+  @impl true
+  def projection(s, kind), do: Inner.projection(s.inner, kind)
+  @impl true
+  def outbox(s), do: Inner.outbox(s.inner)
+  @impl true
+  def acquire_authority(s, scope, owner), do: rewrap(Inner.acquire_authority(s.inner, scope, owner), s)
+  @impl true
+  def acquire_authority(s, scope, owner, epoch), do: rewrap(Inner.acquire_authority(s.inner, scope, owner, epoch), s)
+  @impl true
+  def save_snapshot(s, position, body), do: rewrap(Inner.save_snapshot(s.inner, position, body), s)
+  @impl true
+  def mark_snapshot_verified(s, id), do: rewrap(Inner.mark_snapshot_verified(s.inner, id), s)
+  def prune_snapshots(s, keep \\ 2), do: rewrap(Inner.prune_snapshots(s.inner, keep), s)
+
+  @impl true
+  def append(s, request) do
+    result = Inner.append(s.inner, request)
+    if match?({:ok, _, _}, result) or match?({:error, :unknown_outcome, _}, result), do: tally(s.table, request)
+    rewrap(result, s)
+  end
+
+  defp rewrap(result, s) do
+    result
+    |> Tuple.to_list()
+    |> Enum.map(fn
+      %Inner{} = inner -> %{s | inner: inner}
+      other -> other
+    end)
+    |> List.to_tuple()
+  end
+
+  defp tally(table, request) do
+    hall_ms = request.context.hall_ms
+    day = if hall_ms in [nil, 0], do: -1, else: Clock.day_of(hall_ms - 1)
+
+    for event <- request.events, {rid, component, amount} <- money(event) do
+      key = {day, rid, component}
+      :ets.update_counter(table, key, amount, {key, 0})
+    end
+
+    :ok
+  end
+
+  defp money(%{type: :market_cleared, fills: fills}), do: for(f <- fills, do: {f.restaurant_id, :purchases, f.cost})
+  defp money(%{type: :stock_purchased} = e), do: [{e.restaurant_id, :purchases, e.cost}]
+  defp money(%{type: :operating_costs_charged} = e), do: [{e.restaurant_id, :rent_and_wages_paid, e.amount}]
+  defp money(%{type: :stall_leased} = e), do: [{e.restaurant_id, :fees, e.setup_fee}]
+  defp money(%{type: :worker_hired} = e), do: [{e.restaurant_id, :fees, e.amount}]
+
+  defp money(%{type: type} = e) when type in [:recipe_unlocked, :location_equipped, :location_refitted],
+    do: [{e.restaurant_id, :capex, e.cost}]
+
+  defp money(%{type: :equipment_salvaged} = e), do: [{e.restaurant_id, :capex, -e.amount}]
+  defp money(%{type: :starter_grant_issued} = e), do: [{e.restaurant_id, :grant, e.amount}]
+  defp money(%{type: :stock_salvaged} = e), do: [{e.restaurant_id, :salvage, e.amount}]
+  defp money(%{type: :distress_cleared} = e), do: [{e.restaurant_id, :debt_settled, Map.get(e, :released_debt, 0)}]
+  defp money(%{type: :helper_shift_ended}), do: [{:any, :unreadable, 1}]
+  defp money(_event), do: []
+
+  @doc "The tally as `%{{day, restaurant_id | :any} => %{component => amount}}`."
+  def accounts(table) do
+    table
+    |> :ets.tab2list()
+    |> Enum.reduce(%{}, fn {{day, rid, component}, amount}, acc ->
+      Map.update(acc, {day, rid}, %{component => amount}, &Map.put(&1, component, amount))
+    end)
+  end
+end
+
 defmodule FeudHall.CustomerSim.Stats do
   @moduledoc """
   Pure accumulation of per-tick observations and the acceptance verdict.
@@ -50,12 +167,19 @@ defmodule FeudHall.CustomerSim.Stats do
   an hour boundary counts in the earlier hour.
 
   Day 0 is the warm-up day; days `1..measured_days` are measured. Samples
-  after the last measured day are dropped except cash, which closes the last
-  day's profit.
+  after the last measured day are dropped except the midnight ledger (cash,
+  revenue, arrears), which closes the last day's profit.
+
+  Profit for a restaurant and day is the change in cash minus the change in
+  the arrears of its leases between the two midnights: rent and wages that
+  could not be paid are carried as arrears rather than taken from cash, and
+  still cost the business. Its components come from the committed events
+  (`FeudHall.CustomerSim.Store`) and the ledger's `revenue` account.
   """
 
   alias FeudHall.Application.Management
   alias FeudHall.Domain.{Clock, Inventory}
+  alias FeudHall.Domain.Hall.Progression
 
   @doc "A fresh accumulator. `meta`: `measured_days`, `reference` (stall ID or nil)."
   def new(meta) do
@@ -66,11 +190,16 @@ defmodule FeudHall.CustomerSim.Stats do
       hours: %{},
       stall_hours: %{},
       hall_hours: %{},
-      cash: %{},
+      ledger: %{},
+      distressed: %{},
+      accounts: %{},
       market_zero: %{},
       reference_short: %{}
     }
   end
+
+  @doc "Sets the event tally (`FeudHall.CustomerSim.Store.accounts/1`)."
+  def put_accounts(stats, accounts), do: %{stats | accounts: accounts}
 
   def put_meta(stats, meta), do: Map.merge(stats, Map.take(meta, [:reference, :stalls]))
 
@@ -92,7 +221,8 @@ defmodule FeudHall.CustomerSim.Stats do
       served: 0,
       left_on_arrival: %{},
       left_after_admission: %{},
-      cash: nil,
+      ledger: nil,
+      distressed: [],
       market_zero: [],
       reference_short: nil
     }
@@ -147,7 +277,8 @@ defmodule FeudHall.CustomerSim.Stats do
       served: stats.served_mains - counters.served,
       left_on_arrival: arrived_left,
       left_after_admission: diff(left_total, arrived_left),
-      cash: if(rem(at, Clock.day()) == 0, do: Map.new(state.restaurants, fn {id, r} -> {id, r.ledger.cash} end)),
+      ledger: if(rem(at, Clock.day()) == 0, do: midnight_ledger(state)),
+      distressed: for({id, _} <- Enum.sort(state.restaurants), Progression.distressed?(state, id), do: id),
       market_zero: for({p, _} <- Enum.sort(state.catalog.products), Map.get(state.market.stock, p, 0) == 0, do: p),
       reference_short: reference_short(state, reference, stalls)
     }
@@ -161,6 +292,18 @@ defmodule FeudHall.CustomerSim.Stats do
        today_left: today_left,
        next_day_at: state.demand.next_day_at
      }}
+  end
+
+  # Per restaurant: cash, the ledger's revenue account, and its leases' arrears.
+  defp midnight_ledger(state) do
+    arrears =
+      Enum.reduce(state.management.leases, %{}, fn {sid, lease}, acc ->
+        Map.update(acc, state.stalls[sid].restaurant, lease.arrears, &(&1 + lease.arrears))
+      end)
+
+    Map.new(state.restaurants, fn {id, r} ->
+      {id, %{cash: r.ledger.cash, revenue: r.ledger.revenue, arrears: Map.get(arrears, id, 0)}}
+    end)
   end
 
   # The reference stall's menu products whose unreserved, unexpired stock is
@@ -197,7 +340,8 @@ defmodule FeudHall.CustomerSim.Stats do
     stats
     |> add_counts(obs)
     |> add_samples(obs)
-    |> add_cash(obs)
+    |> add_ledger(obs)
+    |> add_distressed(obs)
   end
 
   defp add_counts(stats, %{delta_day: day} = obs) do
@@ -276,8 +420,20 @@ defmodule FeudHall.CustomerSim.Stats do
     end
   end
 
-  defp add_cash(stats, %{cash: nil}), do: stats
-  defp add_cash(stats, %{cash: cash, day: day}), do: put_in(stats.cash[day], cash)
+  defp add_ledger(stats, %{ledger: nil}), do: stats
+  defp add_ledger(stats, %{ledger: ledger, day: day}), do: put_in(stats.ledger[day], ledger)
+
+  defp add_distressed(stats, %{distressed: []}), do: stats
+
+  defp add_distressed(stats, %{distressed: ids, day: day}) do
+    if day <= stats.measured_days,
+      do:
+        update_in(
+          stats.distressed,
+          &Map.update(&1, day, MapSet.new(ids), fn set -> MapSet.union(set, MapSet.new(ids)) end)
+        ),
+      else: stats
+  end
 
   defp bit(true), do: 1
   defp bit(false), do: 0
@@ -477,13 +633,76 @@ defmodule FeudHall.CustomerSim.Stats do
         left_after_admission: %{}
       })
 
-  # Cash at the end of the day minus cash at its start, for restaurants present at both midnights.
-  defp profit(stats, day) do
-    with %{} = start <- stats.cash[day], %{} = finish <- stats.cash[day + 1] do
-      for {id, cash} <- finish, Map.has_key?(start, id), into: %{}, do: {id, cash - start[id]}
+  @doc """
+  Per restaurant present at both of the day's midnights: `profit` (cash
+  change minus arrears change), `cash_change`, `arrears_change`,
+  `distressed` (at any sampled instant of the day), and the components:
+  `revenue` (ledger revenue change), `purchases`, `rent_and_wages_charged`
+  (paid plus newly in arrears; rent and wages are not recorded separately),
+  `other` (grant and salvage less fees, capital spending and settled debt),
+  `unreadable` (events whose amounts cannot be assigned) and `remainder`
+  (profit minus revenue, purchases, rent and wages, and other).
+  """
+  def profit(stats, day) do
+    with %{} = start <- stats.ledger[day], %{} = finish <- stats.ledger[day + 1] do
+      distressed = Map.get(stats.distressed, day, MapSet.new())
+      unreadable_any = get_in(stats.accounts, [{day, :any}, :unreadable]) || 0
+
+      for {id, f} <- finish, s = start[id], s != nil, into: %{} do
+        a = Map.get(stats.accounts, {day, id}, %{})
+        at = &Map.get(a, &1, 0)
+        cash_change = f.cash - s.cash
+        arrears_change = f.arrears - s.arrears
+        profit = cash_change - arrears_change
+        revenue = f.revenue - s.revenue
+        charged = at.(:rent_and_wages_paid) + arrears_change
+        other = at.(:grant) + at.(:salvage) - at.(:fees) - at.(:capex) - at.(:debt_settled)
+
+        {id,
+         %{
+           profit: profit,
+           cash_change: cash_change,
+           arrears_change: arrears_change,
+           distressed: MapSet.member?(distressed, id),
+           revenue: revenue,
+           purchases: at.(:purchases),
+           rent_and_wages_charged: charged,
+           other: other,
+           unreadable: at.(:unreadable) + unreadable_any,
+           remainder: profit - (revenue - at.(:purchases) - charged + other)
+         }}
+      end
     else
       _ -> %{}
     end
+  end
+
+  @doc "Day profits whose components do not add up although every component was read."
+  def inconsistencies(stats) do
+    for day <- 0..stats.measured_days,
+        {id, p} <- Enum.sort(profit(stats, day)),
+        p.unreadable == 0 and p.remainder != 0,
+        do: {:profit_unexplained, %{day: day, restaurant: id, remainder: p.remainder}}
+  end
+
+  @doc """
+  Restaurants that make a profit comparison unreliable: distressed at any
+  sampled instant of a measured day, or with lease arrears at the last midnight.
+  """
+  def warnings(stats) do
+    distressed =
+      for day <- measured(stats), id <- Enum.sort(Map.get(stats.distressed, day, MapSet.new())), do: {id, day}
+
+    by_restaurant = Enum.group_by(distressed, &elem(&1, 0), &elem(&1, 1))
+    final = Map.get(stats.ledger, stats.measured_days + 1, %{})
+    in_arrears = for {id, %{arrears: a}} <- final, a > 0, into: %{}, do: {id, a}
+
+    (Map.keys(by_restaurant) ++ Map.keys(in_arrears))
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.map(
+      &%{restaurant: &1, distressed_days: Map.get(by_restaurant, &1, []), arrears_at_end: Map.get(in_arrears, &1, 0)}
+    )
   end
 end
 
@@ -499,12 +718,12 @@ defmodule FeudHall.CustomerSim.Hall do
   warm-up day, so it is in force from the first measured midnight.
   """
 
-  alias FeudHall.CustomerSim.{Clock, Sink, Stats}
+  alias FeudHall.CustomerSim.{Clock, Sink, Stats, Store}
   alias FeudHall.Domain.Identity
   alias FeudHall.Domain.Clock, as: HallClock
   alias FeudHall.Domain.Content.{LaunchCatalog, Tuning}
   alias FeudHall.Domain.Hall.{Management, Rooms}
-  alias FeudHall.Infrastructure.{HallAuthority, InMemoryEventStore}
+  alias FeudHall.Infrastructure.HallAuthority
 
   @scope "customer-sim"
   @device "reference-owner"
@@ -527,13 +746,14 @@ defmodule FeudHall.CustomerSim.Hall do
   def run(opts) do
     clock = :atomics.new(1, [])
     table = :ets.new(:customer_sim_diagnostics, [:public, :bag])
+    money = :ets.new(:customer_sim_money, [:public, :set])
 
     {:ok, authority} =
       HallAuthority.start_link(
         scope: @scope,
         owner: "customer-sim",
-        store_mod: InMemoryEventStore,
-        store: InMemoryEventStore.new(),
+        store_mod: Store,
+        store: Store.new(money),
         clock: {Clock, clock},
         tick_ms: :manual,
         diagnostics: {Sink, table},
@@ -543,7 +763,7 @@ defmodule FeudHall.CustomerSim.Hall do
       )
 
     try do
-      {:ok, drive(authority, clock, table, opts)}
+      {:ok, drive(authority, clock, table, money, opts)}
     catch
       {:refused, id, result} ->
         GenServer.stop(authority)
@@ -555,7 +775,7 @@ defmodule FeudHall.CustomerSim.Hall do
     end
   end
 
-  defp drive(authority, clock, table, opts) do
+  defp drive(authority, clock, table, money, opts) do
     catalog = if opts.via == :init, do: Tuning.put(LaunchCatalog.catalog(), opts.tuning), else: LaunchCatalog.catalog()
     init = %{hall_id: @scope, catalog: catalog, managed: true, seed: opts.seed}
     admin(authority, "sim:init", {:initialize_hall, init})
@@ -599,12 +819,16 @@ defmodule FeudHall.CustomerSim.Hall do
         end
       end)
 
-    stats = Stats.put_meta(stats, %{reference: reference && reference.stall_id, stalls: stall_meta(hall(authority))})
+    stats =
+      stats
+      |> Stats.put_meta(%{reference: reference && reference.stall_id, stalls: stall_meta(hall(authority))})
+      |> Stats.put_accounts(Store.accounts(money))
+
     served = Enum.sum(for day <- 0..opts.days, do: Stats.day_served(stats, day))
 
     problems =
       for({name, fields} <- Sink.records(table), do: {name, Map.take(fields, [:command_id, :reason])}) ++
-        if served == 0, do: [{:never_served, %{}}], else: []
+        if(served == 0, do: [{:never_served, %{}}], else: []) ++ Stats.inconsistencies(stats)
 
     open = Enum.find(Stats.verdict(opts.run, stats), &(&1.check == Stats.open_check_name()))
 
@@ -961,6 +1185,7 @@ defmodule FeudHall.CustomerSim.CLI do
       stalls: stats.stalls,
       summary: Stats.summary(stats),
       verdict: Stats.verdict(args.run, stats),
+      warnings: Stats.warnings(stats),
       problems: Enum.map(result.problems, &inspect/1)
     }
   end
@@ -1011,7 +1236,6 @@ defmodule FeudHall.CustomerSim.CLI do
     IO.puts("\nPer game day (day 0 is the warm-up):")
 
     for d <- report.summary.days do
-      profit = Enum.map_join(Enum.sort(d.profit), " ", fn {id, cash} -> "#{id} #{cash}" end)
       zero = Enum.map_join(Enum.sort(d.market_zero_ticks), " ", fn {p, n} -> "#{p}:#{n}" end)
 
       IO.puts(
@@ -1019,7 +1243,20 @@ defmodule FeudHall.CustomerSim.CLI do
           "served #{d.served} served share #{f(d.served_share)} left #{reasons(d.left_on_arrival)} | #{reasons(d.left_after_admission)}"
       )
 
-      IO.puts("  profit (cash end - start): #{if profit == "", do: "-", else: profit}")
+      if d.profit == %{}, do: IO.puts("  profit: -")
+
+      for {id, p} <- Enum.sort(d.profit) do
+        IO.puts(
+          "  profit #{id} #{p.profit} (cash change #{p.cash_change}, arrears change #{p.arrears_change})" <>
+            "#{if p.distressed, do: " DISTRESSED", else: ""}: revenue #{p.revenue} purchases #{p.purchases} " <>
+            "rent+wages #{p.rent_and_wages_charged} other #{p.other}" <>
+            if(p.unreadable > 0,
+              do: " unexplained remainder #{p.remainder} (#{p.unreadable} unreadable events)",
+              else: ""
+            )
+        )
+      end
+
       IO.puts("  market products at zero (ticks): #{if zero == "", do: "none", else: zero}")
 
       if report.reference do
@@ -1038,6 +1275,16 @@ defmodule FeudHall.CustomerSim.CLI do
       IO.puts(
         "  #{if row.pass, do: "PASS", else: "FAIL"}  #{String.pad_trailing(row.check, 52)} #{row.value}  [#{bounds}]" <>
           if(row[:hours], do: "  open share by hour " <> reasons(row.hours), else: "")
+      )
+    end
+
+    IO.puts("\nWarnings:")
+    if report.warnings == [], do: IO.puts("  none")
+
+    for w <- report.warnings do
+      IO.puts(
+        "  #{w.restaurant}: distressed on measured days #{inspect(w.distressed_days)}, arrears at end #{w.arrears_at_end}" <>
+          " (its profit understates or omits costs; compare with care)"
       )
     end
   end
