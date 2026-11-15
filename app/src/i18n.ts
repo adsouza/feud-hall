@@ -247,6 +247,8 @@ const en = {
   offline: "Connection lost. Showing the last confirmed state.",
   updateRequired:
     "This desktop app and hall use different versions. Update the app or check with the hall operator.",
+  reloadRequired: "This page is out of date. Reload to continue.",
+  reload: "Reload",
   loading: "Opening the hall…",
   startGuest: "Create visitor profile",
   name: "Display name",
@@ -659,6 +661,9 @@ const ja: Record<Key, string> = {
   offline: "接続が切れました。最後に確認した状態を表示しています。",
   updateRequired:
     "デスクトップアプリとホールのバージョンが異なります。アプリを更新するか、ホールの運営者に確認してください。",
+  reloadRequired:
+    "このページは古くなっています。続けるには再読み込みしてください。",
+  reload: "再読み込み",
   loading: "ホールを読み込み中…",
   startGuest: "来店者プロフィールを作成",
   name: "表示名",

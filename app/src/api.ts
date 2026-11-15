@@ -277,7 +277,14 @@ export type Pending = {
   payload: Record<string, unknown>;
 };
 export type Result = { accepted?: boolean; reason?: string; error?: string };
-const headers = { "content-type": "application/json", "x-feud-command": "1" };
+// The server answers 426 when a client's protocol differs from its own; the
+// desktop transport sends the same header from Rust.
+const protocol = { "x-feud-protocol": "1" };
+const commandHeaders = {
+  ...protocol,
+  "content-type": "application/json",
+  "x-feud-command": "1",
+};
 
 export class ApiError extends Error {
   constructor(
@@ -351,7 +358,9 @@ async function request(path: string, body?: Pending | Record<string, never>) {
     return fetch(path, {
       method,
       cache: "no-store",
-      ...(body === undefined ? {} : { headers, body: JSON.stringify(body) }),
+      ...(body === undefined
+        ? { headers: protocol }
+        : { headers: commandHeaders, body: JSON.stringify(body) }),
     });
 
   try {

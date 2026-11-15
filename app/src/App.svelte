@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
+  import { isTauri } from "@tauri-apps/api/core";
   import { fade } from "svelte/transition";
   import appIcon from "../../assets/branding/feud-hall-icon.svg?no-inline";
   import CuisinePicker from "./CuisinePicker.svelte";
@@ -170,6 +171,19 @@
   let view = $state<View | null>(null);
   let connected = $state(true);
   let updateRequired = $state(false);
+  // A web tab reloads to fetch the client the hall now serves; the desktop
+  // app bundles its client and needs a new package instead.
+  const nativeClient = isTauri();
+  const connectionProblem = $derived<Key>(
+    !updateRequired
+      ? "offline"
+      : nativeClient
+        ? "updateRequired"
+        : "reloadRequired",
+  );
+  function reloadClient() {
+    location.reload();
+  }
   let nextPoll = 0;
   let pollFailures = 0;
   let status = $state<"update" | "uncertain" | { refusal: string } | null>(
@@ -767,7 +781,7 @@
       : t("tabletTap");
     const visit = profile?.visit;
     const problem = !connected
-      ? t(updateRequired ? "updateRequired" : "offline")
+      ? t(connectionProblem)
       : status === "uncertain"
         ? t("uncertain")
         : status && typeof status === "object"
@@ -2317,7 +2331,11 @@
 
 <main>
   {#if !connected && !inWorldNotices}<p class="banner" role="status">
-      {t(updateRequired ? "updateRequired" : "offline")}
+      {t(connectionProblem)}
+      {#if updateRequired && !nativeClient}<button
+          type="button"
+          onclick={reloadClient}>{t("reload")}</button
+        >{/if}
     </p>{/if}
   <span class="sr-only" role="status">
     {inWorldNotices && tabletView?.noticeError

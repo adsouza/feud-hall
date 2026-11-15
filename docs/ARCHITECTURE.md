@@ -554,8 +554,10 @@ server origin at build time, restricts methods and paths, rejects redirects,
 and holds the signed device cookie in the OS credential store. It sends the
 same credential, origin and command guard to Phoenix. The bridge returns
 response status and JSON to JavaScript. Native protocol version 1 is explicit.
-Phoenix refuses unsupported versions before handling the request. Existing
-same-origin web clients can omit the version header.
+Phoenix refuses unsupported versions before handling the request. The web
+client sends the same version header, so a tab left open across an
+incompatible deploy is refused and asks the player to reload; requests without
+the header are still accepted.
 
 ### Reconnection and optimistic UI
 
