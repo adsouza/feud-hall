@@ -39,6 +39,17 @@ defmodule FeudHall.Domain.RetentionTest do
     w |> grant("gina", 2_500, "grant-" <> id) |> guest_visit("gina", id, "bean_tacos") |> serve_tray(tray_id(id))
   end
 
+  # An advance normally returns in milliseconds; one that does not finish within
+  # `ms` fails the test as an assertion rather than as a timeout.
+  defp advance_within!(w, to, ms) do
+    task = Task.async(fn -> advance_hall(w, to) end)
+
+    case Task.yield(task, ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, advanced} -> advanced
+      _ -> flunk("advancing to #{to} did not finish within #{ms} ms")
+    end
+  end
+
   describe "every finalization retires its visit, tray and orders" do
     setup do
       %{world: stocked_world(arrivals: false)}
@@ -70,7 +81,9 @@ defmodule FeudHall.Domain.RetentionTest do
     test "guest dessert offer expiring", %{world: w} do
       w = guest_served(w, "g1")
       deadline = elem(w, 0).visits[visit_id("g1")].dessert_offer_deadline
-      w = advance_hall(w, ceil_to_tick(deadline))
+      # The offer stays due while its visit is live, so a visit that is not
+      # retired would loop this advance forever: bound it to fail as an assertion.
+      w = advance_within!(w, ceil_to_tick(deadline), 10_000)
       assert_retired!(w, visit_id("g1"))
       assert %{reason: :dessert_offer_expired} = visit_outcome(w, visit_id("g1"))
     end

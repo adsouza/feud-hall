@@ -243,8 +243,7 @@ defmodule FeudHall.Domain.TrayLifecycleTest do
     state = state |> put_in([:trays, tray.id, :deadline], early) |> put_in([:orders, main, :deadline], early)
     {late, events} = missed = advance_hall({state, log}, tray.deadline)
     assert tray_status(missed, tray.id) == :cancelled
-    assert visit_outcome(missed, visit_id("visit-d1")).reason == :main_failed
-    assert visit_outcome(missed, visit_id("visit-d1")).score == 0
+    assert %{reason: :main_failed, score: 0} = visit_outcome(missed, visit_id("visit-d1"))
     assert late.restaurants["r1"].ledger.waste > 0
     Oracle.assert_settled!(late, events)
   end

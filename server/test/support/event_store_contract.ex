@@ -243,6 +243,8 @@ defmodule FeudHall.EventStoreContract do
         test "contract: a stale control version conflicts and writes nothing" do
           store = contract_fresh()
           store = contract_append!(store, "c", events: [], control_events: @contract_control)
+          # Control version 0 is stale only once the first batch has advanced it.
+          assert @contract_adapter.stream_versions(store, @contract_hall) == %{hall: 0, control: 1}
 
           stale = %{
             contract_request(store, "d", control_events: @contract_control)

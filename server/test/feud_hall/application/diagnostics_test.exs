@@ -75,6 +75,8 @@ defmodule FeudHall.Application.DiagnosticsTest do
     dump = inspect(MemorySink.records(sink), limit: :infinity)
     refute dump =~ "sentinel"
     refute dump =~ "alice-secret-id"
+    # Every outcome still names who acted, by kind alone.
+    assert Enum.all?(outcomes(sink), &Map.has_key?(&1, :actor_kind))
     assert Enum.any?(outcomes(sink), &(&1.actor_kind == :principal))
   end
 
@@ -128,7 +130,7 @@ defmodule FeudHall.Application.DiagnosticsTest do
 
     armed = %{rt | store: InMemoryEventStore.fail_next(rt.store, :before_commit)}
     assert {:error, :unavailable, _} = create(armed, "Casa")
-    [last] = Enum.drop(outcomes(sink), before)
+    assert [last] = Enum.drop(outcomes(sink), before)
     assert last.outcome == :unavailable
     assert last.command_id == "create"
     refute Enum.any?(Enum.drop(outcomes(sink), before), &(&1.outcome == :accepted))

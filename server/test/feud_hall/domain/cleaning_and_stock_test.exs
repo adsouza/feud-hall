@@ -169,6 +169,11 @@ defmodule FeudHall.Domain.CleaningAndStockTest do
       old = state.restaurants["r1"].batches |> Map.values() |> Enum.min_by(& &1.expires_at)
       assert old.expires_at == state.now + 2 * Clock.minute()
 
+      # The first mains start from the expiring batch at the queue instant;
+      # its stock, cost and remaining claims must still agree before expiry.
+      {started, started_events} = advance_hall(w, state.now)
+      Oracle.assert_settled!(started, started_events)
+
       {state, events} = advance_hall(w, old.expires_at)
       [main] = state.trays[tray_id("visit-d6")].components
       assert state.trays[tray_id("visit-d6")].status == :accepted
