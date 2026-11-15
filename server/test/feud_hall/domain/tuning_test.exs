@@ -66,6 +66,59 @@ defmodule FeudHall.Domain.TuningTest do
     assert Content.validate(changed) == :ok
   end
 
+  describe "chosen/0" do
+    test "is version 2 and valid for the launch catalog" do
+      chosen = Tuning.chosen()
+      assert chosen.version == 2
+      assert Tuning.validate(@catalog, chosen) == :ok
+      assert Content.validate(Tuning.put(@catalog, chosen)) == :ok
+    end
+
+    test "keeps cleaning empty and makes each hourly weight that hour's arrivals per equivalent" do
+      %{arrivals_per_equivalent: arrivals, hourly_weights: weights} = Tuning.chosen().demand
+      assert Enum.at(weights, 3) == 0
+      assert Enum.at(weights, 4) == 0
+      assert arrivals == 249
+      assert Enum.sum(weights) == arrivals
+      # The two rushes are the busiest hours; overnight is the quietest open time.
+      assert Enum.at(weights, 12) == Enum.max(weights)
+      assert Enum.at(weights, 19) == Enum.max(weights)
+      assert Enum.max(Enum.slice(weights, 0, 3)) < Enum.min(Enum.slice(weights, 7, 16))
+    end
+
+    test "every market cap is at least its target and no target is below today's" do
+      %{target_stock_per_equivalent: targets, replenish_cap: caps} = Tuning.chosen().market
+      today = base().market.target_stock_per_equivalent
+
+      for {product, target} <- targets do
+        assert caps[product] >= target, product
+        assert target >= today[product], product
+      end
+    end
+
+    test "the market carries 100 portions per equivalent of the largest recipe line using each product" do
+      targets = Tuning.chosen().market.target_stock_per_equivalent
+      # Worked by hand from the content files, not through the rule under test:
+      # roasted_salmon uses 145 g of salmon, the most of any recipe; today's target is 870.
+      assert targets["salmon"] == 14_500
+      # salmon_frozen replaces salmon one for one.
+      assert targets["salmon_frozen"] == 14_500
+      # jasmine_tea uses 220 ml of water, the most of any recipe; today's target is 5,000.
+      assert targets["filtered_water"] == 22_000
+      # paal_payasam uses 115 ml of whole milk; milk powder replaces it at 3/25: ceil(13.8) = 14 g.
+      assert targets["milk_whole"] == 11_500
+      assert targets["milk_powder"] == 1_400
+    end
+
+    test "changes only the fallback and two starter shifts for computer-run owners" do
+      assert Tuning.chosen().npc == %{
+               fallback_trays_per_day: 50,
+               expected_use: "even_share",
+               starter_shifts: %{"budget" => [5, 17], "mainstream" => [11, 23], "premium" => [17, 3]}
+             }
+    end
+  end
+
   describe "validate/2 refuses" do
     defp refused(tuning), do: assert({:error, [_ | _]} = Tuning.validate(@catalog, tuning))
 

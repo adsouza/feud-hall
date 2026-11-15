@@ -26,6 +26,8 @@ defmodule FeudHall.Domain.Content.Tuning do
   list through `FeudHall.Domain.Npc.Planner.expected_use_heuristics/0`.
   """
 
+  alias FeudHall.Domain.Content.LaunchCatalog
+
   @demand_keys [:arrivals_per_equivalent, :hourly_weights]
   @market_keys [:target_stock_per_equivalent, :replenish_cap]
   @npc_keys [:fallback_trays_per_day, :expected_use, :starter_shifts]
@@ -35,6 +37,79 @@ defmodule FeudHall.Domain.Content.Tuning do
   @doc "The expected-use heuristic names a tuning may select."
   @spec expected_use_heuristics() :: [String.t()]
   def expected_use_heuristics, do: @heuristics
+
+  # Chosen values (see `chosen/0`).
+  @chosen_arrivals_per_equivalent 249
+  # Index is the hall hour. The weights sum to the arrivals per equivalent, so
+  # each is that hour's arrivals per business equivalent.
+  @chosen_hourly_weights [3, 2, 1, 0, 0, 2, 3, 5, 7, 9, 15, 19, 24, 19, 14, 14, 14, 15, 19, 24, 16, 11, 8, 5]
+  @chosen_portions_per_equivalent 100
+  @chosen_cap_multiple 4
+
+  @doc """
+  The values chosen by measurement for the launch catalog (version 2): more
+  arrivals, a wholesale market that can supply them, and computer-run owners
+  that stock for their first day and have a second stall open in the hours
+  leading into each rush. The measurements are in
+  `docs/superpowers/reports/2026-11-15-more-real-customers.md`.
+
+  As a difference from the launch catalog's own values:
+
+    * `arrivals_per_equivalent` 249 (was 90), with hourly weights that sum to
+      it, so each weight is that hour's arrivals per business equivalent;
+    * every wholesale target is at least 100 portions per equivalent of the
+      largest recipe line that uses the product, a substitute counted at its
+      converted quantity (was 6 portions, for starter mains' first-choice
+      ingredients only), and never below the launch target; every cap stays
+      four times its target;
+    * the computer-run fallback is 50 trays a day (was 10), and the
+      "mainstream" and "premium" starter shifts are 11:00-23:00 and
+      17:00-03:00 (were 12:00-00:00 and 19:00-07:00).
+
+  The market values are a rule over the launch catalog's recipes, so they
+  follow the catalog when it gains recipes or products. A launch hall does not
+  start on these values: they reach a hall through the recorded `retune_rules`
+  change, which records the values it applied.
+  """
+  @spec chosen() :: map()
+  def chosen do
+    catalog = LaunchCatalog.catalog()
+    today = of(catalog)
+    targets = chosen_targets(catalog, today.market.target_stock_per_equivalent)
+
+    %{
+      version: 2,
+      demand: %{
+        arrivals_per_equivalent: @chosen_arrivals_per_equivalent,
+        hourly_weights: @chosen_hourly_weights
+      },
+      market: %{
+        target_stock_per_equivalent: targets,
+        replenish_cap: Map.new(targets, fn {id, target} -> {id, target * @chosen_cap_multiple} end)
+      },
+      npc: %{
+        fallback_trays_per_day: 50,
+        expected_use: "even_share",
+        starter_shifts: %{"budget" => [5, 17], "mainstream" => [11, 23], "premium" => [17, 3]}
+      }
+    }
+  end
+
+  defp chosen_targets(catalog, today) do
+    largest_line =
+      for {_id, recipe} <- catalog.recipes, line <- recipe.lines, {product, qty} <- line_uses(line), reduce: %{} do
+        acc -> Map.update(acc, product, qty, &max(&1, qty))
+      end
+
+    Map.new(today, fn {id, target} ->
+      {id, max(target, @chosen_portions_per_equivalent * Map.get(largest_line, id, 0))}
+    end)
+  end
+
+  defp line_uses(%{substitute: nil} = line), do: [{line.product, line.qty}]
+
+  defp line_uses(%{substitute: sub} = line),
+    do: [{line.product, line.qty}, {sub.product, div(line.qty * sub.num + sub.den - 1, sub.den)}]
 
   @doc "The computer-run owner values a catalog without `rules.npc` uses."
   @spec npc_defaults() :: map()
