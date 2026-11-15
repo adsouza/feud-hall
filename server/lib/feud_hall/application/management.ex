@@ -87,7 +87,7 @@ defmodule FeudHall.Application.Management do
     principal = Identity.principal_for_device(identity, device)
     account = identity.principals[principal]
     public = PublicView.build(state)
-    activity = public_activity(state)
+    activity = queue_activity(state)
     rooms = Rooms.summary(state)
 
     stalls =
@@ -144,6 +144,25 @@ defmodule FeudHall.Application.Management do
     end
   end
 
+  @doc """
+  Per stall, the counts the hall view reports in each stall's `activity`:
+  `waiting` (accepted work not yet handed over, a tray counting once),
+  `cooking` (orders in a prep or finish stage) and `handover` (something is
+  at the counter). Every stall of the hall appears. A pure read of committed
+  state, so measuring tools can sample it without building the whole view.
+  """
+  @spec queue_activity(map()) :: %{
+          String.t() => %{waiting: non_neg_integer(), cooking: non_neg_integer(), handover: boolean()}
+        }
+  def queue_activity(state) do
+    activity = public_activity(state)
+
+    Map.new(state.stalls, fn {sid, stall} ->
+      {items, cooking} = Map.get(activity, sid, {MapSet.new(), 0})
+      {sid, %{waiting: MapSet.size(items), cooking: cooking, handover: stall.counter != nil}}
+    end)
+  end
+
   defp public_activity(state) do
     Enum.reduce(state.orders, %{}, fn {_, order}, by_stall ->
       if order.status in Kitchen.stages() do
@@ -161,7 +180,7 @@ defmodule FeudHall.Application.Management do
   end
 
   defp stall_activity(state, sid, activity, open?) do
-    {items, cooking} = Map.get(activity, sid, {MapSet.new(), 0})
+    %{waiting: waiting, cooking: cooking, handover: handover} = Map.fetch!(activity, sid)
 
     workers =
       if open? do
@@ -172,9 +191,9 @@ defmodule FeudHall.Application.Management do
       end
 
     %{
-      waiting: MapSet.size(items),
+      waiting: waiting,
       cooking: cooking,
-      handover: state.stalls[sid].counter != nil,
+      handover: handover,
       staffed: state.access == :open and HallManagement.staffed?(state, sid, state.now),
       workers: workers,
       paused:
