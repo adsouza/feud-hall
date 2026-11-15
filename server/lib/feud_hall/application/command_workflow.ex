@@ -32,7 +32,7 @@ defmodule FeudHall.Application.CommandWorkflow do
   """
 
   alias FeudHall.Application.{Diagnostics, Replay}
-  alias FeudHall.Application.Projections.Balances
+  alias FeudHall.Application.Projections.{Balances, CounterService, MarketActivity}
   alias FeudHall.Domain.{Clock, Control, Hall, Identity}
 
   alias FeudHall.Domain.Hall.{CounterPlay, Management, Progression}
@@ -57,6 +57,7 @@ defmodule FeudHall.Application.CommandWorkflow do
             mode: :ready,
             pending: nil,
             counter_services: %{},
+            market_activity: MarketActivity.new(),
             diagnostics: nil
 
   @type t :: %__MODULE__{}
@@ -363,6 +364,27 @@ defmodule FeudHall.Application.CommandWorkflow do
     end
   end
 
+  # Evolves the batch into the candidate one event at a time, folding the
+  # ephemeral projections against the state immediately before each event.
+  # One pass: a batch can create state an event later in it consumes (restock
+  # automation requests, then the clearing settles, inside one advance).
+  defp fold_batch(runtime, events) do
+    position = runtime.position + 1
+
+    {candidate, markers, activity} =
+      events
+      |> Enum.with_index()
+      |> Enum.reduce(
+        {runtime.state, runtime.counter_services, runtime.market_activity},
+        fn {event, offset}, {state, markers, activity} ->
+          {Hall.evolve(state, event), CounterService.observe(markers, state, event, position, offset),
+           MarketActivity.observe(activity, state, event)}
+        end
+      )
+
+    {candidate, CounterService.retain(candidate, markers), activity}
+  end
+
   defp decide_and_append(runtime, envelope, fingerprint) do
     ctx = %{command_id: envelope.command_id, actor: envelope.actor}
     {kind, _} = envelope.command
@@ -384,13 +406,7 @@ defmodule FeudHall.Application.CommandWorkflow do
           {[], [], Map.merge(receipt, %{outcome: {:rejected, reason}, event_count: 0})}
       end
 
-    {candidate, counter_services} =
-      FeudHall.Application.Projections.CounterService.fold(
-        events,
-        runtime.state,
-        runtime.counter_services,
-        runtime.position + 1
-      )
+    {candidate, counter_services, market_activity} = fold_batch(runtime, events)
 
     candidate_control = Control.replay(control_events, runtime.control)
     request = append_request(runtime, envelope, events, control_events, receipt, candidate)
@@ -403,6 +419,7 @@ defmodule FeudHall.Application.CommandWorkflow do
             position: position,
             state: candidate,
             counter_services: counter_services,
+            market_activity: market_activity,
             control: candidate_control,
             versions: %{
               hall: runtime.versions.hall + length(events),

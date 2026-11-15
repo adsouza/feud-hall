@@ -3,6 +3,7 @@ defmodule FeudHall.Domain.MarketTest do
 
   alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Market
+  alias FeudHall.Domain.Content.LaunchCatalog
 
   # onion: base 250, 1000 storage per kunit, shelf life 6 days.
   # sugar: base 120, 1000 storage per kunit.
@@ -58,6 +59,77 @@ defmodule FeudHall.Domain.MarketTest do
       assert Market.price(catalog(), %{stock: %{"onion" => 1}}, "onion") == 750
       assert Market.price(catalog(), %{stock: %{}}, "onion") == 750
       assert Market.price(catalog(), %{stock: %{"onion" => 1_000_000}}, "onion") == 125
+    end
+  end
+
+  describe "crate_size/2 and level_permille/3" do
+    # Independent oracle for the 1-2-5 series: the smallest such value >= n.
+    defp series_ceiling(n), do: Enum.find(for(p <- 0..12, m <- [1, 2, 5], do: m * Integer.pow(10, p)), &(&1 >= n))
+
+    test "crate size is about ten servings of the largest line, rounded up to 1, 2 or 5 times a power of ten" do
+      catalog = LaunchCatalog.catalog()
+
+      salmon_lines =
+        for recipe <- Map.values(catalog.recipes), line <- recipe.lines, line.product == "salmon", do: line.qty
+
+      assert Enum.max(salmon_lines) == 145
+      assert Market.crate_size(catalog, "salmon") == 2_000
+      # salmon_frozen substitutes 1:1 for salmon, so it counts at 145 as well.
+      assert Market.crate_size(catalog, "salmon_frozen") == 2_000
+
+      series = for p <- 0..7, m <- [1, 2, 5], do: m * Integer.pow(10, p)
+
+      for {id, _} <- catalog.products do
+        size = Market.crate_size(catalog, id)
+        assert size > 0
+        assert size in series
+      end
+    end
+
+    test "a substitute counts at its converted quantity, rounded up, and an unused product gets the default" do
+      catalog = catalog()
+      # bean_tacos: 60 of black_beans_dried, substitute black_beans_canned at 5/2 -> 150 -> raw 1_500.
+      assert Market.crate_size(catalog, "black_beans_canned") == series_ceiling(div(60 * 5 + 2 - 1, 2) * 10)
+      assert Market.crate_size(catalog, "black_beans_canned") == 2_000
+      # onion: 20 per taco -> 200, already in the series.
+      assert Market.crate_size(catalog, "onion") == 200
+      # horchata: 30 of rice_long -> 300 -> 500.
+      assert Market.crate_size(catalog, "rice_long") == 500
+
+      unused = put_in(catalog, [:products, "saffron"], catalog.products["onion"])
+      # No recipe line uses it: 100 * 10.
+      assert Market.crate_size(unused, "saffron") == 1_000
+    end
+
+    test "the series rounding covers the exact examples" do
+      catalog = catalog()
+
+      with_line = fn qty ->
+        recipe = %{id: "x", lines: [%{product: "probe", qty: qty, substitute: nil, line_id: "probe"}]}
+        catalog |> put_in([:products, "probe"], catalog.products["onion"]) |> Map.put(:recipes, %{"x" => recipe})
+      end
+
+      assert Market.crate_size(with_line.(145), "probe") == 2_000
+      assert Market.crate_size(with_line.(55), "probe") == 1_000
+      assert Market.crate_size(with_line.(200), "probe") == 2_000
+      assert Market.crate_size(with_line.(9), "probe") == 100
+      assert Market.crate_size(with_line.(1), "probe") == 10
+      assert Market.crate_size(with_line.(51), "probe") == 1_000
+    end
+
+    test "level is stock against the target at the demand floor, capped at 1000" do
+      # onion: 400 per equivalent at a 3_000 millis floor -> 1_200 target, the same one price/3 uses.
+      level = &Market.level_permille(catalog(), %{stock: %{"onion" => &1}}, "onion")
+
+      assert Market.level_permille(catalog(), %{stock: %{}}, "onion") == 0
+      assert level.(0) == 0
+      assert level.(600) == 500
+      assert level.(1) == 0
+      assert level.(1_199) == 999
+      assert level.(1_200) == 1_000
+      assert level.(5_000) == 1_000
+      # The price equals the base exactly where the level reaches 1000.
+      assert Market.price(catalog(), %{stock: %{"onion" => 1_200}}, "onion") == 250
     end
   end
 

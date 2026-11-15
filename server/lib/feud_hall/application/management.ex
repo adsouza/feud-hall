@@ -1,7 +1,16 @@
 defmodule FeudHall.Application.Management do
-  @moduledoc "Authenticated management commands and scoped read models."
+  @moduledoc """
+  Authenticated management commands and scoped read models.
+
+  About wholesale purchases, the public hall view carries only `market_trips`:
+  for recent clearings, per restaurant, the product IDs that filled and a cart
+  size bucket. Quantities, costs, price limits, pending requests, unfilled
+  amounts and reasons appear only in the owning restaurant's private view
+  (`restaurant.purchases`).
+  """
   alias FeudHall.Application.DinerBrowse
-  alias FeudHall.Domain.{Clock, Dietary, Identity, Kitchen, Money, Offers, PublicView}
+  alias FeudHall.Application.Projections.MarketActivity
+  alias FeudHall.Domain.{Clock, Dietary, Identity, Kitchen, Market, Money, Offers, PublicView}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
 
   alias FeudHall.Domain.Hall.{
@@ -88,6 +97,7 @@ defmodule FeudHall.Application.Management do
     account = identity.principals[principal]
     public = PublicView.build(state)
     activity = queue_activity(state)
+    market_activity = Map.get(runtime, :market_activity) || MarketActivity.new()
     rooms = Rooms.summary(state)
 
     stalls =
@@ -120,6 +130,7 @@ defmodule FeudHall.Application.Management do
       visitor_play: CounterPlay.enabled?(state),
       failed_ventures: public_history(state, identity),
       lease_forecast: lease_forecast(state, public.market),
+      market_trips: Enum.map(MarketActivity.trips(market_activity), &%{&1 | size: Atom.to_string(&1.size)}),
       cuisines: state.catalog.recipes |> Map.values() |> Enum.map(& &1.cuisine) |> Enum.uniq() |> Enum.sort(),
       dietary_profiles:
         state.catalog.profiles
@@ -136,7 +147,10 @@ defmodule FeudHall.Application.Management do
         do: Map.merge(hall, %{rooms: %{count: rooms.count, open: rooms.open}, vacancies: vacancies(state, rooms)}),
         else: hall
 
-    view = %{hall: hall, profile: account && private_view(identity, state, account, public.market, rooms)}
+    view = %{
+      hall: hall,
+      profile: account && private_view(identity, state, account, public.market, rooms, market_activity)
+    }
 
     case DinerBrowse.checkout_menu(state, params["stall_id"], params["profile_id"], principal) do
       nil -> {:ok, view}
@@ -203,7 +217,7 @@ defmodule FeudHall.Application.Management do
     }
   end
 
-  defp private_view(identity, state, account, market, rooms) do
+  defp private_view(identity, state, account, market, rooms, market_activity) do
     principal = account.id
     restaurant_id = state.owners[{:principal, principal}]
     restaurant = state.restaurants[restaurant_id]
@@ -236,7 +250,7 @@ defmodule FeudHall.Application.Management do
       notices: Enum.take(Map.get(identity.notices, principal, []), 20),
       reviewer_queue: if(account.reviewer?, do: reviewer_queue(identity), else: []),
       work: work_view(state, principal, account.owner?),
-      restaurant: if(restaurant, do: restaurant_view(state, restaurant, market), else: nil),
+      restaurant: if(restaurant, do: restaurant_view(state, restaurant, market, market_activity), else: nil),
       draft:
         if(HallManagement.enabled?(state),
           do: encode_draft(state, state.management.drafts[principal], rooms),
@@ -383,9 +397,19 @@ defmodule FeudHall.Application.Management do
 
   defp room_fields(_slot), do: %{}
 
-  defp restaurant_view(state, restaurant, market) do
+  defp restaurant_view(state, restaurant, market, market_activity) do
     id = restaurant.id
-    market = Map.new(market, fn {product, offer} -> {product, %{price: cents(offer.price), stock: offer.stock}} end)
+
+    market =
+      Map.new(market, fn {product, offer} ->
+        {product,
+         %{
+           price: cents(offer.price),
+           stock: offer.stock,
+           crate: Market.crate_size(state.catalog, product),
+           level: Market.level_permille(state.catalog, state.market, product)
+         }}
+      end)
 
     inventory =
       restaurant.batches
@@ -439,8 +463,32 @@ defmodule FeudHall.Application.Management do
       available_cash: cents(HallManagement.available_cash(state, id)),
       stalls: stalls,
       market: market,
+      purchases: purchases_view(state, id, market_activity),
       inventory: inventory
     }
+  end
+
+  # The restaurant's pending requests (committed state) and its recent clearing
+  # outcomes (the ephemeral projection, empty after a restart).
+  defp purchases_view(state, restaurant_id, market_activity) do
+    pending =
+      for {request_id, %{restaurant_id: ^restaurant_id} = request} <- state.market.requests do
+        %{
+          request_id: request_id,
+          product: request.product,
+          qty: request.qty,
+          max_price_per_kunit: cents(request.max_price_per_kunit),
+          submitted_at: request.submitted_at,
+          automated: Map.get(request, :automated, false)
+        }
+      end
+
+    recent =
+      for outcome <- MarketActivity.outcomes(market_activity, restaurant_id) do
+        %{outcome | cost: cents(outcome.cost), reason: outcome.reason && Atom.to_string(outcome.reason)}
+      end
+
+    %{pending: Enum.sort_by(pending, &{&1.product, &1.request_id}), recent: recent}
   end
 
   defp unlock_offers(state, restaurant, stall) do

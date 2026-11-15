@@ -86,6 +86,37 @@ type VentureHistory = {
   unpaid?: Money;
   final_ledger?: Record<string, Money>;
 };
+export type PurchaseReason =
+  | "price_above_limit"
+  | "insufficient_cash"
+  | "insufficient_storage"
+  | "stock_exhausted";
+export type PendingPurchase = {
+  request_id: string;
+  product: string;
+  qty: number;
+  max_price_per_kunit: Money;
+  submitted_at: number;
+  automated: boolean;
+};
+export type PurchaseOutcome = {
+  request_id: string;
+  batch: number;
+  at: number;
+  product: string;
+  requested: number;
+  filled: number;
+  cost: Money;
+  short: number;
+  reason: PurchaseReason | null;
+};
+export type MarketTrip = {
+  batch: number;
+  at: number;
+  restaurant_id: string;
+  products: string[];
+  size: "small" | "medium" | "large";
+};
 export type Restaurant = {
   id: string;
   name: string;
@@ -107,7 +138,11 @@ export type Restaurant = {
   reports: { day: number; delta: Record<string, Money> }[];
   available_cash: Money;
   stalls: OwnerStall[];
-  market: Record<string, { price: Money; stock: number }>;
+  market: Record<
+    string,
+    { price: Money; stock: number; crate?: number; level?: number }
+  >;
+  purchases?: { pending: PendingPurchase[]; recent: PurchaseOutcome[] };
   inventory: Record<string, number>;
 };
 export type Application = {
@@ -215,6 +250,7 @@ export type View = {
     dietary_profiles?: string[];
     recipes: Record<string, Recipe>;
     failed_ventures?: VentureHistory[];
+    market_trips?: MarketTrip[];
     lease_forecast?: {
       trading_hours: number;
       wages: Money;

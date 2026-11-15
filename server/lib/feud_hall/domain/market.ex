@@ -67,10 +67,7 @@ defmodule FeudHall.Domain.Market do
     rules = catalog.rules.market
     base = catalog.products[product].base_price_per_kunit
     stock = Map.get(market.stock, product, 0)
-
-    target_at_floor =
-      div(Map.fetch!(rules.target_stock_per_equivalent, product) * catalog.rules.demand.equivalent_floor_millis, 1000)
-
+    target_at_floor = target_at_floor(catalog, product)
     floor = max(1, div(base * rules.price_floor_permille, 1000))
     ceiling = max(floor, div(base * rules.price_ceiling_permille, 1000))
 
@@ -79,6 +76,62 @@ defmodule FeudHall.Domain.Market do
     |> max(floor)
     |> min(ceiling)
   end
+
+  @doc """
+  How full the market's shelf for `product` is, in thousandths: stock against
+  the target at the demand-equivalent floor (the stock at which `price/3`
+  equals the base price), capped at 1000. A derived display value, no rule.
+  """
+  def level_permille(catalog, market, product) do
+    case Map.get(market.stock, product, 0) do
+      0 -> 0
+      stock -> min(1000, div(stock * 1000, max(target_at_floor(catalog, product), 1)))
+    end
+  end
+
+  @doc """
+  The display crate size for `product`: about ten servings of the recipe line
+  that uses the most of it, rounded up to 1, 2 or 5 times a power of ten. A
+  line counts when its product is this one, or when its substitute is (at the
+  substitute's converted quantity, rounded up). A product no recipe uses
+  counts as 100 per serving. A derived display value, no rule.
+  """
+  def crate_size(catalog, product) do
+    largest =
+      for(
+        recipe <- Map.values(catalog.recipes),
+        line <- recipe.lines,
+        qty = line_use(line, product),
+        qty != nil,
+        do: qty
+      )
+      |> Enum.max(fn -> 100 end)
+
+    series_ceiling(largest * 10, 1)
+  end
+
+  defp line_use(%{product: product, qty: qty}, product), do: qty
+
+  defp line_use(%{qty: qty, substitute: %{product: product, num: num, den: den}}, product),
+    do: div(qty * num + den - 1, den)
+
+  defp line_use(_line, _product), do: nil
+
+  # The smallest of 1, 2, 5 x `power` (and onward by tens) that is >= n.
+  defp series_ceiling(n, power) do
+    case Enum.find([1, 2, 5], &(&1 * power >= n)) do
+      nil -> series_ceiling(n, power * 10)
+      m -> m * power
+    end
+  end
+
+  defp target_at_floor(catalog, product),
+    do:
+      div(
+        Map.fetch!(catalog.rules.market.target_stock_per_equivalent, product) *
+          catalog.rules.demand.equivalent_floor_millis,
+        1000
+      )
 
   @doc """
   Clears the pending requests against current stock. Takes `now`, the catalog,
