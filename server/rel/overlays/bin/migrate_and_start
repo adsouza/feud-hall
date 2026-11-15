@@ -1,0 +1,7 @@
+#!/bin/sh
+# Applies pending migrations, then replaces this shell with the server. A failed
+# migration exits here, before the hall authority starts and takes the hall.
+set -eu
+cd -P -- "$(dirname -- "$0")"
+./feud_hall eval 'FeudHall.Release.migrate()'
+exec ./feud_hall start

@@ -26,7 +26,29 @@ if System.get_env("FEUD_HALL_SERVE") == "1" do
     if config_env() == :prod, do: System.fetch_env!("DATABASE_URL"), else: System.get_env("DATABASE_URL")
 
   if url = database_url do
-    config :feud_hall, FeudHall.Infrastructure.Repo, url: url
+    # Hosts such as Neon print libpq URLs ending in `?sslmode=require&channel_binding=require`.
+    # Ecto reads only `ssl=true|false` and hands other parameters to Postgrex, which ignores
+    # them, so `sslmode` alone would connect without TLS. Map it to `ssl` (Postgrex verifies the
+    # certificate against the system CA store) and drop the libpq-only keys.
+    uri = URI.parse(url)
+    params = URI.decode_query(uri.query || "")
+    {sslmode, rest} = Map.pop(params, "sslmode")
+    rest = Map.delete(rest, "channel_binding")
+
+    ssl =
+      case sslmode do
+        nil -> []
+        "disable" -> [ssl: false]
+        mode when mode in ["require", "verify-ca", "verify-full"] -> [ssl: true]
+        _ -> raise("DATABASE_URL sslmode must be disable, require, verify-ca, or verify-full")
+      end
+
+    url =
+      if rest == params,
+        do: url,
+        else: URI.to_string(%{uri | query: if(rest == %{}, do: nil, else: URI.encode_query(rest))})
+
+    config :feud_hall, FeudHall.Infrastructure.Repo, [url: url] ++ ssl
   end
 
   config :feud_hall, FeudHall.Web.Endpoint,
