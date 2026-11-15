@@ -8,7 +8,6 @@ import {
   type VendorId,
 } from "./market-goods";
 import {
-  AISLE_Z,
   BASE_Y,
   CAMERA_FOV,
   SIGN_BOTTOM,
@@ -23,6 +22,9 @@ import {
   hoveredProduct,
   marketLayout,
   overviewPose,
+  stageTrips,
+  standingSpot,
+  STAND_SPACING,
   tripRoute,
   vendorPose,
   type CameraPose,
@@ -135,9 +137,7 @@ const PAUSE_MS = 2400;
 const GAIT = (Math.PI * 2) / 1.2; // stride phase per metre walked
 const EASE_MS = 650;
 const STAGGER_MS = 1700;
-const STAGGER_METRES = 1.8; // a figure and its cart, and a step
 const LANE_OFFSET = 0.6;
-const STILL_BESIDE = 1.3; // from a stall's end to a standing shopper's feet
 const FRAME_MS = 32;
 
 const VENDOR_COLOURS: Record<VendorId, number> = {
@@ -324,6 +324,7 @@ type Shopper = {
   started: number;
   ends: number;
   still: boolean;
+  vendor?: VendorId; // the stall a still shopper stands at
 };
 
 /** Where a shopper is `elapsed` ms into a trip along `points`. */
@@ -1107,44 +1108,44 @@ export function createMarketScene(
   // Shoppers.
   // ---------------------------------------------------------------------
   const shoppers: Shopper[] = [];
-  const seenTrips = new Set<string>();
-  let primed = false;
+  // The newest clearing staged or seen; null until the first update.
+  let tripMark: number | null = null;
 
-  function stageTrips(next: MarketAppearance, now: number) {
-    const present = new Set<string>();
+  function stageNewTrips(next: MarketAppearance, now: number) {
+    const { staged, mark } = stageTrips(
+      next.trips,
+      tripMark,
+      next.ownRestaurant,
+    );
+    tripMark = mark;
+    if (!built) return;
     let slot = 0;
-    for (const trip of next.trips) {
-      const key = `${trip.restaurant_id}\u0000${trip.batch}`;
-      present.add(key);
-      if (seenTrips.has(key)) continue;
-      seenTrips.add(key);
-      if (!primed || trip.restaurant_id === next.ownRestaurant) continue;
-      if (!built) continue;
-      // Shoppers staged together keep to alternate sides of the aisle and
-      // stop a little apart.
-      const behind = (slot % 4) * STAGGER_METRES;
-      const lane = slot % 2 ? LANE_OFFSET : -LANE_OFFSET / 2;
+    for (const trip of staged) {
       const route = tripRoute(trip.products, built.layout);
       const still = !next.motion;
-      let points = route.map((point) => ({
-        x: point.pause ? point.x - behind : point.x,
-        z: point.z + lane,
-        pause: point.pause,
-      }));
+      let points: Shopper["points"];
+      let vendor: VendorId | undefined;
       if (still) {
-        // Without motion, the shopper stands beside the first stall they
-        // buy from, their cart clear of its shelves.
+        // Without motion, the shopper stands in the aisle in front of the
+        // first stall they buy from, beside any already standing there.
         const stop = route.find((point) => point.pause);
         const stall = built.layout.stalls.find((s) => s.x === stop?.x);
-        points = stall
-          ? [
-              {
-                x: stall.x - stall.width / 2 - STILL_BESIDE - behind,
-                z: AISLE_Z,
-                pause: true,
-              },
-            ]
-          : [];
+        if (!stall) continue;
+        vendor = stall.vendor;
+        const standing = shoppers.filter(
+          (s) => s.still && s.vendor === vendor && now < s.ends,
+        ).length;
+        points = [{ ...standingSpot(stall, standing), pause: true }];
+      } else {
+        // Shoppers staged together keep to alternate sides of the aisle and
+        // stop a little apart.
+        const behind = (slot % 4) * STAND_SPACING;
+        const lane = slot % 2 ? LANE_OFFSET : -LANE_OFFSET / 2;
+        points = route.map((point) => ({
+          x: point.pause ? point.x - behind : point.x,
+          z: point.z + lane,
+          pause: point.pause,
+        }));
       }
       if (points.length === 0) continue;
       const products = trip.products.length ? trip.products : [""];
@@ -1157,20 +1158,17 @@ export function createMarketScene(
         look: personLook(serialFor("owner:" + trip.restaurant_id), "owner"),
         pieces: pieceList,
         points,
-        // Shoppers staged together set off one after another, or stand
-        // side by side.
+        // Walkers staged together set off one after another.
         started: still ? now : now + slot * STAGGER_MS,
         ends:
           now +
           (still ? STILL_SHOPPER_MS : slot * STAGGER_MS + tripDuration(points)),
         still,
+        vendor,
       });
       slot++;
       while (shoppers.length > MAX_SHOPPERS) shoppers.shift();
     }
-    // Forget trips the view no longer lists; it never lists them again.
-    for (const key of seenTrips) if (!present.has(key)) seenTrips.delete(key);
-    primed = true;
   }
 
   const figure: Pose = {
@@ -1187,9 +1185,14 @@ export function createMarketScene(
   const where = { x: 0, z: 0, yaw: 0, walking: false, stride: 0 };
   let drawnShoppers = -1;
 
-  function drawShoppers(now: number) {
+  /** Sends home shoppers whose time is up. */
+  function pruneShoppers(now: number) {
     for (let i = shoppers.length - 1; i >= 0; i--)
       if (now >= shoppers[i].ends) shoppers.splice(i, 1);
+  }
+
+  function drawShoppers(now: number) {
+    pruneShoppers(now);
     people.begin();
     carts.count = 1;
     for (const mesh of rivalPieces.values()) mesh.count = 0;
@@ -1477,13 +1480,22 @@ export function createMarketScene(
 
   function schedule() {
     const now = performance.now();
-    const walking = shoppers.some((s) => !s.still && now < s.ends);
+    pruneShoppers(now);
+    const walking = shoppers.some((s) => !s.still);
     const next =
       visible && !document.hidden && !disposed && (easing || walking);
     clearTimeout(stillTimer);
     stillTimer = undefined;
     // A standing shopper needs one more frame, when they leave.
-    if (!next && shoppers.length > 0 && visible && !disposed) {
+    // Never while hidden: the visibilitychange handler and setVisible(true)
+    // call schedule again when the scene can be seen.
+    if (
+      !next &&
+      shoppers.length > 0 &&
+      visible &&
+      !document.hidden &&
+      !disposed
+    ) {
       const due = Math.min(...shoppers.map((s) => s.ends)) - now;
       stillTimer = setTimeout(
         () => {
@@ -1538,7 +1550,7 @@ export function createMarketScene(
       paintSigns(built, next);
       fillContainers(built, next);
       fillOwnerCart(next);
-      stageTrips(next, now);
+      stageNewTrips(next, now);
       // A new set of products moves the stalls: cut to the new pose.
       if (rebuilt || posedFor !== next.focusedVendor) {
         aim(rebuilt);

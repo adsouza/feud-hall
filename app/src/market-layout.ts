@@ -257,3 +257,60 @@ export function hoveredProduct(
   const outcome = clickOutcome(target, focused);
   return outcome.action === "add" ? outcome.product : "";
 }
+
+/**
+ * Which trips of an update to stage as shoppers, given the highest clearing
+ * (batch) staged or seen so far: `mark` null means this is the first update,
+ * which only sets the mark (no burst on load). A trip is staged once, when its
+ * batch is newer than the mark, unless it is the owner's own restaurant's. An
+ * empty or older list leaves the mark as it is, so a list that comes back
+ * after a gap stages nothing again.
+ */
+export function stageTrips<T extends { batch: number; restaurant_id: string }>(
+  trips: readonly T[],
+  mark: number | null,
+  ownRestaurant: string,
+): { staged: T[]; mark: number } {
+  const newest = trips.reduce(
+    (high, trip) => Math.max(high, trip.batch),
+    mark ?? -Infinity,
+  );
+  if (mark === null) return { staged: [], mark: newest };
+  const seen = new Set<string>();
+  const staged = trips.filter((trip) => {
+    if (!(trip.batch > mark) || trip.restaurant_id === ownRestaurant)
+      return false;
+    const key = `${trip.restaurant_id}\u0000${trip.batch}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { staged, mark: newest };
+}
+
+/** Length of a shopper and the cart ahead of them, along the aisle. */
+export const SHOPPER_LENGTH = 1.3;
+/** Distance between neighbouring standing shoppers' feet. */
+export const STAND_SPACING = 1.8;
+const ROW_OFFSETS = [0, 0.6, 1.2, -0.6];
+
+/**
+ * Where the k-th shopper standing at a stall stands (motion off): in the aisle
+ * in front of the stall, facing +x with the cart ahead, side by side within the
+ * stall's width; when no more fit, another row in the aisle.
+ */
+export function standingSpot(
+  stall: Pick<Stall, "x" | "width">,
+  k: number,
+): { x: number; z: number } {
+  const fit = Math.max(
+    1,
+    Math.floor((stall.width - SHOPPER_LENGTH) / STAND_SPACING) + 1,
+  );
+  const span = (fit - 1) * STAND_SPACING + SHOPPER_LENGTH;
+  const row = Math.floor(k / fit);
+  return {
+    x: stall.x - span / 2 + (k % fit) * STAND_SPACING,
+    z: AISLE_Z + ROW_OFFSETS[row % ROW_OFFSETS.length],
+  };
+}

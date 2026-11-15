@@ -12,6 +12,8 @@ import {
   hoveredProduct,
   marketLayout,
   overviewPose,
+  stageTrips,
+  standingSpot,
   tripRoute,
   vendorPose,
 } from "../../src/market-layout";
@@ -288,4 +290,73 @@ test("market layout: a click adds only at the focused stall, elsewhere it focuse
   expect(hoveredProduct(onion, "fishmonger")).toBe("");
   expect(hoveredProduct(butcher, "butcher")).toBe("");
   expect(hoveredProduct(null, "butcher")).toBe("");
+});
+
+test("market layout: only trips of a clearing newer than any seen are staged", () => {
+  const trip = (batch: number, restaurant_id: string) => ({
+    batch,
+    restaurant_id,
+  });
+  const listed = [trip(3, "r-a"), trip(4, "r-b"), trip(4, "r-me")];
+  // The first update sets the mark and stages nothing.
+  const primed = stageTrips(listed, null, "r-me");
+  expect(primed).toEqual({ staged: [], mark: 4 });
+  // An empty list leaves the mark; the same list again stages nothing.
+  const empty = stageTrips([], primed.mark, "r-me");
+  expect(empty).toEqual({ staged: [], mark: 4 });
+  expect(stageTrips(listed, empty.mark, "r-me")).toEqual({
+    staged: [],
+    mark: 4,
+  });
+  // A new clearing: both rivals, never the owner, each once.
+  const next = stageTrips(
+    [
+      ...listed,
+      trip(5, "r-a"),
+      trip(5, "r-me"),
+      trip(5, "r-c"),
+      trip(5, "r-a"),
+    ],
+    4,
+    "r-me",
+  );
+  expect(next).toEqual({ staged: [trip(5, "r-a"), trip(5, "r-c")], mark: 5 });
+  // An older clearing arriving late stages nothing and keeps the mark.
+  expect(stageTrips([trip(4, "r-z"), trip(2, "r-y")], 5, "r-me")).toEqual({
+    staged: [],
+    mark: 5,
+  });
+  // A first update with no trips still primes: the next clearing is staged.
+  const none = stageTrips([], null, "r-me");
+  expect(none.staged).toEqual([]);
+  expect(stageTrips([trip(1, "r-a")], none.mark, "r-me").staged).toEqual([
+    trip(1, "r-a"),
+  ]);
+});
+
+test("market layout: shoppers standing at a stall stand in front of it, apart", () => {
+  const layout = marketLayout(ids);
+  const problems: string[] = [];
+  for (const stall of layout.stalls) {
+    const spots = Array.from({ length: 8 }, (_, k) => standingSpot(stall, k));
+    // The first spot is where a walking shopper pauses.
+    if (Math.abs(spots[0].z - AISLE_Z) > 1e-9)
+      problems.push(`${stall.vendor} z`);
+    for (const [k, spot] of spots.entries()) {
+      // Feet and the cart ahead (+x) within the stall's width.
+      if (spot.x < stall.x - stall.width / 2 - 1e-9)
+        problems.push(`${stall.vendor} ${k} left`);
+      if (spot.x + 1.3 > stall.x + stall.width / 2 + 1e-9 && stall.width >= 1.3)
+        problems.push(`${stall.vendor} ${k} right`);
+      for (const other of spots.slice(0, k))
+        if (Math.hypot(other.x - spot.x, other.z - spot.z) < 0.55)
+          problems.push(`${stall.vendor} ${k} crowded`);
+    }
+  }
+  expect(problems).toEqual([]);
+  // The fishmonger's narrow stall still fits two side by side.
+  const fish = layout.stalls.find(
+    (s) => s.vendor === "fishmonger",
+  ) as (typeof layout.stalls)[number];
+  expect(standingSpot(fish, 1).z).toBe(standingSpot(fish, 0).z);
 });
