@@ -90,13 +90,15 @@ defmodule FeudHall.Web.Router do
   post "/api/operator/retune" do
     configured = Application.fetch_env!(:feud_hall, __MODULE__)[:admin_key]
     provided = get_req_header(conn, "authorization")
-    chosen = Tuning.chosen()
 
     with key when is_binary(key) and byte_size(key) >= 32 <- configured,
          ["Bearer " <> candidate] <- provided,
          true <- Plug.Crypto.secure_compare(candidate, key),
          %{"command_id" => id} <- conn.body_params,
          true <- is_binary(id) do
+      # Built only once the secret is accepted: it constructs a whole launch catalog.
+      chosen = Tuning.chosen()
+
       if conn.body_params["version"] === chosen.version do
         run(conn, fn ->
           HallAuthority.execute(authority(), %{

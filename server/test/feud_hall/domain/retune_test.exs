@@ -216,6 +216,72 @@ defmodule FeudHall.Domain.RetuneTest do
     end
   end
 
+  describe "prices at a retune to the chosen values" do
+    # The price each product had before the retune, and the price one more unit of stock
+    # would have given it then: the lowest a top-up rounded up to a whole unit can leave it.
+    defp drawn_down(extra) do
+      state = launch_hall()
+      update_in(state.market.stock, &Map.new(&1, fn {product, stock} -> {product, div(stock, 3) + extra} end))
+    end
+
+    defp one_more_unit(state),
+      do: prices(update_in(state.market.stock, &Map.new(&1, fn {product, stock} -> {product, stock + 1} end)))
+
+    # 0: a third of the opening stock, where every price sits at its ceiling. 7 more units
+    # than that: every price is inside its band and most top-ups have to round.
+    for extra <- [0, 7] do
+      test "from a third of the opening stock plus #{extra}, no price rises and none falls by more than a rounding step" do
+        state = drawn_down(unquote(extra))
+        chosen = Tuning.chosen()
+        old = state.catalog.rules.market.target_stock_per_equivalent
+        new = chosen.market.target_stock_per_equivalent
+        before = prices(state)
+        floor_step = one_more_unit(state)
+        assert map_size(before) == map_size(@catalog.products)
+
+        assert {:ok, [event]} = decide(state, chosen)
+        after_prices = prices(Hall.evolve(state, event))
+
+        for {product, was} <- before do
+          now = after_prices[product]
+          assert now <= was, "#{product} rose from #{was} to #{now}"
+
+          if rem(new[product], old[product]) == 0,
+            do: assert(now == was, "#{product} moved from #{was} to #{now} on a whole multiple"),
+            else: assert(now >= floor_step[product], "#{product} fell from #{was} to #{now}")
+        end
+
+        uneven = for {product, target} <- new, rem(target, old[product]) != 0, do: product
+        assert length(uneven) > 100
+      end
+    end
+
+    test "at a third of the opening stock every price is at its ceiling; seven units above, the rounding shows" do
+      chosen = Tuning.chosen()
+
+      at_third = drawn_down(0)
+      rules = at_third.catalog.rules.market
+
+      for {product, price} <- prices(at_third) do
+        base = at_third.catalog.products[product].base_price_per_kunit
+        assert price == div(base * rules.price_ceiling_permille, 1000), product
+      end
+
+      above = drawn_down(7)
+      before = prices(above)
+      assert {:ok, [event]} = decide(above, chosen)
+      after_prices = prices(Hall.evolve(above, event))
+      fell = for {product, was} <- before, after_prices[product] < was, do: product
+      assert fell != []
+      # Nothing is clamped there, so an equal price is an equal ratio and not a shared ceiling.
+      for {product, price} <- before do
+        base = above.catalog.products[product].base_price_per_kunit
+        assert price < div(base * rules.price_ceiling_permille, 1000), product
+        assert price > div(base * rules.price_floor_permille, 1000), product
+      end
+    end
+  end
+
   test "a catalog expansion after a retune keeps the retuned values" do
     state = launch_hall()
     base = Tuning.of(state.catalog)
@@ -237,6 +303,63 @@ defmodule FeudHall.Domain.RetuneTest do
     assert Tuning.of(state.catalog) == tuning
     assert state.catalog.rules.tuning.version == 2
     assert Content.validate(state.catalog) == :ok
+  end
+
+  test "a launch version that adds a product after a retune gives it the launch target and keeps every retuned value" do
+    chosen = Tuning.chosen()
+    {:ok, [retune_event]} = decide(launch_hall(), chosen)
+    state = Hall.evolve(launch_hall(), retune_event)
+    retuned = Tuning.of(state.catalog)
+    assert retuned == chosen
+
+    # The next launch version: today's launch catalog plus one product, at the launch
+    # catalog's own kind of target (it knows nothing of the retune).
+    {template_id, template} = Enum.min_by(@catalog.products, &elem(&1, 0))
+    added = "zz_new_product"
+    refute Map.has_key?(@catalog.products, added)
+
+    newer =
+      %{@catalog | version: state.catalog.version + 1}
+      |> put_in([:products, added], %{template | id: added})
+      |> put_in([:rules, :market, :target_stock_per_equivalent, added], 400)
+      |> put_in([:rules, :market, :replenish_cap, added], 1_600)
+
+    assert Content.validate(newer) == :ok
+    assert template_id != added
+
+    assert {:ok, [expanded]} = CatalogExpansion.decide(state, newer)
+    state = CatalogExpansion.evolve(state, expanded)
+    market = state.catalog.rules.market
+
+    # The new product has the launch target and cap, and opens at the launch target at the floor.
+    assert market.target_stock_per_equivalent[added] == 400
+    assert market.replenish_cap[added] == 1_600
+    assert expanded.stock == %{added => 1_200}
+    assert state.market.stock[added] == 1_200
+
+    # Every retuned value is kept, and the hall is still at tuning version 2.
+    after_expansion = Tuning.of(state.catalog)
+    assert after_expansion.version == 2
+    assert after_expansion.demand == chosen.demand
+    assert after_expansion.npc == chosen.npc
+
+    assert Map.delete(after_expansion.market.target_stock_per_equivalent, added) ==
+             chosen.market.target_stock_per_equivalent
+
+    assert Map.delete(after_expansion.market.replenish_cap, added) == chosen.market.replenish_cap
+    assert state.catalog.version == newer.version
+    assert Content.validate(state.catalog) == :ok
+    assert Tuning.validate(state.catalog, after_expansion) == :ok
+
+    # Version 2 cannot be applied again to reach the new product; a newer version can.
+    assert decide(state, chosen) == {:error, :retune_unavailable}
+
+    version3 =
+      %{after_expansion | version: 3}
+      |> with_targets(%{added => 900})
+      |> put_in([:market, :replenish_cap, added], 3_600)
+
+    assert {:ok, [%{stock: %{^added => 1_500}}]} = decide(state, version3)
   end
 
   describe "refusals record nothing" do

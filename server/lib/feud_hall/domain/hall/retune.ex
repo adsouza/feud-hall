@@ -15,14 +15,20 @@ defmodule FeudHall.Domain.Hall.Retune do
 
   What changes when:
 
-    * At the retune, wholesale prices do not move for a product whose stock
-      target rises. The published price is the base price scaled by the target
+    * At the retune, the wholesale price of a product whose stock target rises
+      never rises. The published price is the base price scaled by the target
       at the demand floor over the current stock, so the decision scales that
       product's stock with its target: `added = ceil(stock * new / old) - stock`
-      (only products with a raised target and `added > 0` appear). A product
-      with no stock gets nothing; its price was already at the clamp. A product
-      whose target is lowered gets no top-up and keeps its stock, so it is
-      cheaper until the next midnight; an unchanged target changes nothing.
+      (only products with a raised target and `added > 0` appear). When the new
+      target is a whole multiple of the old the price is unchanged; when it is
+      not, the top-up rounds up to a whole unit and the price can fall by one
+      rounding step: never below the price one more unit of stock would have
+      given before the change. (This holds because the launch demand floor is
+      a whole number of equivalents, so the target at the floor scales exactly.)
+      A product with no stock gets nothing; its price was already at the clamp.
+      A product whose target is lowered gets no top-up and keeps its stock, so
+      it is cheaper until the next midnight; an unchanged target changes
+      nothing.
     * Arrivals and replenishment change at the next midnight, through the next
       `day_closed`. A day's arrival quotas (`demand.hour_quotas_millis`) and the
       market's replenishment are recorded per day by `day_closed`, so the day in
