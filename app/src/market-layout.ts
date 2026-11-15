@@ -221,3 +221,39 @@ export function fillFor(level: number): number {
 export function cartGoods(size: "small" | "medium" | "large"): number {
   return size === "large" ? 9 : size === "medium" ? 5 : 2;
 }
+
+/** What the pointer is over, ignoring shoppers: a container, another part of a stall, or nothing. */
+export type PointerTarget =
+  | { kind: "container"; product: string; vendor: VendorId }
+  | { kind: "stall"; vendor: VendorId }
+  | null;
+export type ClickOutcome =
+  | { action: "add"; product: string }
+  | { action: "focus"; vendor: VendorId }
+  | { action: "none" };
+
+/**
+ * What a click does: a container of the focused vendor adds its product; any
+ * part of another stall (or of any stall, on the whole row) focuses that
+ * vendor; the focused stall's structure and empty ground do nothing.
+ */
+export function clickOutcome(
+  target: PointerTarget,
+  focused: VendorId | null,
+): ClickOutcome {
+  if (!target) return { action: "none" };
+  if (target.vendor !== focused)
+    return { action: "focus", vendor: target.vendor };
+  return target.kind === "container"
+    ? { action: "add", product: target.product }
+    : { action: "none" };
+}
+
+/** The product a pointer names: only one a click would add, otherwise "". */
+export function hoveredProduct(
+  target: PointerTarget,
+  focused: VendorId | null,
+): string {
+  const outcome = clickOutcome(target, focused);
+  return outcome.action === "add" ? outcome.product : "";
+}

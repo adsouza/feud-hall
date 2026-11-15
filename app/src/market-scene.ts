@@ -18,7 +18,9 @@ import {
   TIER_DEPTH,
   PITCH_X,
   cartGoods,
+  clickOutcome,
   fillFor,
+  hoveredProduct,
   marketLayout,
   overviewPose,
   tripRoute,
@@ -26,6 +28,7 @@ import {
   type CameraPose,
   type MarketLayout,
   type Placed,
+  type PointerTarget,
   type Stall,
 } from "./market-layout";
 import {
@@ -389,11 +392,6 @@ function tripDuration(points: Shopper["points"]): number {
   }
   return total;
 }
-
-type Pick =
-  | { kind: "container"; product: string; distance: number }
-  | { kind: "vendor"; vendor: VendorId; distance: number }
-  | { kind: "shopper"; restaurant: string; distance: number };
 
 export function createMarketScene(
   host: HTMLElement,
@@ -1294,46 +1292,42 @@ export function createMarketScene(
   // ---------------------------------------------------------------------
   const ray = new T.Raycaster();
   const cursor = new T.Vector2();
-  function pickAt(x: number, y: number): Pick | null {
-    if (!built) return null;
+  /** Points the pick ray at (x, y), CSS px from the canvas's top-left. */
+  function aimRay(x: number, y: number): boolean {
     const bounds = canvas.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return null;
+    if (!built || !bounds.width || !bounds.height) return false;
     cursor.set((x / bounds.width) * 2 - 1, -(y / bounds.height) * 2 + 1);
     ray.setFromCamera(cursor, camera);
-    let best: Pick | null = null;
-    const shopperHit = ray.intersectObjects(
+    return true;
+  }
+  /** The container or stall on the ray, ignoring shoppers: they never block a click. */
+  function targetOnRay(): PointerTarget {
+    if (!built) return null;
+    const containerHit = ray.intersectObject(built.hits, false)[0];
+    if (containerHit?.instanceId !== undefined) {
+      const { product, vendor } =
+        built.layout.containers[containerHit.instanceId];
+      return { kind: "container", product, vendor };
+    }
+    const vendorHit = ray.intersectObjects(built.vendorHits, false)[0];
+    return vendorHit
+      ? { kind: "stall", vendor: vendorHit.object.userData.vendor as VendorId }
+      : null;
+  }
+  function targetAt(x: number, y: number): PointerTarget {
+    return aimRay(x, y) ? targetOnRay() : null;
+  }
+  /** The restaurant of a shopper on the ray, or "". */
+  function shopperOnRay(): string {
+    const hit = ray.intersectObjects(
       shopperBoxes.filter((box) => box.userData.active),
       false,
     )[0];
-    if (shopperHit)
-      best = {
-        kind: "shopper",
-        restaurant: shopperHit.object.userData.restaurant as string,
-        distance: shopperHit.distance,
-      };
-    const containerHit = ray.intersectObject(built.hits, false)[0];
-    if (
-      containerHit?.instanceId !== undefined &&
-      (!best || containerHit.distance < best.distance)
-    )
-      best = {
-        kind: "container",
-        product: built.layout.containers[containerHit.instanceId].product,
-        distance: containerHit.distance,
-      };
-    if (best) return best;
-    const vendorHit = ray.intersectObjects(built.vendorHits, false)[0];
-    if (vendorHit)
-      return {
-        kind: "vendor",
-        vendor: vendorHit.object.userData.vendor as VendorId,
-        distance: vendorHit.distance,
-      };
-    return null;
+    return hit ? (hit.object.userData.restaurant as string) : "";
   }
-  function pickEvent(event: PointerEvent) {
+  function eventPoint(event: PointerEvent): [number, number] {
     const bounds = canvas.getBoundingClientRect();
-    return pickAt(event.clientX - bounds.left, event.clientY - bounds.top);
+    return [event.clientX - bounds.left, event.clientY - bounds.top];
   }
 
   let hoverProduct = "";
@@ -1367,19 +1361,23 @@ export function createMarketScene(
       Math.hypot(event.clientX - start[0], event.clientY - start[1]) > 6
     )
       return;
-    const pick = pickEvent(event);
-    if (pick?.kind === "container") actions.add(pick.product);
-    else if (pick?.kind === "vendor") actions.focusVendor(pick.vendor);
+    const outcome = clickOutcome(
+      targetAt(...eventPoint(event)),
+      appearance?.focusedVendor ?? null,
+    );
+    if (outcome.action === "add") actions.add(outcome.product);
+    else if (outcome.action === "focus") actions.focusVendor(outcome.vendor);
   }
   function move(event: PointerEvent) {
     if (event.buttons !== 0) return;
-    const pick = pickEvent(event);
+    if (!aimRay(...eventPoint(event))) return leave();
+    const focused = appearance?.focusedVendor ?? null;
+    const target = targetOnRay();
     canvas.style.cursor =
-      pick?.kind === "container" || pick?.kind === "vendor" ? "pointer" : "";
-    setHover(
-      pick?.kind === "container" ? pick.product : "",
-      pick?.kind === "shopper" ? pick.restaurant : "",
-    );
+      clickOutcome(target, focused).action === "none" ? "" : "pointer";
+    // A shopper under the pointer is named instead of the goods behind them.
+    const shopper = shopperOnRay();
+    setHover(shopper ? "" : hoveredProduct(target, focused), shopper);
   }
   function leave() {
     canvas.style.cursor = "";
@@ -1419,7 +1417,10 @@ export function createMarketScene(
     mesh.visible = true;
   }
 
-  // Where a real click selects the selected container, for browser tests.
+  // For browser tests: a point where a real click calls add(selected). Set
+  // only when the selected product's vendor is focused, the camera has
+  // settled, and the pick there (shoppers ignored, as for a click) is that
+  // product; otherwise absent.
   function updateHitAttribute() {
     let value = "";
     const selected = appearance?.selected ?? "";
@@ -1433,8 +1434,11 @@ export function createMarketScene(
           continue;
         const x = Math.round(((ndc.x + 1) / 2) * bounds.width);
         const y = Math.round(((1 - ndc.y) / 2) * bounds.height);
-        const pick = pickAt(x, y);
-        if (pick?.kind === "container" && pick.product === selected) {
+        const outcome = clickOutcome(
+          targetAt(x, y),
+          appearance?.focusedVendor ?? null,
+        );
+        if (outcome.action === "add" && outcome.product === selected) {
           value = `${selected}:${x},${y}`;
           break;
         }
@@ -1556,7 +1560,14 @@ export function createMarketScene(
         ),
       );
       host.setAttribute("data-market-vendor", next.focusedVendor ?? "");
-      if (hoverProduct && !built.index.has(hoverProduct))
+      // A product named by the pointer stops being named when its stall is
+      // no longer the focused one, or it leaves the market.
+      const hovered = built.index.get(hoverProduct);
+      if (
+        hoverProduct &&
+        (hovered === undefined ||
+          built.layout.containers[hovered].vendor !== next.focusedVendor)
+      )
         setHover("", hoverRestaurant);
       draw(now);
       schedule();

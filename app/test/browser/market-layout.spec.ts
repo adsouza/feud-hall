@@ -6,8 +6,10 @@ import {
   MIN_COLUMNS,
   PITCH_X,
   cartGoods,
+  clickOutcome,
   columnsFor,
   fillFor,
+  hoveredProduct,
   marketLayout,
   overviewPose,
   tripRoute,
@@ -238,4 +240,52 @@ test("market layout: the camera poses look at what they name", () => {
   expect(wide.position[2] - wide.target[2]).toBeGreaterThan(
     narrow.position[2] - narrow.target[2],
   );
+});
+
+test("market layout: a click adds only at the focused stall, elsewhere it focuses", () => {
+  const salmon = {
+    kind: "container",
+    product: "salmon",
+    vendor: "fishmonger",
+  } as const;
+  const onion = {
+    kind: "container",
+    product: "onion",
+    vendor: "greengrocer",
+  } as const;
+  const butcher = { kind: "stall", vendor: "butcher" } as const;
+  // The whole row: every part of a stall focuses it; nothing is added.
+  expect(clickOutcome(salmon, null)).toEqual({
+    action: "focus",
+    vendor: "fishmonger",
+  });
+  expect(clickOutcome(butcher, null)).toEqual({
+    action: "focus",
+    vendor: "butcher",
+  });
+  // A close-up: the focused vendor's containers add, other stalls focus.
+  expect(clickOutcome(salmon, "fishmonger")).toEqual({
+    action: "add",
+    product: "salmon",
+  });
+  expect(clickOutcome(onion, "fishmonger")).toEqual({
+    action: "focus",
+    vendor: "greengrocer",
+  });
+  expect(clickOutcome(butcher, "fishmonger")).toEqual({
+    action: "focus",
+    vendor: "butcher",
+  });
+  // The focused stall's own structure, and empty ground, do nothing.
+  expect(
+    clickOutcome({ kind: "stall", vendor: "fishmonger" }, "fishmonger"),
+  ).toEqual({ action: "none" });
+  expect(clickOutcome(null, "fishmonger")).toEqual({ action: "none" });
+  expect(clickOutcome(null, null)).toEqual({ action: "none" });
+  // Hover names a product only where a click would add it.
+  expect(hoveredProduct(salmon, "fishmonger")).toBe("salmon");
+  expect(hoveredProduct(salmon, null)).toBe("");
+  expect(hoveredProduct(onion, "fishmonger")).toBe("");
+  expect(hoveredProduct(butcher, "butcher")).toBe("");
+  expect(hoveredProduct(null, "butcher")).toBe("");
 });
