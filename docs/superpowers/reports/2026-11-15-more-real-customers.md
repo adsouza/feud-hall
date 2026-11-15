@@ -41,7 +41,7 @@ Evidence for Project 4 of the
 what a sparse hall does on today's values, the values chosen from measured
 runs, what they change, and what they do to profit. Every number here comes
 from a run listed in the [tuning log](2026-11-15-more-real-customers-tuning-log.md);
-"run 125" means line 125 of that log.
+"run 125" means the run numbered 125 in that log's table.
 
 A log line holds a run's verdict rows, its arrivals, its mains served and its
 arrivals' reasons for leaving; from run 125 it also holds the orders that
@@ -1236,6 +1236,14 @@ ruling 11 was amended by ruling 16.
 18. **The acceptance test runs in hosted CI as its own step** (about 20
     seconds). *Why:* a tuned feel that no automated run checks will rot. *If
     wrong:* 20 seconds per CI run.
+19. **The gentler shape stays the chosen default after the held-out seed's
+    result** (on seed 424242 it misses the noon row by 0.17 while the sharper
+    shape meets every row with fewer full-queue turnaways). *Why:* the result
+    shows the two shapes are within seed noise of each other on the queue
+    rows, and served share, which the design ranks first, still favours the
+    gentler shape on three of the four seeds. *If wrong:* two values change;
+    the choice is the owner's and both shapes are measured side by side in
+    [The choice between two day shapes](#the-choice-between-two-day-shapes).
 
 ## Final review
 
