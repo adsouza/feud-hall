@@ -546,6 +546,44 @@ Run this focused file with one browser worker alongside `visitor-play.spec.ts`,
 changing the shared controls. These use the disposable browser hall, not the
 running local game, and do not qualify physical touch/GPU performance.
 
+### Supply market checks
+
+The [supply market](GAME_DESIGN.md#the-supply-market) is covered by server test
+files and browser specs. Run each file on its own. Server files run from
+`server/` as `mix test <file> --max-cases 1`; none of them needs the full suite.
+
+| Check | File | What it pins |
+| --- | --- | --- |
+| Crate size and level | `test/feud_hall/domain/market_test.exs` | `Market.crate_size/2` (the 1, 2, 5 series, substitutes at converted quantity, a product no recipe uses) and `Market.level_permille/3`. |
+| Market activity | `test/feud_hall/application/market_activity_test.exs` | Outcomes per request with reasons, trip sizes and their boundaries, the six-clearing window, no change from other events. Events come from the real `Market.clear/1`. |
+| Views | `test/feud_hall/application/management_test.exs` (the "purchases in the views" and `menu_products` cases) | The owner's pending and recent entries, the request ID form `"PR:" <> command_id`, a request created and cleared inside one batch by restock automation, an empty `recent` after `Recovery.recover`, and that the public hall and a guest's view carry only trips and none of the private key names. |
+| Coverage | `test/feud_hall/application/market_goods_coverage_test.exs` | Every launch catalog product has a valid vendor, shape, colour and variant in `app/src/market-goods.json`; no stale entry; the file is sorted; a substitute sits at its primary's vendor and looks different; meat, fish and dairy are at their vendors, with named exceptions. It derives both sides from the catalog and pins no product count. |
+
+Browser specs run from `app/` after a production build, with Node capped:
+`NODE_OPTIONS=--max-old-space-size=1536 bun run --bun build`, then
+`NODE_OPTIONS=--max-old-space-size=1536 bun run test:browser <file>`. Use
+`--grep '<scenario>'` for one case. `market.spec.ts` drives the built client
+through the disposable Phoenix and PostgreSQL harness with page clocks
+installed before the page loads; the other four import the modules under test
+directly. All assert on data attributes and text rather than pixels, and none
+qualifies hardware rendering or frame rate.
+
+| Spec | What it pins |
+| --- | --- |
+| `market-goods.spec.ts` | `goodFor`, `hasGood` and `shelves` (fallback to a plain carton at the pantry, a substitute directly after its primary, sorted output) and that every vendor label exists in English and Japanese. |
+| `market-cart.spec.ts` | The cart model: exact decimal-string limits (the 10% default rounded up, including a 30-digit price), requests with exactly four keys, `requestIdFor`, `track`, and a property with one assertion per run. |
+| `market-layout.spec.ts` | Stall layout and trip routes, the click rule (a container adds only from a focused vendor; a shopper never blocks a click), and `stageTrips` (a seen clearing is never staged again). |
+| `people.spec.ts` | Includes the cart-pushing pose: hands at handle height for any look, still arms, and precedence over carrying and sitting. |
+| `market.spec.ts` | The panel on the Business page against the built client: add, send, pending, filled or short; a price limit exceeded; a rival's fill as an unlabelled shopper; list-only without WebGL and after a scene failure; the star note; drafts surviving refresh and leaving the section; an uncertain send resolved by its command ID; a replacing request; a canvas click at `data-market-hit`; the hall's Stock link; every string in Japanese; malformed server data. |
+
+The scene exposes `data-market-containers`, `data-market-shoppers`,
+`data-market-cart`, `data-market-vendor` and `data-market-hit` on its host for
+tests. `data-market-hit="<product>:<x>,<y>"` gives CSS pixels inside the canvas
+for the selected container once the camera has settled, so a test can click a
+real container. Not covered by any automated check: the frame rate of the market
+scene (no bench exists for it), touch input in the scene, and Japanese text read
+by a fluent reader.
+
 ### How to run the frame bench
 
 The dev-only bench mounts the real 3D hall scene with a synthetic hall and
