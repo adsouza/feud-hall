@@ -101,8 +101,10 @@ export type FloorTally = {
 
 /** Diner walking speed, metres per millisecond (1.6 m/s). */
 const SPEED = 0.0016;
-/** Steps per metre, as the scene's leaving walk. */
-const GAIT = (Math.PI * 8) / Math.hypot(1.18, 1.4);
+/** Metres covered by one full leg cycle (two steps): about 2.7 steps a second at SPEED. */
+const STRIDE_METRES = 1.2;
+/** Stride phase in radians per metre walked. */
+const GAIT = (Math.PI * 2) / STRIDE_METRES;
 /** Figures fade over this distance from the street point outside the entrance. */
 const FADE = 0.5;
 /** How far in front of a counter a browsing figure passes it. */
