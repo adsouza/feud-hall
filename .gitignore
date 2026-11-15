@@ -51,3 +51,4 @@ __pycache__/
 
 # Built web client served by Phoenix
 /server/priv/static/
+.neon
