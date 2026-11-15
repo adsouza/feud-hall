@@ -36,11 +36,11 @@ defmodule FeudHall.Domain.NpcPlannerTest do
       ])
 
   describe "PublicView.build/1" do
-    test "exposes only time, published prices and stock, stalls with public menus, and day summaries" do
+    test "exposes only time, published prices and stock, stalls with public menus, today's totals, and day summaries" do
       state = bare_state()
       view = PublicView.build(state)
 
-      assert Map.keys(view) |> Enum.sort() == [:demand, :market, :now, :stalls]
+      assert Map.keys(view) |> Enum.sort() == [:demand, :market, :now, :stalls, :today]
       assert view.now == state.now
       assert Map.keys(view.market) |> Enum.sort() == Map.keys(state.catalog.products) |> Enum.sort()
 
@@ -54,6 +54,14 @@ defmodule FeudHall.Domain.NpcPlannerTest do
       assert [%{stall_id: "s001", restaurant_id: "r1", tier: :quiet, open?: true, menu: menu}] = view.stalls
       assert menu == state.restaurants["r1"].menu
       assert view.demand == state.demand.summaries
+    end
+
+    test "today's totals sum the leavers into one count without their reasons" do
+      state = bare_state()
+      today = %{state.demand.today | arrivals: 9, admitted: 4, left: %{queue_full: 3, nothing_available: 2}}
+      state = put_in(state, [:demand, :today], today)
+
+      assert PublicView.build(state).today == %{arrivals: 9, admitted: 4, left: 5}
     end
 
     test "never carries rival cash, batches, orders, costs or random state" do

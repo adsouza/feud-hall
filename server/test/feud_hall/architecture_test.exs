@@ -42,6 +42,36 @@ defmodule FeudHall.ArchitectureTest do
     end
   end
 
+  test "the domain scanner allows content read into a module attribute at compile time" do
+    source = ~S'''
+    defmodule Sample do
+      @external_resource "rows.json"
+      @rows JSON.decode!(File.read!("rows.json"))
+      def rows, do: @rows
+    end
+    '''
+
+    assert domain_violations(source) == []
+  end
+
+  test "the domain scanner still rejects runtime File reads and other references in attributes" do
+    runtime = ~S'''
+    defmodule Sample do
+      def rows, do: File.read!("rows.json")
+    end
+    '''
+
+    build_config = ~S'''
+    defmodule Sample do
+      @mode System.get_env("MODE")
+      @seed :rand.uniform(9)
+    end
+    '''
+
+    assert domain_violations(runtime) == [{:alias, ["File"]}]
+    assert domain_violations(build_config) == [{:alias, ["System"]}, {:erlang, :rand}]
+  end
+
   test "application use cases depend on ports, not infrastructure adapters" do
     for file <- Path.wildcard(Path.join(@root, "application/**/*.ex")) do
       assert violations(File.read!(file), [~w(FeudHall Infrastructure), ~w(Ecto), ~w(Phoenix)], [], []) == [],
@@ -142,11 +172,23 @@ defmodule FeudHall.ArchitectureTest do
            ) == []
   end
 
+  # A module attribute's value is evaluated once, at compile time, and embedded in
+  # the BEAM file: versioned content read there (with @external_resource) is not a
+  # runtime filesystem dependency. Every other forbidden reference still counts.
+  @compile_time_aliases [~w(File)]
+
   defp violations(source, aliases, erlang_modules, calls) do
     {:ok, ast} = Code.string_to_quoted(source)
+    ast |> scan(aliases, erlang_modules, calls) |> Enum.reverse()
+  end
 
+  defp scan(ast, aliases, erlang_modules, calls) do
     {_, found} =
       Macro.prewalk(ast, [], fn
+        {:@, _, [{name, _, [value]}]}, acc when is_atom(name) ->
+          inner = scan(value, aliases -- @compile_time_aliases, erlang_modules, calls)
+          {:compile_time_attribute, inner ++ acc}
+
         {:__aliases__, _, parts} = node, acc when is_list(parts) ->
           names = Enum.map(parts, &to_string/1)
           hit = Enum.any?(aliases, &List.starts_with?(names, &1))
@@ -161,6 +203,9 @@ defmodule FeudHall.ArchitectureTest do
           {node, acc}
       end)
 
-    Enum.reverse(found)
+    found
   end
+
+  defp domain_violations(source),
+    do: violations(source, @domain_forbidden_aliases, @domain_forbidden_erlang, @domain_forbidden_calls)
 end
