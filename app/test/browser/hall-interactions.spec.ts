@@ -549,16 +549,69 @@ test("the hall tablet offers the reload in place of a page banner", async ({
   const rows = page.locator(".tablet-text-controls");
   await expect(rows).toContainText("A new version of Feud Hall is available.");
   await expect(rows.locator('[data-tablet-kind="reload"]')).toBeAttached();
-  await expect(page.locator("main > .sr-only[role=status]")).toHaveText(
-    "A new version of Feud Hall is available.",
-  );
+  const announced = page
+    .locator(".sr-only[role=status]")
+    .filter({ hasText: "A new version of Feud Hall is available." });
+  await expect(announced).toHaveCount(1);
   await expect(page.locator("main > .banner:not(.success-notice)")).toHaveCount(
     0,
   );
+
+  // An accepted action's own notice leaves the announcement in place, so
+  // screen readers do not hear it again when that notice clears.
+  await tapTablet(page, "allowance");
+  await expect
+    .poll(() =>
+      page
+        .locator(".sr-only[role=status]")
+        .evaluateAll((regions) => regions.map((region) => region.textContent)),
+    )
+    .toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Updated"),
+        expect.stringContaining("A new version of Feud Hall is available."),
+      ]),
+    );
 
   await page.unroute(new URL("/", hall.origin).href);
   await Promise.all([
     page.waitForEvent("load", { timeout: 10_000 }),
     tapTablet(page, "reload"),
   ]);
+});
+
+test("a reload notice reaching the tablet keeps keyboard focus on the same action", async ({
+  page,
+  hall,
+}) => {
+  await page.goto(hall.origin);
+  await createGuest(page, "Focus diner");
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await focusStall(page, "s001");
+  await stationControl(page, "menu").click();
+  const host = page.locator("[data-hall-canvas]");
+  await expect(host).toHaveAttribute("data-hall-tablet", "s001");
+
+  // Home focuses the first target; ArrowUp wraps to the last, Close.
+  await host.focus();
+  await host.press("Home");
+  await host.press("ArrowUp");
+  await serveNewerClient(page, hall.origin);
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  await expect(
+    page.locator('.tablet-text-controls [data-tablet-kind="reload"]'),
+  ).toBeAttached();
+
+  await page.evaluate(() => {
+    (window as { sameDocument?: boolean }).sameDocument = true;
+  });
+  await host.press("Enter");
+  await expect(host).not.toHaveAttribute("data-hall-tablet", "s001");
+  expect(
+    await page.evaluate(
+      () => (window as { sameDocument?: boolean }).sameDocument,
+    ),
+  ).toBe(true);
 });

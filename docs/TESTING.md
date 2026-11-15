@@ -382,7 +382,9 @@ disposable hall. `bun run test:browser client-version.spec.ts`, after
 refused protocol asks the tab to reload, and the reload notice when the hall
 serves a newer client: after a deploy (a different entry script), never for the
 same client, an error page or a page with no entry script, and checked on
-visibility and on reconnection. From `app/src-tauri/`, run `cargo fmt --check` and
+visibility and on reconnection, with its Reload disabled while a command is
+uncertain. `hall-interactions.spec.ts` covers the same offer on the 3D tablet,
+where it must not move keyboard focus. From `app/src-tauri/`, run `cargo fmt --check` and
 `cargo test --locked --bin feud-hall` after `bun run desktop:assets` in
 `app/`. Keep Cargo to one local build job. The native workflow builds the
 macOS bundle, installs both Linux packages, and attempts their launch; a

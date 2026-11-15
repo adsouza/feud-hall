@@ -563,6 +563,15 @@ the header are still accepted.
 
 Clients track connection state and the last projection version. After a gap they request an authoritative snapshot, or a contiguous delta range if still available. Missing or out-of-order versions trigger resynchronization. Business connection presence is advisory; persisted ownership and operating policy determine economic authority.
 
+A web tab also learns when the hall serves a different client build. It fetches
+`/` uncached and compares the page's content-hashed entry module with its own,
+after a reconnect, when it becomes visible, and every ten minutes; a failed
+check or a page without an entry module shows nothing. A difference offers a
+reload that only the player starts, and never while a command is submitting or
+uncertain, since a reload forgets the command ID that must be retried. Desktop
+packages bundle their client and skip the check. This relies on `/` being served
+with `cache-control: no-store`.
+
 The UI may show pending edits and local visual feedback immediately. It must not present unconfirmed purchases, stock, cash, awards, or completed sales as committed facts. A rejected command removes its pending overlay and preserves unrelated server changes.
 
 In multiplayer, when disconnected, show current cached information as stale and disable new economic submissions. Draft policy/menu edits may be retained locally, but they require revalidation after reconnect. Do not blindly replay stale purchases at changed market prices. An uncertain in-flight command is resolved by querying or retrying the same command ID, never by issuing a fresh purchase ID.

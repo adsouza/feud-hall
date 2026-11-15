@@ -1,5 +1,5 @@
-import type { Page } from "@playwright/test";
-import { expect, serveNewerClient, test } from "./hall";
+import type { Page, Request, Route } from "@playwright/test";
+import { createGuest, expect, serveNewerClient, test } from "./hall";
 
 test("web requests send the client protocol and a refused protocol asks for a reload", async ({
   page,
@@ -26,15 +26,20 @@ test("web requests send the client protocol and a refused protocol asks for a re
 
 const newVersion = "A new version of Feud Hall is available.";
 
+// Counts the tab's fetches of the page at "/", sent and answered.
 function servedPages(page: Page) {
-  const fetches: string[] = [];
+  const fetches = { sent: 0, answered: 0 };
+  const served = (request: Request) =>
+    request.resourceType() === "fetch" &&
+    new URL(request.url()).pathname === "/";
   page.on("request", (request) => {
-    if (
-      request.resourceType() === "fetch" &&
-      new URL(request.url()).pathname === "/"
-    )
-      fetches.push(request.url());
+    if (served(request)) fetches.sent += 1;
   });
+  const answered = (request: Request) => {
+    if (served(request)) fetches.answered += 1;
+  };
+  page.on("requestfinished", answered);
+  page.on("requestfailed", answered);
   return fetches;
 }
 
@@ -62,7 +67,7 @@ test("an open tab offers a reload once the hall serves a newer client", async ({
   const notice = page.getByRole("status").filter({ hasText: newVersion });
   await expect(notice).toBeVisible();
   await expect(notice.getByRole("button", { name: "Reload" })).toBeVisible();
-  expect(fetches).toHaveLength(1);
+  expect(fetches.sent).toBe(1);
 
   // A notice already showing needs no second look at the served page.
   const polled = page.waitForResponse(
@@ -70,7 +75,7 @@ test("an open tab offers a reload once the hall serves a newer client", async ({
   );
   await becomeVisible(page);
   await polled;
-  expect(fetches).toHaveLength(1);
+  expect(fetches.sent).toBe(1);
 
   await page.getByLabel("Language / 言語").selectOption("ja");
   const japanese = page
@@ -102,24 +107,32 @@ test("no reload is offered while the hall serves the same client or cannot serve
   const fetches = servedPages(page);
   const notice = page.getByRole("status").filter({ hasText: newVersion });
 
-  await becomeVisible(page);
-  await expect.poll(() => fetches.length).toBe(1);
-  await expect(notice).toHaveCount(0);
-
-  // A host's error page during a deploy, and a page with no client at all.
+  // The same client, a host's error page during a deploy, and a page with no
+  // client at all. Each answer is late, as a trigger that arrives while a check
+  // is still running is skipped.
   const home = new URL("/", hall.origin).href;
-  const unusable = [
-    {
-      status: 503,
-      contentType: "text/html",
-      body: '<script type="module" src="/assets/maintenance.js"></script>',
-    },
-    { status: 200, contentType: "text/plain", body: "Not a client page." },
+  const answers: ((route: Route) => Promise<void>)[] = [
+    (route) => route.fallback(),
+    (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: "text/html",
+        body: '<script type="module" src="/assets/maintenance.js"></script>',
+      }),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/plain",
+        body: "Not a client page.",
+      }),
   ];
-  for (const [index, answer] of unusable.entries()) {
-    await page.route(home, (route) => route.fulfill(answer));
+  for (const [index, answer] of answers.entries()) {
+    await page.route(home, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await answer(route);
+    });
     await becomeVisible(page);
-    await expect.poll(() => fetches.length).toBe(index + 2);
+    await expect.poll(() => fetches.answered).toBe(index + 1);
     await expect(notice).toHaveCount(0);
     await page.unroute(home);
   }
@@ -128,8 +141,39 @@ test("no reload is offered while the hall serves the same client or cannot serve
   await serveNewerClient(page, hall.origin);
   await becomeVisible(page);
   await expect(notice).toBeVisible();
-  expect(fetches).toHaveLength(4);
+  expect(fetches.sent).toBe(4);
   expect(errors).toEqual([]);
+});
+
+test("a reload is not offered over a command whose outcome is uncertain", async ({
+  page,
+  hall,
+}) => {
+  await openHall(page, hall.origin);
+  await createGuest(page, "Uncertain diner");
+  await page.getByRole("button", { name: "My visit", exact: true }).click();
+  await page.route(
+    "**/api/commands",
+    (route) =>
+      route.fulfill({ status: 503, json: { error: "unknown_outcome" } }),
+    { times: 1 },
+  );
+  await page
+    .getByRole("button", { name: "Claim daily allowance", exact: true })
+    .click();
+  const retry = page.getByRole("button", { name: "Retry same command" });
+  await expect(retry).toBeVisible();
+
+  await serveNewerClient(page, hall.origin);
+  await becomeVisible(page);
+  const notice = page.getByRole("status").filter({ hasText: newVersion });
+  await expect(notice).toBeVisible();
+  const reload = notice.getByRole("button", { name: "Reload" });
+  await expect(reload).toBeDisabled();
+
+  await retry.click();
+  await expect(retry).toHaveCount(0);
+  await expect(reload).toBeEnabled();
 });
 
 test("a tab checks for a newer client when its connection returns", async ({
@@ -144,5 +188,5 @@ test("a tab checks for a newer client when its connection returns", async ({
   await expect(
     page.getByRole("status").filter({ hasText: newVersion }),
   ).toBeVisible();
-  expect(fetches).toHaveLength(1);
+  expect(fetches.sent).toBe(1);
 });

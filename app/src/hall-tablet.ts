@@ -50,6 +50,8 @@ const PER_PAGE = 6;
 const FOOTER = 930;
 
 type Target = {
+  /** Which control this is, so focus can follow it when rows move. */
+  key: string;
   x: number;
   y: number;
   width: number;
@@ -115,6 +117,7 @@ export function createTabletScreen(redraw: () => void) {
     rows.forEach((row, index) => {
       const y = TOP + index * ROW_HEIGHT;
       const target: Target = {
+        key: JSON.stringify(row.action),
         x: 20,
         y,
         width: 680,
@@ -166,6 +169,7 @@ export function createTabletScreen(redraw: () => void) {
       footer.forEach((item, index) => {
         const x = 20 + index * 228;
         const target: Target = {
+          key: "footer:" + index,
           x,
           y: FOOTER,
           width: 220,
@@ -217,6 +221,7 @@ export function createTabletScreen(redraw: () => void) {
           .join("\n");
       const newError =
         errorIndex >= 0 && errors(next.rows) !== errors(view?.rows ?? []);
+      const kept = targets[focused]?.key;
       if (
         next.stall !== view?.stall ||
         next.subtitle !== view?.subtitle ||
@@ -232,6 +237,15 @@ export function createTabletScreen(redraw: () => void) {
         Math.max(0, Math.ceil(next.rows.length / PER_PAGE) - 1),
       );
       paint();
+      // Rows added or removed by a live update must not move focus onto
+      // another action; a control that is gone leaves nothing focused.
+      if (focused >= 0) {
+        const index = targets.findIndex((target) => target.key === kept);
+        if (index !== focused) {
+          focused = index;
+          paint();
+        }
+      }
       const letters =
         next.title +
         next.subtitle +

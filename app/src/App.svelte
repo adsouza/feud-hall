@@ -186,6 +186,9 @@
     location.reload();
   }
   let updateAvailable = $state(false);
+  // Reloading forgets an uncertain command's ID, which must be retried as is;
+  // after a refused protocol no retry can succeed, so reloading stays open.
+  const reloadBlocked = $derived(!updateRequired && (!!pending || submitting));
   let checkingClient = false;
   let lastClientCheck = Date.now();
   async function checkClient() {
@@ -271,7 +274,7 @@
       return;
     }
     if (action.kind === "reload") {
-      reloadClient();
+      if (!reloadBlocked) reloadClient();
       return;
     }
     if (disabled) return;
@@ -812,9 +815,7 @@
       );
     }
 
-    // The reload offer sits here in place of the page banner.
-    if (connected && updateAvailable) rows.push({ text: t("newVersion") });
-    if (connected ? updateAvailable : updateRequired && !nativeClient)
+    if (!connected && updateRequired && !nativeClient)
       rows.push({ text: t("reload"), action: { kind: "reload" } });
     if (pending)
       rows.push({
@@ -944,6 +945,17 @@
       if (tabletPage === "review" && !currentQuote && !status)
         add(t("tabletLoading"));
     }
+    // In place of the page banner, and after the page's own rows, so an offer
+    // that arrives on its own moves nothing under the pointer.
+    if (connected && updateAvailable)
+      rows.push(
+        { text: t("newVersion") },
+        {
+          text: t("reload"),
+          action: { kind: "reload" },
+          disabled: reloadBlocked,
+        },
+      );
     return {
       stall: stall.stall_id,
       title: stall.name,
@@ -2360,6 +2372,10 @@
   {/each}
 </nav>
 
+<!-- Its own region, so other notices coming and going do not repeat it. -->
+<span class="sr-only" role="status"
+  >{inWorldNotices && updateAvailable && connected ? t("newVersion") : ""}</span
+>
 <main>
   {#if !connected && !inWorldNotices}<p class="banner" role="status">
       {t(connectionProblem)}
@@ -2373,7 +2389,9 @@
       role="status"
     >
       {t("newVersion")}
-      <button type="button" onclick={reloadClient}>{t("reload")}</button>
+      <button type="button" disabled={reloadBlocked} onclick={reloadClient}
+        >{t("reload")}</button
+      >
     </p>{/if}
   <span class="sr-only" role="status">
     {inWorldNotices && tabletView?.noticeError
@@ -2383,9 +2401,7 @@
           .join(locale === "ja" ? "" : " ")
       : status === "update"
         ? t("update")
-        : inWorldNotices && updateAvailable && connected
-          ? t("newVersion")
-          : ""}
+        : ""}
   </span>
   {#if status === "update"}
     <div
