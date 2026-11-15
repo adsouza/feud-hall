@@ -6,6 +6,7 @@ defmodule FeudHall.Domain.NpcPlannerTest do
   alias FeudHall.Domain.{Hall, Market, PublicView, Random}
   alias FeudHall.MexicanFixture
   alias FeudHall.Domain.Npc.Planner
+  alias FeudHall.Domain.Content.Tuning
 
   @catalog MexicanFixture.catalog()
   @budget Enum.find(@catalog.npc_profiles, &(&1.id == "budget"))
@@ -328,6 +329,75 @@ defmodule FeudHall.Domain.NpcPlannerTest do
       for action <- actions(state, @budget) do
         assert {:ok, _} = Hall.decide(state, action, ctx(owner(), "check"))
       end
+    end
+  end
+
+  describe "tuning from the catalog" do
+    defp with_catalog(state, catalog), do: %{state | catalog: catalog}
+
+    test "writing the catalog's own tuning back changes no action" do
+      {state, _} = stocked_world(arrivals: false, stock: %{})
+      state = with_summary(state, %{admitted: 30, trays_served: 30})
+      same = with_catalog(state, Tuning.put(state.catalog, Tuning.of(state.catalog)))
+
+      for profile <- state.catalog.npc_profiles do
+        assert plan(same, profile) == plan(state, profile)
+      end
+    end
+
+    test "fallback_trays_per_day sets the purchase quantities when there is no day summary" do
+      {state, _} = stocked_world(arrivals: false, stock: %{})
+      assert state.demand.summaries == []
+      npc = %{Tuning.npc_defaults() | fallback_trays_per_day: 30}
+      tuned = with_catalog(state, put_in(state.catalog, [:rules, :npc], npc))
+
+      recipes = for id <- Enum.sort(state.restaurants["r1"].unlocked), do: state.catalog.recipes[id]
+      menu_size = length(recipes)
+
+      # The budget profile prefers substitutes, so a line needs its substitute's quantity.
+      assert @budget.policy == :prefer_substitute
+
+      uses =
+        Enum.reduce(for(r <- recipes, l <- r.lines, do: l), %{}, fn line, acc ->
+          {product, qty} =
+            case line.substitute do
+              nil -> {line.product, line.qty}
+              sub -> {sub.product, div(line.qty * sub.num + sub.den - 1, sub.den)}
+            end
+
+          Map.update(acc, product, qty, &(&1 + qty))
+        end)
+
+      expected =
+        for {product, use} <- uses,
+            into: %{},
+            do: {product, div(30 * @budget.restock_days * use + menu_size - 1, menu_size)}
+
+      requests = for {:submit_purchase_request, p} <- actions(tuned, @budget), into: %{}, do: {p.product, p.qty}
+
+      assert map_size(requests) > 0
+      # Quantities are capped only by storage room, which these small amounts do not reach.
+      assert requests == expected
+
+      assert requests !=
+               for({:submit_purchase_request, p} <- actions(state, @budget), into: %{}, do: {p.product, p.qty})
+    end
+
+    test "starter_shifts sets the staff schedule" do
+      state = bare_state()
+      npc = put_in(Tuning.npc_defaults(), [:starter_shifts, "budget"], [6, 18])
+      tuned = with_catalog(state, put_in(state.catalog, [:rules, :npc], npc))
+
+      # The test world's restaurant has no lease; give it one on other hours.
+      leased = Map.put(own(state), :lease, %{start_hour: 0, end_hour: 0, opening_requested: false})
+      view = PublicView.build(state)
+
+      schedule = fn catalog ->
+        for {:set_staff_schedule, p} <- elem(Planner.plan(view, leased, @budget, catalog, Random.new(7)), 0), do: p
+      end
+
+      assert [%{stall_id: "s001", start_hour: 6, end_hour: 18}] = schedule.(tuned.catalog)
+      assert [%{start_hour: 5, end_hour: 17}] = schedule.(state.catalog)
     end
   end
 
