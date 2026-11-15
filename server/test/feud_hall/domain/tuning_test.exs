@@ -78,7 +78,8 @@ defmodule FeudHall.Domain.TuningTest do
       %{arrivals_per_equivalent: arrivals, hourly_weights: weights} = Tuning.chosen().demand
       assert Enum.at(weights, 3) == 0
       assert Enum.at(weights, 4) == 0
-      assert arrivals == 252
+      assert arrivals == 248
+      assert weights == [3, 2, 1, 0, 0, 2, 3, 5, 7, 9, 11, 19, 30, 19, 12, 12, 12, 14, 19, 28, 16, 11, 8, 5]
       assert Enum.sum(weights) == arrivals
       # The two rushes are the two busiest hours; overnight is the quietest open time.
       busiest = weights |> Enum.with_index() |> Enum.sort(:desc) |> Enum.take(2) |> Enum.map(&elem(&1, 1))
@@ -124,7 +125,7 @@ defmodule FeudHall.Domain.TuningTest do
       assert targets |> Map.values() |> Enum.sum() == 1_663_800
       assert chosen.market.replenish_cap |> Map.values() |> Enum.sum() == 4 * 1_663_800
 
-      assert Content.hash(chosen) == "cd0c23dfc036704500f7f712d11890372bf0ee18e8f556b48fcd6587fc235685"
+      assert Content.hash(chosen) == "e85085d89e4138d5dd06583d6a349d00fc45b79e1c5dfe19193077c0aec85b53"
     end
 
     test "changes only the fallback and two starter shifts for computer-run owners" do

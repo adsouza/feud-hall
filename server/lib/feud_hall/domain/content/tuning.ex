@@ -39,10 +39,10 @@ defmodule FeudHall.Domain.Content.Tuning do
   def expected_use_heuristics, do: @heuristics
 
   # Chosen values (see `chosen/0`).
-  @chosen_arrivals_per_equivalent 252
+  @chosen_arrivals_per_equivalent 248
   # Index is the hall hour. The weights sum to the arrivals per equivalent, so
   # each is that hour's arrivals per business equivalent.
-  @chosen_hourly_weights [3, 2, 1, 0, 0, 2, 3, 5, 7, 8, 11, 19, 34, 17, 12, 12, 12, 14, 19, 33, 15, 10, 8, 5]
+  @chosen_hourly_weights [3, 2, 1, 0, 0, 2, 3, 5, 7, 9, 11, 19, 30, 19, 12, 12, 12, 14, 19, 28, 16, 11, 8, 5]
   @chosen_portions_per_equivalent 100
   @chosen_cap_multiple 4
 
@@ -55,8 +55,10 @@ defmodule FeudHall.Domain.Content.Tuning do
 
   As a difference from the launch catalog's own values:
 
-    * `arrivals_per_equivalent` 252 (was 90), with hourly weights that sum to
-      it, so each weight is that hour's arrivals per business equivalent;
+    * `arrivals_per_equivalent` 248 (was 90), with hourly weights that sum to
+      it, so each weight is that hour's arrivals per business equivalent (30
+      at 12:00 and 28 at 19:00; the report also measures a sharper shape,
+      252 with 34 and 33, as the alternative);
     * every wholesale target is at least 100 portions per equivalent of the
       largest recipe line that uses the product, a substitute counted at its
       converted quantity (was 6 portions, for starter mains' first-choice
