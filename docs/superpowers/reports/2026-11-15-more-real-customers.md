@@ -22,6 +22,23 @@ tuning. A hall does not start on them and no hall receives them at boot: they
 are applied by the recorded `retune_rules` change, as a separate step after
 the owner's decision on costs.
 
+## What to decide
+
+1. **Apply the change or not.** The chosen values are proposed tuning and no
+   hall has them; an operator applies them with
+   [the operator request](../../DEPLOYMENT.md#applying-the-customer-tuning).
+   The measurements are in [Result in short](#result-in-short).
+2. **Whether costs should rise first.** At unchanged prices, rent and wages a
+   stall's profit goes from about -10,000 to about 64,000 a day. See
+   [Profit](#profit).
+3. **Which day shape.** The chosen shape meets every acceptance check; the
+   gentler one gives up one check on one seed for fewer full queues. See
+   [The choice between two day shapes](#the-choice-between-two-day-shapes).
+4. **Whether to act on findings 1 to 3** under
+   [For the owner's attention](#for-the-owners-attention): the ten-hour staff
+   rule, orders lost at a break or closing, and diners who cannot afford any
+   open stall. None is tuning, and none was changed.
+
 ## Result in short
 
 - **Every acceptance check is met on all three seeds**, with the reference
@@ -59,10 +76,11 @@ the owner's decision on costs.
   from losing 7,100 to 10,000 to making 30,300 to 34,700), and the
   computer-run restaurants from between -1,400 and +13,300 to between 50,800
   and 67,000. No restaurant was distressed or in arrears in any final run.
-- **Two findings for the owner**, not tuning: orders are lost when a stall
-  stops with a queue (about 2% of accepted orders), and the first day after
-  the recorded change differs slightly from later days. See
-  [For the owner's attention](#for-the-owners-attention).
+- **Findings for the owner**, not tuning: five are listed under
+  [For the owner's attention](#for-the-owners-attention), among them a new
+  owner's 09:00 to 21:00 stall closing for the dinner hour, about 2% of
+  accepted orders lost when a stall stops with a queue, and about a quarter of
+  arrivals who cannot afford any open stall.
 
 ## Method
 
@@ -318,12 +336,15 @@ To switch to the gentler shape, two values change in `Tuning.chosen/0`
 (`server/lib/feud_hall/domain/content/tuning.ex`):
 `@chosen_arrivals_per_equivalent` from 252 to 248, and
 `@chosen_hourly_weights` to
-`3,2,1,0,0,2,3,5,7,9,11,19,30,19,12,12,12,14,19,28,16,11,8,5`. The tests
-that pin the chosen values then need regenerating from runs at those values:
-the arrival figure and fingerprint in `tuning_test.exs`, and in
-`customer_acceptance_test.exs` the lists of rows met and not met (the noon
-row fails on seed 7). That test's served-share constants are for today's
-values and do not depend on the shape.
+`3,2,1,0,0,2,3,5,7,9,11,19,30,19,12,12,12,14,19,28,16,11,8,5`. Two
+tests then change, and neither needs its lists regenerated.
+`customer_acceptance_test.exs` pins seed 20261109, on which the gentler shape
+meets every row, so its lists of rows met and not met stay as they are; only
+its comment that the rows pass "on all three measured seeds" becomes untrue
+(the noon row fails on seed 7). `tuning_test.exs` pins the arrival figure 252
+and the content fingerprint of the chosen values, which both change. The
+acceptance test's served-share constants are for today's values and do not
+depend on the shape.
 
 Earlier measurements with the salmon stall at 15% fewer and 15% more arrivals
 than the first chosen values are runs 65 to 76 in the log: at 15% more, run
@@ -656,7 +677,39 @@ hour after it opens. The warm-up day is not measured.
 
 ## For the owner's attention
 
-Two things the measurements show that are not tuning and were not changed.
+Findings that the measurements show, that are not tuning and that were not
+changed. Each is the owner's to act on or leave.
+
+1. **A new owner's 09:00 to 21:00 stall is closed for the dinner hour.** A new
+   restaurant has three starter staff, and they take an automatic one-hour
+   protective break after ten working hours. A stall opened 09:00 to 21:00
+   therefore stops at 19:00, in the middle of the dinner rush, every day. The
+   driver's reference stall had to be moved to 10:00 to 20:00 for this reason;
+   the driver observed the closure on the design's schedule while it was being
+   built, and it is not one of the logged runs. The ten-hour rule is a staff
+   rule, not one of the allowed values.
+2. **About 2% of accepted orders are lost when a stall stops with a queue.** A
+   stall that reaches its break or the end of its shift with orders waiting
+   does not serve them. In the final runs 1.6% to 3.0% of admitted orders
+   ended with no main served, and in the 14-day run 134 trays were cancelled
+   (2.4% of visits that ended). Detail under
+   [Orders lost when a stall stops](#orders-lost-when-a-stall-stops).
+3. **About a quarter of arrivals leave because nothing open is affordable.**
+   The share is 25% to 27% at the chosen values and 25% to 29% at every arrival
+   level tried once supply was in place. Diner budgets are not among the
+   allowed values, so tuning cannot move it. Detail under
+   [What binds](#what-binds), item 3.
+4. **The profit effect at unchanged prices, rent and wages** is the input to
+   the decision on costs. The reference stall goes from losing about 10,000 a
+   day to making 63,100 to 66,500 a day. See [Profit](#profit).
+5. **The choice between the chosen day shape and the gentler one.** The chosen
+   shape meets every check on every seed and has about twice the full-queue
+   turnaways and a lower served share; the gentler shape misses one check on
+   one seed. See
+   [The choice between two day shapes](#the-choice-between-two-day-shapes).
+
+One further observation, about applying the change rather than the game, is
+under [The first day after the recorded change](#the-first-day-after-the-recorded-change).
 
 ### Orders lost when a stall stops
 
@@ -776,7 +829,115 @@ The 300,000 storage capacity did not show up as a shortage: at the chosen
 values `nothing_available` was 0.1% of arrivals and the reference stall was
 never short. Whether it trimmed any computer-run purchase was not measured.
 
-## What was not measured
+## Rulings made while building
+
+Decisions made while the work was being built, in the order they were made,
+each with what it decided, why, and what it costs if wrong. The first five
+were made before any task started, the rest as tasks reported.
+
+1. **"Counter busy".** It is measured as the hall view's
+   `activity.cooking > 0 or activity.handover`: some station working, or a
+   tray at the counter. *Why:* the design says "the counter busy" and "kitchen
+   working close to flat out" without a formula, and this uses numbers a player
+   sees. *If wrong:* the 85% rows measure a different quantity and the tuning
+   may be slightly off; the driver prints the raw shares so they can be
+   recomputed.
+2. **New halls start on today's values.** The launch catalog is unchanged; the
+   chosen values exist only as `Tuning.chosen/0` and reach a hall through the
+   recorded change. *Why:* the design says the change is not applied
+   automatically and the owner decides on costs first. *If wrong:* a one-line
+   change makes the launch catalog start at the chosen values.
+3. **The recorded change takes effect at the next game midnight.** Arrival
+   quotas and market replenishment are already recorded per day, so this needs
+   no mid-day arithmetic and keeps "earlier events replay under the old
+   values" true without further work. *If wrong:* an operator waits up to one
+   game day (an hour of real time) to see more customers.
+4. **The acceptance test pins only the checks that pass at the chosen values,**
+   with the failing ones named in this report. *Why:* the design tells the
+   builder to report the closest result rather than widen the allowed values.
+   *If wrong:* a failing target is documented but not enforced. With the
+   median-priced reference stall no row fails, so the test pins all of them;
+   the dearest-starter stall's misses are in
+   [After](#after-the-chosen-values-on-three-seeds) and are not asserted.
+5. **The change is applied through an operator HTTP endpoint** guarded by the
+   operator secret, like the existing seed endpoint. *Why:* "a separate,
+   explicit step" needs some trigger, and this is the existing operator
+   pattern. *If wrong:* replace it with a release task; the domain command is
+   the same.
+6. **The recorded change tops up wholesale stock.** For each product whose
+   target rises, the event records `added = ceil(stock * new_target /
+   old_target) - stock`, and evolution adds it; nothing is recorded for
+   unchanged or lowered targets, and stock is never removed. *Why:* the
+   published price depends on the stock target, so without a top-up every
+   raised target raised wholesale prices at once until midnight, and the
+   planner's price limits, restock budgets and salvage values moved with it. A
+   full replenishment would also have reset prices of products that were
+   scarce. This reverses the plan's statement that the change leaves stock
+   alone. *If wrong:* drop the stock field and accept a one-day price spike.
+7. **Two review findings were fixed in the same round because start-up depends
+   on them:** the tuning and retune modules are loaded before safe term
+   decoding (a cold VM could otherwise reject a snapshot taken after a
+   retune), and a test pins that a catalog expansion after a retune keeps the
+   retuned values (start-up issues an expansion when a new launch version
+   ships). *If wrong:* the cost is a small amount of extra test code.
+8. **The reference stall opens 10:00 to 20:00, and its mid-morning check is
+   10:00 to 11:00,** instead of the design's 09:00 to 21:00 and 09:00 to
+   11:00. *Why:* ten hours is the longest the three starter staff can work
+   without the protective break, and on the design's schedule the 19:00 to
+   20:00 checks cannot be met by any allowed value. *If wrong:* the owner may
+   prefer to keep 09:00 to 21:00 and drop or move the dinner check, or change
+   the fatigue rule; the driver takes the hours as an option (`--hours`), so
+   either can be re-measured in seconds. See finding 1 under
+   [For the owner's attention](#for-the-owners-attention).
+9. **The determinism test gains a one-measured-day run A comparison.** It
+   settles a reviewer's doubt that multi-day output is byte-identical. *If
+   wrong:* none beyond test time.
+10. **The run budget was raised from 30 to 150 driver runs** (123 were used). A
+    three-day run takes 5 to 10 seconds, not the minutes the plan assumed, so
+    the cap no longer protected anything and a wider search over several seeds
+    gives sturdier values. Runs stay one at a time. *If wrong:* only time was
+    spent.
+11. **The chosen values must hold on at least three seeds,** not only the one
+    the acceptance test pins. *Why:* a single seed could pass by luck near a
+    bound. *If wrong:* a few more runs were spent.
+12. **The reference stall sells the unused cuisine whose starter main has the
+    median suggested price** (ties to the lower price, then by cuisine ID),
+    not the first unused cuisine in sorted order. *Why:* the earlier rule
+    happened to pick the second dearest of 22 starters and the slowest method,
+    and the design's reference stands for a competent new owner with a default
+    starter, which a typical price represents better. *If wrong:* the owner
+    may want the targets judged on the dearest stall too; its result stays in
+    this report as a second column (it misses the rush-waiting rows) and the
+    cuisine is a driver option.
+13. **The final values (252 arrivals, rush weights 34 and 33) stand,** and the
+    report presents the cost of the last step and the gentler alternative as
+    the owner's choice. *Why:* they are the only candidate that meets every
+    acceptance row on all three seeds with served share above today's in all
+    six comparisons, which is the design's stated bar. *If wrong:* the owner
+    picks the alternative; `Tuning.chosen/0` changes by two values and two
+    tests change (see
+    [The choice between two day shapes](#the-choice-between-two-day-shapes)).
+14. **A test pins a fingerprint of `Tuning.chosen/0`** (product count, sum of
+    market targets and a SHA-256 hash). *Why:* the market values are computed
+    from the launch catalog's recipes, so a later catalog change could
+    silently make "version 2" mean different values. *If wrong:* the test
+    fails on a legitimate catalog change and has to be updated knowingly.
+
+## Not verified
+
+- **No full test suite was run.** Only the files named under
+  [Checks](#checks), one at a time.
+- **Nobody has played a hall on these values.** No human owner or guest has
+  seen them.
+- **The measurements are a simulation** at sparse-hall settings, on three
+  seeds, with simulated diners only and no real guests.
+- **The change has not been applied** to any real hall or trial copy of one.
+  The recorded change was exercised only by its own tests and by the driver's
+  in-memory `--via retune` run (run 102, one seed).
+- **The packaged apps are unaffected and were not rebuilt.** No client code
+  changed.
+
+Not measured, as a list of what the runs do not cover:
 
 - A hall with more than four restaurants, a hall above the floor of three
   business equivalents, or any human owner other than the reference owner.
@@ -787,8 +948,10 @@ never short. Whether it trimmed any computer-run purchase was not measured.
   hall with open orders and leases (the change's own tests cover pinned
   terms; they do not use these values).
 - Live, genesis and snapshot-tail agreement at the chosen values.
-- The reference stall with the design's 09:00 to 21:00 hours, or with any
-  cuisine other than the median-priced one and `coast_salish`.
+- The reference stall with the design's 09:00 to 21:00 hours (the driver
+  showed the closure at 19:00 while it was being built; no tuning was
+  measured on that schedule), or with any cuisine other than the
+  median-priced one and `coast_salish`.
 - Arrival levels above or below the final values with the median-priced
   reference stall, other than the three columns under
   [The choice between two day shapes](#the-choice-between-two-day-shapes).
@@ -802,8 +965,77 @@ never short. Whether it trimmed any computer-run purchase was not measured.
   unfilled purchase requests).
 - Market sizes between 25 and 50 portions, and above 100.
 - Memory use of these runs. The driver's own check measured about 200 MB.
-- The full test suite and hosted CI. Only the files named in
-  [Checks](#checks) were run.
+- Hosted CI.
+
+Minor review findings left open, grouped by task. None changes a reported
+number; each is a gap in a test, a message or a corner of the driver.
+
+Task 1 (tuning as data):
+
+- A bad shift list reaching `Content.validate/1` (rather than
+  `Tuning.validate/2`) is untested.
+- `Tuning.npc/1` and `Tuning.of/1` raise on a catalog with no rules.
+- The `refused/1` test helper asserts only that some error came back, not
+  which problem.
+- A bad computer-run profile is reported twice, in two shapes; a non-map
+  `products` value would raise in `Tuning` (a shape that was already
+  unguarded).
+
+Task 2 (the recorded change):
+
+- An unmanaged launch hall can be retuned.
+- The domain test does not assert that the non-tunable parts of the catalog
+  are unchanged.
+- One assertion (`position == live.position == (tail == [])`) is hard to read.
+- A guest offer confirmed before the change must be reconfirmed, as after a
+  catalog expansion. This is now documented (deployment and architecture) but
+  not covered by a test with these values.
+- The `Retune` module documentation overstates "prices do not move": with a
+  target ratio that is not a whole multiple the price can fall by one rounding
+  step, and with a demand floor that is not a multiple of 1,000 it could rise
+  by a few units (the launch floor is 3,000, so it only falls).
+- The every-product price test uses an exact doubling, which cannot show the
+  rounding effect.
+- The new `ensure_loaded` lines in the safe term decoder have no cold-VM test
+  (the project has none for that path).
+- `evolve` reads the event's `stock` field and would raise on a retune event
+  recorded by the first version of the change, which was never shipped.
+
+Task 3 (the driver):
+
+- The served-share denominator counts simulated arrivals only.
+- The ingredient-short check ignores substitutes, so it is stricter than "ran
+  out".
+- A starter grant posted in a measured day would count as profit.
+- `--via retune --tuning current` needs `--set version=2`.
+- An empty-counts literal is repeated three times; the usage comment omits
+  `--hours`; `Hall.run` leaves the authority running if an unexpected
+  exception escapes.
+- Releasing a location while distressed moves arrears into released debt,
+  which the profit's arrears sum misses (the distressed warning flags it).
+- One helper shift anywhere turns off the reconciliation check for every
+  restaurant that day.
+- Distressed days hide accruing rent and wages, because the rules charge
+  nothing then, so profit on such a day is incomplete. No day in the profit
+  tables was distressed.
+
+Task 4 (the choice of values):
+
+- Ten acceptance-test runs, a duplicate of run 1 and a zero-day header run
+  are disclosed but not logged one line each.
+- `reference_cuisine/1` raises `Enum.EmptyError` if no unused cuisine has a
+  starter main.
+- `customer_sim_test.exs` asserts an even count of unused starter prices,
+  which ties it to today's catalog.
+- The fingerprint assertion in `tuning_test.exs` was never seen failing (the
+  sum assertion before it fires first).
+
+Task 5 (the operator request):
+
+- No test for an empty or short configured operator key (nil, empty, 31
+  bytes) on the retune route.
+- The 403-before-422 order is tested only for the secret check alone.
+- The retune route repeats the seed route's authorisation chain verbatim.
 
 ## Reproducing the tables
 

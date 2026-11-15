@@ -17,6 +17,12 @@ order, with [scarcity rent](docs/GAME_DESIGN.md#scarcity-rent) derived by
 expansion at start-up (see [Deployment](docs/DEPLOYMENT.md#local-management-game)). The three-cuisine slice
 remains available for replay and focused tests. Managed slice halls add launch
 content through a recorded upgrade that preserves existing recipes and stock.
+The customer tuning (more diners, a larger wholesale market, adjusted
+computer-run owners) exists as a recorded rule change that an operator applies
+on request, never at boot; a hall stays on today's values until then. See the
+[game design](docs/GAME_DESIGN.md#a-finite-pool-of-diners),
+[deployment](docs/DEPLOYMENT.md#applying-the-customer-tuning), and the
+[report](docs/superpowers/reports/2026-11-15-more-real-customers.md).
 The local [Project C report](docs/superpowers/reports/2026-11-10-milestone-2c-capacity.md)
 records the original single-cuisine 150-stall measurement. Tests and the
 benchmark start authorities. The management game runs on Phoenix with a

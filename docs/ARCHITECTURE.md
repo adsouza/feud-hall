@@ -505,6 +505,28 @@ For a hall with rooms, `GET /api/state` adds `room` and `position` to each `hall
 
 Existing managed halls receive version 3 through the recorded `hall_catalog_expanded` event at start-up (command ID `web-launch-catalog:3`, see [Deployment](DEPLOYMENT.md#local-management-game)). `CatalogExpansion.decide/2` gives each pinned spot the room and position of the same spot ID in the launch layout and keeps its tier, keeps a pinned room rule if one exists, and takes each computer-run profile's preferred class from the launch profile with the same ID. A pinned spot ID missing from the launch layout fails validation and emits no event. `evolve` is unchanged: events before the upgrade replay under the old rule because the rule reads the catalog in force at each position.
 
+### The recorded rule change
+
+Balance values are data, and a managed launch hall changes them only through a recorded event, beside the catalog expansion above.
+
+**Tuning as data.** `Domain.Content.Tuning` reads and writes the tunable values as one set: `version`, `demand` (`arrivals_per_equivalent`, `hourly_weights`), `market` (`target_stock_per_equivalent`, `replenish_cap`) and `npc` (`fallback_trays_per_day`, `expected_use`, `starter_shifts`). Demand and market values stay in `rules.demand` and `rules.market`, where the simulation already reads them; the computer-run values live in `rules.npc`, and a catalog without it falls back to `Tuning.npc_defaults/0`, so catalogs that predate it keep their content hash. A shift is a two-element list, never a tuple, because catalogs ride inside events and the event codec stores no tuples. `Tuning.validate/2` and `Content.validate/1` refuse a tuning with missing or extra keys, hourly weights that are not 24 non-negative integers with zero at 03:00 and 04:00 and a positive sum, market values that do not cover exactly the catalog's products, a cap below three times a positive target, an expected-use heuristic or profile it does not know, or a shift hour outside 0 to 23. `Tuning.chosen/0` holds the proposed values (see the [game design](GAME_DESIGN.md#a-finite-pool-of-diners) and the [report](superpowers/reports/2026-11-15-more-real-customers.md#the-chosen-values)); the launch catalog is unchanged and a new hall starts on its own values.
+
+**The command.** `retune_rules` takes `%{tuning: tuning}` and is accepted only from the system administrator capability; no player, helper, timer or computer-run owner can issue it. `Hall.Retune.decide/2` refuses it as `retune_unavailable` for a hall whose catalog is not the launch catalog, that has no demand rules, or that already has this tuning version or a newer one, and as `invalid_content` when the tuning or the resulting catalog fails validation. Nothing is recorded in either case. Boot, recovery and release never issue it; an operator does, once, through a request guarded by the operator secret ([Deployment](DEPLOYMENT.md#applying-the-customer-tuning)). The usual command-ID rules apply: a repeat of the same request returns the original receipt.
+
+**The event.** `hall_rules_retuned` carries the tuning, the content hash of the catalog after the change, and `stock: %{product_id => added}`, a wholesale top-up decided from the state at the decision: for each product whose target rises, `ceil(stock * new_target / old_target) - stock`, so the published price (base price scaled by the target over current stock) does not jump. Products with no stock, an unchanged target or a lowered target are absent, and stock is never removed. A product whose target is lowered is cheaper until the next midnight. Because prices use integer division, a price can fall by one rounding step.
+
+**Evolution.** `evolve` writes the tuning onto the catalog, sets the content hash and adds the recorded top-up to market stock. It changes nothing else and does not recompute the top-up, so replay applies exactly what was recorded.
+
+**When each value takes effect.**
+
+- Stock and wholesale prices: at the event.
+- Arrivals and market replenishment: at the next game midnight. A day's arrival quotas and the market's replenishment are recorded per day by `day_closed`, so the day in progress keeps its recorded quotas and the next `day_closed` computes the new day from the retuned rules. A lowered target never removes stock.
+- Computer-run fallback and starter shifts: at the planner's next plan.
+
+**Replay, snapshots and pinned terms.** Events before the change replay under the old values because the catalog is part of state at each position. Accepted orders, leases, drafts and funding slices keep the terms they were accepted under. A guest's confirmed offer made before the change must be reconfirmed, as after a catalog expansion, because the content hash changed. Live, genesis replay and snapshot-tail replay agree across a retune; a snapshot taken after it holds the retuned catalog. The event codec allowlists the new event and keys, and the Postgres event store and snapshot decoder load the `Tuning` and `Retune` modules before safe term decoding, because `binary_to_term/2` with `:safe` refuses atoms of modules a fresh VM has not loaded.
+
+**A later catalog expansion.** `CatalogExpansion` merges only new definitions and keeps pinned values, so an expansion after a retune keeps the retuned tuning. A test pins this because start-up issues an expansion whenever a new launch version ships.
+
 ### Diners on the floor
 
 The [floor rule](GAME_DESIGN.md#diners-on-the-floor) is client presentation over two extra fields of the hall view. Nothing is stored, no event, command or catalog version is added, and the view is derived from committed state; a query writes nothing.
@@ -1135,6 +1157,9 @@ older versions cannot repeat the expansion or replenish stock again. Version 3
 also brings room data and the room rule to the pinned layout and the premium
 computer-run profile's preferred class; existing leases keep their spot and
 rent.
+Balance values change through a separate recorded event, described under
+[the recorded rule change](#the-recorded-rule-change); an expansion keeps
+values that change has set.
 
 The dining receipt query pages committed guest admission and settlement
 events through the event-store read port. PostgreSQL indexes the scoped
