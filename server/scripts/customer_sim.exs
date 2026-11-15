@@ -376,11 +376,37 @@ defmodule FeudHall.CustomerSim.Stats do
       check("A ref waiting 19:00-20:00", window(stats, [19], ref).waiting, 2.5, 4.5),
       check("A ref busy 12:00-13:00", window(stats, [12], ref).busy, 0.85, nil),
       check("A ref busy 19:00-20:00", window(stats, [19], ref).busy, 0.85, nil),
-      check("A ref waiting 09:00-11:00", window(stats, [9, 10], ref).waiting, 0.5, 2),
+      check("A ref waiting 10:00-11:00", window(stats, [10], ref).waiting, 0.5, 2),
       check("A ref waiting 14:00-17:00", window(stats, [14, 15, 16], ref).waiting, 0.5, 2),
       check("A hall waiting per stall 00:00-03:00", hall_window(stats, [0, 1, 2]), nil, 0.3),
-      check("A ref open instants short of an ingredient", short, nil, 0)
+      check("A ref open instants short of an ingredient", short, nil, 0),
+      open_check(stats, ref)
     ]
+  end
+
+  @checked_hours [10, 12, 14, 15, 16, 19]
+
+  @doc "The name of the run-A row that fails a run's exit status: a checked hour with the reference closed."
+  def open_check_name, do: "A ref open during checked hours"
+
+  # The share of samples in the checked hours in which the reference stall was
+  # open, with each hour's own share, so a closed target hour shows up by name.
+  defp open_check(stats, ref) do
+    per_hour =
+      Map.new(@checked_hours, fn hour ->
+        acc =
+          for day <- measured(stats), s = Map.get(stats.stall_hours, {day, hour, ref}), s != nil, reduce: {0, 0} do
+            {n, open} -> {n + s.samples, open + s.open}
+          end
+
+        {hour, acc}
+      end)
+
+    {n, open} = per_hour |> Map.values() |> Enum.reduce({0, 0}, fn {n, o}, {tn, to} -> {tn + n, to + o} end)
+
+    open_check_name()
+    |> check(ratio(open, n), 0.99, nil)
+    |> Map.put(:hours, Map.new(per_hour, fn {hour, {n, o}} -> {hour, round4(ratio(o, n))} end))
   end
 
   defp run_b(stats, total) do
@@ -465,7 +491,8 @@ defmodule FeudHall.CustomerSim.Hall do
   @moduledoc """
   Starts a managed launch hall authority in memory and drives it tick by tick.
 
-  Run A adds the reference owner at 09:00 of the warm-up day: a registered
+  Run A adds the reference owner at the start of its schedule (`hours`,
+  default 10:00-20:00) on the warm-up day: a registered
   principal admitted by the admin the way a seeded owner is, who then issues
   ordinary owner commands through `HallAuthority.management_execute/3`.
   `--via retune` applies the tuning with `retune_rules` at 12:00 of the
@@ -538,6 +565,7 @@ defmodule FeudHall.CustomerSim.Hall do
     {obs, counters} = Stats.observe(hall(authority), Stats.counters(), nil)
     stats = Stats.add(stats, obs)
     last = (opts.days + 1) * ticks_per_day()
+    {start, _finish} = hours = Map.get(opts, :hours, default_hours())
 
     {stats, _counters, reference} =
       Enum.reduce(1..last, {stats, counters, nil}, fn tick, {stats, counters, reference} ->
@@ -549,7 +577,9 @@ defmodule FeudHall.CustomerSim.Hall do
         end
 
         reference =
-          if opts.run == :a and tick == 9 * ticks_per_hour(), do: open_reference(authority), else: reference
+          if opts.run == :a and tick == start * ticks_per_hour(),
+            do: open_reference(authority, hours),
+            else: reference
 
         if opts.via == :retune and tick == 12 * ticks_per_hour() do
           admin(authority, "sim:retune", {:retune_rules, %{tuning: opts.tuning}})
@@ -576,7 +606,19 @@ defmodule FeudHall.CustomerSim.Hall do
       for({name, fields} <- Sink.records(table), do: {name, Map.take(fields, [:command_id, :reason])}) ++
         if served == 0, do: [{:never_served, %{}}], else: []
 
-    %{stats: stats, authority: authority, reference: reference, tuning: opts.tuning, problems: problems}
+    open = Enum.find(Stats.verdict(opts.run, stats), &(&1.check == Stats.open_check_name()))
+
+    problems =
+      if open && not open.pass, do: problems ++ [{:reference_closed_in_checked_hours, open.hours}], else: problems
+
+    %{
+      stats: stats,
+      authority: authority,
+      reference: reference,
+      tuning: opts.tuning,
+      hours: hours,
+      problems: problems
+    }
   end
 
   defp hall(authority), do: HallAuthority.state(authority).hall
@@ -591,10 +633,17 @@ defmodule FeudHall.CustomerSim.Hall do
   # The reference owner: registers, is admitted as a seeded owner is, leases
   # the first free standard spot in room 1 (by spot ID), creates a default
   # restaurant (its starter main at the suggested price, three starter staff),
-  # sets the staff to 09:00-21:00, trades unattended with no cash floor (the
+  # sets the staff schedule to `hours`, trades unattended with no cash floor (the
   # restock policy only runs for an unattended open stall), sets a restock
   # policy for every product of the starter main, and opens.
-  defp open_reference(authority) do
+  @doc """
+  The reference schedule unless `--hours` says otherwise: ten hours, the
+  longest the three starter staff work before their protective break (after
+  ten working hours), so the stall is open through both rush windows.
+  """
+  def default_hours, do: {10, 20}
+
+  defp open_reference(authority, {start, finish}) do
     state = hall(authority)
     cuisine = reference_cuisine(state)
     starter = state.catalog.recipes |> Map.values() |> Enum.find(&(&1.starter and &1.cuisine == cuisine))
@@ -611,7 +660,7 @@ defmodule FeudHall.CustomerSim.Hall do
       {:create_restaurant, %{stall_id: sid, restaurant_id: @restaurant, cuisine: cuisine, name: "Reference Kitchen"}}
     )
 
-    client(authority, "staff", {:set_staff_schedule, %{stall_id: sid, start_hour: 9, end_hour: 21}})
+    client(authority, "staff", {:set_staff_schedule, %{stall_id: sid, start_hour: start, end_hour: finish}})
     client(authority, "unattended", {:set_unattended_policy, %{stall_id: sid, enabled: true, cash_floor: 0}})
     policies = restock_policies(hall(authority), starter)
 
@@ -709,7 +758,7 @@ defmodule FeudHall.CustomerSim.CLI do
   @runs %{"a" => :a, "b" => :b}
   @vias %{"init" => :init, "retune" => :retune}
   @usage "usage: mix run --no-start scripts/customer_sim.exs -- --run a|b --tuning current|chosen|PATH " <>
-           "--days N --seed S [--via init|retune] [--set KEY=VALUE ...] [--json PATH]"
+           "--days N --seed S [--via init|retune] [--hours START-END] [--set KEY=VALUE ...] [--json PATH]"
 
   def main(argv) do
     started = System.monotonic_time(:millisecond)
@@ -720,7 +769,7 @@ defmodule FeudHall.CustomerSim.CLI do
 
       IO.puts(
         "Run #{args.run}, tuning #{args.tuning}#{sets} (version #{tuning.version}), via #{args.via}, seed #{args.seed}, " <>
-          "1 warm-up day + #{args.days} measured"
+          "1 warm-up day + #{args.days} measured, reference hours #{hours_label(args.hours)}"
       )
 
       opts = %{
@@ -729,6 +778,7 @@ defmodule FeudHall.CustomerSim.CLI do
         via: args.via,
         days: args.days,
         seed: args.seed,
+        hours: args.hours,
         progress: &progress(&1, args.days)
       }
 
@@ -758,7 +808,16 @@ defmodule FeudHall.CustomerSim.CLI do
   def parse(argv) do
     argv = Enum.drop_while(argv, &(&1 == "--"))
 
-    strict = [run: :string, tuning: :string, days: :integer, seed: :integer, via: :string, set: :keep, json: :string]
+    strict = [
+      run: :string,
+      tuning: :string,
+      days: :integer,
+      seed: :integer,
+      via: :string,
+      hours: :string,
+      set: :keep,
+      json: :string
+    ]
 
     case OptionParser.parse(argv, strict: strict) do
       {opts, [], []} ->
@@ -769,7 +828,8 @@ defmodule FeudHall.CustomerSim.CLI do
           seed: Keyword.get(opts, :seed, LaunchCatalog.catalog().rules.seed),
           via: Keyword.get(opts, :via, "init"),
           set: Keyword.get_values(opts, :set),
-          json: opts[:json]
+          json: opts[:json],
+          hours: parse_hours(Keyword.get(opts, :hours))
         }
 
         cond do
@@ -777,6 +837,7 @@ defmodule FeudHall.CustomerSim.CLI do
           args.via not in ["init", "retune"] -> {:error, "--via must be init or retune\n" <> @usage}
           args.days < 0 or args.days > @max_days -> {:error, "--days must be 0..#{@max_days}\n" <> @usage}
           args.seed < 0 -> {:error, "--seed must be non-negative\n" <> @usage}
+          args.hours == :error -> {:error, "--hours must be START-END, two hall hours in 0..23 that differ\n" <> @usage}
           true -> {:ok, %{args | run: @runs[args.run], via: @vias[args.via]}}
         end
 
@@ -784,6 +845,21 @@ defmodule FeudHall.CustomerSim.CLI do
         {:error, "unrecognised arguments #{inspect(rest ++ Enum.map(invalid, &elem(&1, 0)))}\n" <> @usage}
     end
   end
+
+  defp parse_hours(nil), do: Hall.default_hours()
+
+  defp parse_hours(text) do
+    with [a, b] <- String.split(text, "-"),
+         {start, ""} <- Integer.parse(a),
+         {finish, ""} <- Integer.parse(b),
+         true <- start in 0..23 and finish in 0..23 and start != finish do
+      {start, finish}
+    else
+      _ -> :error
+    end
+  end
+
+  def hours_label({start, finish}), do: "#{pad(start)}:00-#{pad(finish)}:00"
 
   @doc "The tuning named by `source` with every `KEY=VALUE` override applied, validated against the launch catalog."
   def tuning(source, sets) do
@@ -878,6 +954,7 @@ defmodule FeudHall.CustomerSim.CLI do
       tuning_source: args.tuning,
       set: args.set,
       tuning: result.tuning,
+      reference_hours: Tuple.to_list(result.hours),
       git_commit: git_commit(),
       reference:
         result.reference && Map.take(result.reference, [:stall_id, :restaurant_id, :cuisine, :recipe, :restock]),
@@ -959,7 +1036,8 @@ defmodule FeudHall.CustomerSim.CLI do
       bounds = "#{if row.low == nil, do: "-", else: row.low}..#{if row.high == nil, do: "-", else: row.high}"
 
       IO.puts(
-        "  #{if row.pass, do: "PASS", else: "FAIL"}  #{String.pad_trailing(row.check, 52)} #{row.value}  [#{bounds}]"
+        "  #{if row.pass, do: "PASS", else: "FAIL"}  #{String.pad_trailing(row.check, 52)} #{row.value}  [#{bounds}]" <>
+          if(row[:hours], do: "  open share by hour " <> reasons(row.hours), else: "")
       )
     end
   end

@@ -82,6 +82,24 @@ defmodule FeudHall.CustomerSimTest do
 
     assert %{value: 0.26, pass: false} =
              row(Stats.verdict(:b, left.(26, 74)), "B nothing_available share of left on arrival")
+
+    # The mid-morning window is hour 10 alone: hour 9 samples do not count.
+    morning = base |> feed(9, [{0, false}, {0, false}]) |> feed(10, [{1, true}])
+    assert %{value: 1.0, low: 0.5, high: 2, pass: true} = row(Stats.verdict(:a, morning), "A ref waiting 10:00-11:00")
+    refute Enum.any?(Stats.verdict(:a, morning), &(&1.check == "A ref waiting 09:00-11:00"))
+    afternoon = feed(base, 14, [{0, false}]) |> feed(17, [{9, true}])
+    assert %{value: +0.0, pass: false} = row(Stats.verdict(:a, afternoon), "A ref waiting 14:00-17:00")
+  end
+
+  test "the open-during-checked-hours row fails on any closed checked hour" do
+    base = Stats.new(%{measured_days: 1, reference: "ref"})
+    open = fn stats, hour, open? -> Stats.add(stats, sample(1, hour, %{"ref" => %{stall(1, true) | open: open?}})) end
+    all_open = Enum.reduce([10, 12, 14, 15, 16, 19], base, &open.(&2, &1, true))
+    assert %{value: 1.0, low: 0.99, pass: true} = row(Stats.verdict(:a, all_open), "A ref open during checked hours")
+    one_closed = Enum.reduce([10, 12, 14, 15, 16], base, &open.(&2, &1, true)) |> open.(19, false)
+
+    assert %{pass: false, hours: %{19 => +0.0, 12 => 1.0}} =
+             row(Stats.verdict(:a, one_closed), "A ref open during checked hours")
   end
 
   @tag timeout: 180_000
@@ -106,14 +124,15 @@ defmodule FeudHall.CustomerSimTest do
   end
 
   @tag timeout: 180_000
-  test "run A's reference stall is a standard spot in room 1, open 09:00 to 21:00, with three staff" do
+  test "run A's reference stall is a standard spot in room 1, open 10:00 to 20:00 by default, with three staff" do
     result = run!(%{run: :a})
     state = HallAuthority.state(result.authority).hall
     sid = result.reference.stall_id
     assert state.layout[sid] == :standard
     assert Rooms.room(state, sid) == 1
     lease = state.management.leases[sid]
-    assert {lease.start_hour, lease.end_hour} == {9, 21}
+    assert {lease.start_hour, lease.end_hour} == {10, 20}
+    assert result.hours == {10, 20}
     assert map_size(lease.workers) == 3
     assert lease.unattended
     restaurant = state.restaurants[state.stalls[sid].restaurant]
@@ -126,6 +145,44 @@ defmodule FeudHall.CustomerSimTest do
     refute result.reference.cuisine in npc_cuisines
     assert map_size(state.stalls) == 4
     assert Stats.day_served(result.stats, 0) > 0
+  end
+
+  @tag timeout: 180_000
+  test "--hours 9-21 closes the reference at 19:00; the default keeps it open through every checked hour" do
+    long = run!(%{run: :a, days: 1, hours: {9, 21}})
+    long_row = row(Stats.verdict(:a, long.stats), "A ref open during checked hours")
+    assert %{pass: false} = long_row
+    assert long_row.hours[19] == 0.0
+    assert long_row.hours[12] == 1.0
+    assert {:reference_closed_in_checked_hours, _} = List.keyfind(long.problems, :reference_closed_in_checked_hours, 0)
+
+    default = run!(%{run: :a, days: 1})
+    assert %{pass: true, value: 1.0} = row(Stats.verdict(:a, default.stats), "A ref open during checked hours")
+    assert default.problems == []
+    sid = default.reference.stall_id
+    {store_mod, store} = HallAuthority.store(default.authority)
+    {:ok, batches} = store_mod.read_from(store, 0)
+    # Before 20:00: the staff reach ten working hours exactly at closing, which closes nothing.
+    day1_until_20 = Clock.day()..(Clock.day() + 20 * Clock.hour() - 1)
+
+    breaks =
+      for batch <- batches,
+          batch.hall_ms in day1_until_20,
+          %{type: :staff_condition_changed, stall_id: ^sid, condition: :protective_break} <- batch.events,
+          do: batch.hall_ms
+
+    assert breaks == []
+    long_sid = long.reference.stall_id
+    {long_mod, long_store} = HallAuthority.store(long.authority)
+    {:ok, long_batches} = long_mod.read_from(long_store, 0)
+
+    long_breaks =
+      for batch <- long_batches,
+          batch.hall_ms in day1_until_20,
+          %{type: :staff_condition_changed, stall_id: ^long_sid, condition: :protective_break} <- batch.events,
+          do: batch.hall_ms
+
+    assert (Clock.day() + 19 * Clock.hour()) in long_breaks
   end
 
   @tag timeout: 180_000
