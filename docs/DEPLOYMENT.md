@@ -451,3 +451,55 @@ and JSON fields `command_id` and `principal`. The seed account receives its
 three invitations and the explicit reviewer capability through the same event
 store as other accounts. Unset the operator key and restart after seeding
 when the endpoint is no longer required. Use the seeded account to issue codes.
+
+## Applying the customer tuning
+
+The [customer tuning](superpowers/reports/2026-11-15-more-real-customers.md#the-chosen-values)
+brings more diners, larger wholesale stock and a changed computer-run planner
+(see the report for the values). No release, start-up or recovery applies it,
+including a start-up of a new hall or of an existing one. An operator applies
+it to a hall once, on purpose, with a request to `POST /api/operator/retune`.
+It records one `hall_rules_retuned` event, and it cannot be undone: the event
+stays in the hall's history, and a restore of an earlier backup is the only way
+back. The owner has not yet decided whether costs should rise with the extra
+customers; read
+[the report's section for the owner's attention](superpowers/reports/2026-11-15-more-real-customers.md#for-the-owners-attention)
+and the [profit tables](superpowers/reports/2026-11-15-more-real-customers.md#profit)
+before applying it to a hall players use.
+
+1. Take a database backup first, as described under
+   [Rollback, interruption, and restore](#rollback-interruption-and-restore)
+   and in the backup notes of the [local management game](#local-management-game).
+2. Send the request with the operator secret (the value of
+   `FEUD_HALL_ADMIN_KEY`; never paste a real key into notes or a shared shell
+   history). Use a new `command_id` for a new attempt and keep it: repeating the
+   same request returns the original receipt without a second change.
+
+   ```sh
+   curl -sS -X POST "$FEUD_HALL_ORIGIN/api/operator/retune" \
+     -H "Authorization: Bearer $FEUD_HALL_ADMIN_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"command_id": "operator-retune:2", "version": 2}'
+   ```
+
+   `version` must equal the tuning version the release carries (2 for this
+   tuning). Any other value, or a missing or non-integer one, is refused with
+   `unknown_tuning_version` (HTTP 422) and nothing is recorded. A missing or
+   wrong key, or a body without a text `command_id`, is refused with HTTP 403
+   `forbidden`. A hall that cannot take the change, or already has this
+   version or a newer one, answers `{"accepted": false, "reason":
+   "retune_unavailable"}` and records nothing.
+3. What changes at once: wholesale stock is topped up in the same event, so
+   prices do not jump, and the computer-run planner's new values apply at its
+   next plan. What changes at the next game midnight: the diner arrival rate and
+   the wholesale replenishment. A guest partway through checkout must
+   reconfirm, as after a catalog expansion.
+4. Confirm it took effect. A repeat of the request answers `{"accepted": true}`
+   with the same `position`. In the database, the event exists:
+
+   ```sh
+   psql "$DATABASE_URL" -c "select position, type, hall_ms from events where type = 'hall_rules_retuned'"
+   ```
+
+   Exactly one row means it was applied once. After the next game midnight,
+   compare the day's `diner_arrived` count with the days before it.

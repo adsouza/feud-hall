@@ -1,5 +1,6 @@
 defmodule FeudHall.Web.Router do
   use Plug.Router
+  alias FeudHall.Domain.Content.Tuning
   alias FeudHall.Infrastructure.HallAuthority
   alias FeudHall.Web.{Protocol, RateLimit, Token}
 
@@ -79,6 +80,34 @@ defmodule FeudHall.Web.Router do
           command: {:seed_owner, %{principal: principal, reviewer?: true}}
         })
       end)
+    else
+      _ -> respond(conn, 403, %{error: :forbidden})
+    end
+  end
+
+  # The one deliberate way to apply the customer tuning (Tuning.chosen/0) to a hall. Nothing
+  # else issues or schedules `retune_rules`; booting a hall never does.
+  post "/api/operator/retune" do
+    configured = Application.fetch_env!(:feud_hall, __MODULE__)[:admin_key]
+    provided = get_req_header(conn, "authorization")
+    chosen = Tuning.chosen()
+
+    with key when is_binary(key) and byte_size(key) >= 32 <- configured,
+         ["Bearer " <> candidate] <- provided,
+         true <- Plug.Crypto.secure_compare(candidate, key),
+         %{"command_id" => id} <- conn.body_params,
+         true <- is_binary(id) do
+      if conn.body_params["version"] === chosen.version do
+        run(conn, fn ->
+          HallAuthority.execute(authority(), %{
+            command_id: id,
+            actor: {:system, :admin},
+            command: {:retune_rules, %{tuning: chosen}}
+          })
+        end)
+      else
+        respond(conn, 422, %{error: :unknown_tuning_version})
+      end
     else
       _ -> respond(conn, 403, %{error: :forbidden})
     end
