@@ -110,6 +110,23 @@ defmodule FeudHall.Domain.TuningTest do
       assert targets["milk_powder"] == 1_400
     end
 
+    # `chosen/0` rebuilds its market values from the launch catalog's recipes on every call, so
+    # a catalog change would silently change what "version 2" means. This pins the values that
+    # were measured (docs/superpowers/reports/2026-11-15-more-real-customers.md).
+    #
+    # If this fails because the launch catalog changed, do not update the fingerprint blindly:
+    # the chosen values must be re-measured with the customer driver, or the change must go out
+    # as a new tuning version, because halls may already have been retuned to these values.
+    test "is exactly the measured set of values" do
+      chosen = Tuning.chosen()
+      targets = chosen.market.target_stock_per_equivalent
+      assert map_size(targets) == 274
+      assert targets |> Map.values() |> Enum.sum() == 1_663_800
+      assert chosen.market.replenish_cap |> Map.values() |> Enum.sum() == 4 * 1_663_800
+
+      assert Content.hash(chosen) == "cd0c23dfc036704500f7f712d11890372bf0ee18e8f556b48fcd6587fc235685"
+    end
+
     test "changes only the fallback and two starter shifts for computer-run owners" do
       assert Tuning.chosen().npc == %{
                fallback_trays_per_day: 50,
