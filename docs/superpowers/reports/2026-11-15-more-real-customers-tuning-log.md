@@ -9,8 +9,12 @@ day and three measured game days unless the line says otherwise:
 
 Runs 1 to 76 were made at commit 316500e plus the working tree that became
 509fe03. Runs 77 onward were made with the driver's reference-cuisine rule
-changed (see **Reference** below) and, from run 95, with the final values in
-`Tuning.chosen/0`.
+changed (see **Reference** below). Runs 95 to 124 were made with the sharper
+day shape (252 arrivals, rush weights 34 and 33) in `Tuning.chosen/0`. Runs
+125 onward were made in the final fix wave, after the final review: the
+gentler day shape (248 arrivals, rush weights 30 and 28) is in
+`Tuning.chosen/0`, and the driver has `--extra-stalls` and prints each day's
+recorded equivalents and scale.
 
 ## How to read a line
 
@@ -22,6 +26,11 @@ changed (see **Reference** below) and, from run 95, with the final values in
 - `median`: runs 77 onward. The driver takes the unused cuisine whose starter
   has the median suggested price, `colombian` (`arepa_con_queso`, 940).
 - `salmon (--cuisine)`: `--cuisine coast_salish` on the current driver.
+- `mexican (--cuisine)`: `--cuisine mexican`, whose starter `bean_tacos` costs
+  850, the cheapest among the unused cuisines.
+- `median + N extra`: the median reference plus `--extra-stalls N`: N more
+  owner stalls set up like the reference, on `javanese` (940), `yoruba` (930),
+  `sichuan` (950), `ethiopian` (920) and `european` (920), in that order.
 - `european (scratch)`: run 21 only, on a scratch copy of the old driver.
 
 **Tuning** is a difference from today's values (`Tuning.of(LaunchCatalog.catalog())`):
@@ -40,10 +49,22 @@ changed (see **Reference** below) and, from run 95, with the final values in
   249; weights 3,2,1,0,0,2,3,5,7,9,15,19,24,19,14,14,14,15,19,24,16,11,8,5;
   market 100; fallback 50; shifts mainstream 11-23, premium 17-3`. Runs 41 to
   46 are the same values before they were written into the code.
-- `final chosen values`: `Tuning.chosen/0` now: the same except `arrivals 252;
-  weights 3,2,1,0,0,2,3,5,7,8,11,19,34,17,12,12,12,14,19,33,15,10,8,5`. Runs
-  89 to 94 are the same values before they were written into the code, and
-  runs 95 to 100 repeat them through `--tuning chosen` with identical results.
+- `final chosen values` (runs 95 to 124): `Tuning.chosen/0` as it stood from
+  commit c1ff801 until the final fix wave: the first chosen values except
+  `arrivals 252; weights
+  3,2,1,0,0,2,3,5,7,8,11,19,34,17,12,12,12,14,19,33,15,10,8,5`. Runs 89 to 94
+  are the same values before they were written into the code, and runs 95 to
+  100 repeat them through `--tuning chosen` with identical results. These
+  values are now the **sharper alternative**; they are no longer what
+  `--tuning chosen` gives.
+- `final chosen values (gentler shape)` (runs 125 onward): `Tuning.chosen/0`
+  now: the first chosen values except `arrivals 248; weights
+  3,2,1,0,0,2,3,5,7,9,11,19,30,19,12,12,12,14,19,28,16,11,8,5`. Runs 83 to 88
+  are the same values through `--set` before they were written into the code;
+  runs 125 to 130 repeat them through `--tuning chosen`, and every verdict row
+  and every count is identical to runs 83 to 88.
+- `sharper alternative: chosen values with --set …` (runs 154 and 155): the
+  sharper values rebuilt from the current `Tuning.chosen/0`.
 - `--set KEY=VALUE` is the driver's own override.
 
 Exploratory tunings were passed as `--tuning FILE`, a file holding one Elixir
@@ -86,7 +107,7 @@ targets =
 }
 ```
 
-The market reverts (runs 62 and 104) used a file holding
+The market reverts (runs 62, 104 and 138) used a file holding
 `%{Tuning.chosen() | market: Tuning.of(LaunchCatalog.catalog()).market}`.
 
 **Verdict** lists the driver's verdict rows over the measured days; `!`
@@ -104,9 +125,16 @@ marks a row outside its bound:
 | `na_share` | B nothing_available share of left on arrival | at most 0.25 |
 | `day0` | B mains served on day 0 | at least 1 |
 | `share` | served share (mains served / arrivals) | none; compared with today's |
+| `ow12`, `ow19` | A mean over the owner stalls (the reference and any extras) of orders waiting 12:00-13:00, 19:00-20:00; from run 125 | none; reported |
 
 **Measured** is the total over the measured days: arrivals, mains served, and
-arrivals who left without ordering, by reason.
+arrivals who left without ordering, by reason. From run 125 a line also gives
+`main_failed` (admitted orders that ended with no main served), and each
+measured day's business equivalents and the scale its arrivals used, both read
+from the recorded `day_closed` events (the floor is 3.000). A line with extra
+stalls adds the arrivals a day in the 12:00 hour, the stalls open in that hour
+and the first divided by the second, and the mean daily profit of the
+reference stall and of each extra stall.
 
 ## Runs
 
@@ -224,6 +252,37 @@ arrivals who left without ordering, by reason.
 | 110 | A | 20261109 | salmon (--cuisine) | today's values | w12=0.3733! w19=0.4333! b12=0.3111! b19=0.4089! w10=0.1533! w14-17=0.2215! night=0.067 short=31! open=1.0 share=0.379 | arrivals 810, served 307; left on arrival: chose_to_leave:1, no_compatible_main:3, nothing_affordable:280, nothing_available:138, wait_too_long:80 | REPRODUCTION CHECK: run 1 through --cuisine coast_salish on the current driver |
 | 111 | A | 20261109 | median | final chosen values; --set demand.arrivals_per_equivalent=249 --set demand.hourly_weights=3,2,1,0,0,2,3,5,7,9,15,19,24,19,14,14,14,15,19,24,16,11,8,5 | w12=2.1044! w19=2.5178 b12=0.9511 b19=0.9644 w10=1.9156 w14-17=1.3785 night=0.0815 short=0 open=1.0 share=0.5319 | arrivals 2241, served 1192; left on arrival: chose_to_leave:2, no_compatible_main:64, no_open_stall:3, nothing_affordable:587, nothing_available:3, wait_too_long:363 | REPRODUCTION CHECK: run 77 (flat shape) through --set on the final chosen values |
 | 124 | A | 20261109 | median | final chosen values; --hours 9-21 | w12=3.1267 w19=0.5222! b12=1.0 b19=0.0289! w10=1.2822 w14-17=1.0815 night=0.1285 short=0 open=0.8333! share=0.5075 | arrivals and reasons not recorded (the controller kept only the verdict rows) | RUN BY THE CONTROLLER at commit 3442eb8, after the task: the design's 09:00-21:00 schedule; open share by hour 10:1.0, 12:1.0, 14:1.0, 15:1.0, 16:1.0, 19:0.0; exit status 1 by design |
+| 125 | A | 20261109 | median | final chosen values (gentler shape) | w12=3.2467 w19=2.76 b12=1.0 b19=0.9956 w10=1.0444 w14-17=1.0119 night=0.0607 short=0 open=1.0 ow12=3.2467 ow19=2.76 share=0.522 | arrivals 2232, served 1165; left on arrival: chose_to_leave:2, no_compatible_main:63, nothing_affordable:615, nothing_available:3, wait_too_long:349; main_failed 33; equivalents by day 1.890/1.884/1.888; scale by day 3.000/3.000/3.000 | FINAL FIX WAVE: --tuning chosen, via init |
+| 126 | A | 7 | median | final chosen values (gentler shape) | w12=2.4511! w19=2.5378 b12=0.9978 b19=0.9533 w10=1.4178 w14-17=1.0348 night=0.0815 short=0 open=1.0 ow12=2.4511 ow19=2.5378 share=0.5314 | arrivals 2232, served 1186; left on arrival: no_compatible_main:70, no_open_stall:2, nothing_affordable:564, nothing_available:3, wait_too_long:384; main_failed 21; equivalents by day 1.895/1.881/1.896; scale by day 3.000/3.000/3.000 | FINAL FIX WAVE: --tuning chosen, via init |
+| 127 | A | 12345 | median | final chosen values (gentler shape) | w12=3.0467 w19=3.1533 b12=1.0 b19=0.9756 w10=1.0289 w14-17=0.9807 night=0.1235 short=0 open=1.0 ow12=3.0467 ow19=3.1533 share=0.522 | arrivals 2232, served 1165; left on arrival: chose_to_leave:1, no_compatible_main:69, no_open_stall:1, nothing_affordable:580, nothing_available:3, wait_too_long:391; main_failed 23; equivalents by day 1.885/1.901/1.882; scale by day 3.000/3.000/3.000 | FINAL FIX WAVE: --tuning chosen, via init |
+| 128 | B | 20261109 | - | final chosen values (gentler shape) | na_share=0.0023 day0=305 share=0.4108 | arrivals 2232, served 917; left on arrival: chose_to_leave:2, no_compatible_main:72, no_open_stall:14, nothing_affordable:599, nothing_available:3, wait_too_long:602; main_failed 22; equivalents by day 1.437/1.403/1.385; scale by day 3.000/3.000/3.000 | FINAL FIX WAVE: --tuning chosen, via init |
+| 129 | B | 7 | - | final chosen values (gentler shape) | na_share=0.0023 day0=299 share=0.4131 | arrivals 2232, served 922; left on arrival: chose_to_leave:1, no_compatible_main:71, no_open_stall:34, nothing_affordable:546, nothing_available:3, wait_too_long:631; main_failed 25; equivalents by day 1.405/1.385/1.390; scale by day 3.000/3.000/3.000 | FINAL FIX WAVE: --tuning chosen, via init |
+| 130 | B | 12345 | - | final chosen values (gentler shape) | na_share=0.0015 day0=304 share=0.3947 | arrivals 2232, served 881; left on arrival: chose_to_leave:1, no_compatible_main:73, no_open_stall:33, nothing_affordable:608, nothing_available:2, wait_too_long:620; main_failed 13; equivalents by day 1.408/1.379/1.419; scale by day 3.000/3.000/3.000 | FINAL FIX WAVE: --tuning chosen, via init |
+| 131 | A | 424242 | median | final chosen values (gentler shape) | w12=2.3311! w19=3.0044 b12=0.9756 b19=1.0 w10=0.9667 w14-17=1.0467 night=0.093 short=0 open=1.0 ow12=2.3311 ow19=3.0044 share=0.5237 | arrivals 2232, served 1169; left on arrival: chose_to_leave:3, no_compatible_main:70, no_open_stall:1, nothing_affordable:603, nothing_available:3, wait_too_long:357; main_failed 25; equivalents by day 1.887/1.901/1.892; scale by day 3.000/3.000/3.000 | HELD-OUT SEED (never used for selection): chosen values |
+| 132 | B | 424242 | - | final chosen values (gentler shape) | na_share=0.0023 day0=304 share=0.4055 | arrivals 2232, served 905; left on arrival: chose_to_leave:3, no_compatible_main:71, no_open_stall:44, nothing_affordable:553, nothing_available:3, wait_too_long:631; main_failed 23; equivalents by day 1.377/1.381/1.399; scale by day 3.000/3.000/3.000 | HELD-OUT SEED (never used for selection): chosen values |
+| 133 | A | 424242 | median | today's values | w12=0.58! w19=0.0! b12=0.4822! b19=0.0! w10=0.4044! w14-17=0.0! night=0.0344 short=3383! open=1.0 ow12=0.58 ow19=0.0 share=0.3951 | arrivals 810, served 320; left on arrival: no_compatible_main:2, nothing_affordable:283, nothing_available:128, wait_too_long:76; main_failed 0; equivalents by day 1.269/1.349/1.364; scale by day 3.000/3.000/3.000 | HELD-OUT SEED (never used for selection): today's values |
+| 134 | B | 424242 | - | today's values | na_share=0.3047! day0=88 share=0.3395 | arrivals 810, served 275; left on arrival: no_compatible_main:1, nothing_affordable:276, nothing_available:163, wait_too_long:95; main_failed 0; equivalents by day 1.090/1.138/1.199; scale by day 3.000/3.000/3.000 | HELD-OUT SEED (never used for selection): today's values |
+| 135 | A | 20261109 | median | final chosen values (gentler shape); applied by --via retune | w12=2.5978 w19=2.8889 b12=0.9333 b19=1.0 w10=0.9022 w14-17=1.1 night=0.1009 short=10! open=1.0 ow12=2.5978 ow19=2.8889 share=0.5242 | arrivals 2232, served 1170; left on arrival: chose_to_leave:1, no_compatible_main:81, nothing_affordable:577, nothing_available:15, wait_too_long:368; main_failed 20; equivalents by day 1.894/1.884/1.899; scale by day 3.000/3.000/3.000 | FINAL FIX WAVE: chosen applied by the recorded change at 12:00 of the warm-up day |
+| 136 | A | 20261109 | median | final chosen values (gentler shape); 14 measured days | w12=3.0871 w19=2.6238 b12=0.9929 b19=0.9957 w10=1.2762 w14-17=1.0849 night=0.0898 short=0 open=1.0 ow12=3.0871 ow19=2.6238 share=0.518 | arrivals 10416, served 5396; left on arrival: chose_to_leave:10, no_compatible_main:281, no_open_stall:3, nothing_affordable:2758, nothing_available:13, wait_too_long:1824; main_failed 131; equivalents 1.876 to 1.899; scale 3.000 to 3.000 | FINAL FIX WAVE: 14 measured days, through the wrapper (ledger and cancelled trays) |
+| 137 | A | 20261109 | median | final chosen values (gentler shape); --set demand.arrivals_per_equivalent=90 | w12=0.7956! w19=0.6689! b12=0.6289! b19=0.5356! w10=0.2978! w14-17=0.2607! night=0.045 short=0 open=1.0 ow12=0.7956 ow19=0.6689 share=0.6173 | arrivals 810, served 500; left on arrival: chose_to_leave:1, no_compatible_main:30, nothing_affordable:198, wait_too_long:75; main_failed 7; equivalents by day 1.902/1.902/1.902; scale by day 3.000/3.000/3.000 | SENSITIVITY: arrivals per equivalent back at 90 |
+| 138 | B | 20261109 | - | final chosen values (gentler shape) with the market targets and caps at today's values | na_share=0.6027! day0=85 share=0.1452 | arrivals 2232, served 324; left on arrival: chose_to_leave:1, no_compatible_main:2, nothing_affordable:533, nothing_available:1150, wait_too_long:222; main_failed 0; equivalents by day 0.657/0.618/0.611; scale by day 3.000/3.000/3.000 | SENSITIVITY: market targets and caps back at today's |
+| 139 | A | 20261109 | salmon (--cuisine) | final chosen values (gentler shape) | w12=1.5622! w19=1.8467! b12=0.8778 b19=0.7667! w10=0.7444 w14-17=0.5615 night=0.0965 short=0 open=1.0 ow12=1.5622 ow19=1.8467 share=0.4624 | arrivals 2232, served 1032; left on arrival: chose_to_leave:3, no_compatible_main:25, nothing_affordable:638, nothing_available:3, wait_too_long:506; main_failed 25; equivalents by day 1.883/1.887/1.868; scale by day 3.000/3.000/3.000 | HARDER BRACKET: --cuisine coast_salish (roasted_salmon, 1220, second dearest unused starter) |
+| 140 | A | 7 | salmon (--cuisine) | final chosen values (gentler shape) | w12=2.1644! w19=1.4156! b12=0.96 b19=0.8489! w10=0.9467 w14-17=0.5133 night=0.0909 short=0 open=1.0 ow12=2.1644 ow19=1.4156 share=0.4915 | arrivals 2232, served 1097; left on arrival: chose_to_leave:2, no_compatible_main:20, no_open_stall:3, nothing_affordable:586, nothing_available:3, wait_too_long:498; main_failed 23; equivalents by day 1.885/1.873/1.874; scale by day 3.000/3.000/3.000 | HARDER BRACKET: --cuisine coast_salish (roasted_salmon, 1220, second dearest unused starter) |
+| 141 | A | 12345 | salmon (--cuisine) | final chosen values (gentler shape) | w12=1.7889! w19=1.82! b12=0.8733 b19=0.9222 w10=0.6511 w14-17=0.8259 night=0.098 short=0 open=1.0 ow12=1.7889 ow19=1.82 share=0.4816 | arrivals 2232, served 1075; left on arrival: chose_to_leave:3, no_compatible_main:20, nothing_affordable:609, nothing_available:3, wait_too_long:503; main_failed 19; equivalents by day 1.891/1.888/1.893; scale by day 3.000/3.000/3.000 | HARDER BRACKET: --cuisine coast_salish (roasted_salmon, 1220, second dearest unused starter) |
+| 142 | A | 20261109 | mexican (--cuisine) | final chosen values (gentler shape) | w12=3.7511 w19=4.2511 b12=1.0 b19=1.0 w10=1.3111 w14-17=1.26 night=0.0728 short=0 open=1.0 ow12=3.7511 ow19=4.2511 share=0.5228 | arrivals 2232, served 1167; left on arrival: chose_to_leave:1, no_compatible_main:67, nothing_affordable:573, nothing_available:3, wait_too_long:393; main_failed 27; equivalents by day 1.893/1.894/1.891; scale by day 3.000/3.000/3.000 | EASIER BRACKET: --cuisine mexican (bean_tacos, 850, cheapest unused starter) |
+| 143 | A | 7 | mexican (--cuisine) | final chosen values (gentler shape) | w12=3.5333 w19=3.58 b12=0.9911 b19=1.0 w10=1.3644 w14-17=1.503 night=0.0941 short=0 open=1.0 ow12=3.5333 ow19=3.58 share=0.5314 | arrivals 2232, served 1186; left on arrival: chose_to_leave:1, no_compatible_main:73, no_open_stall:1, nothing_affordable:552, nothing_available:3, wait_too_long:396; main_failed 22; equivalents by day 1.896/1.886/1.897; scale by day 3.000/3.000/3.000 | EASIER BRACKET: --cuisine mexican (bean_tacos, 850, cheapest unused starter) |
+| 144 | A | 12345 | mexican (--cuisine) | final chosen values (gentler shape) | w12=3.3867 w19=3.2956 b12=1.0 b19=1.0 w10=1.4511 w14-17=1.4844 night=0.133 short=0 open=1.0 ow12=3.3867 ow19=3.2956 share=0.5399 | arrivals 2232, served 1205; left on arrival: chose_to_leave:3, no_compatible_main:60, nothing_affordable:552, nothing_available:3, wait_too_long:387; main_failed 23; equivalents by day 1.896/1.887/1.893; scale by day 3.000/3.000/3.000 | EASIER BRACKET: --cuisine mexican (bean_tacos, 850, cheapest unused starter) |
+| 145 | A | 20261109 | median + 1 extra | final chosen values (gentler shape); --extra-stalls 1 | w12=1.6556! w19=2.12! b12=0.92 b19=0.92 w10=0.4911! w14-17=0.8141 night=0.0699 short=0 open=1.0 ow12=2.0367 ow19=2.05 share=0.5645 | arrivals 2232, served 1260; left on arrival: chose_to_leave:1, no_compatible_main:61, no_open_stall:4, nothing_affordable:599, nothing_available:3, wait_too_long:282; main_failed 21; equivalents by day 2.356/2.349/2.346; scale by day 3.000/3.000/3.000; noon arrivals a day 90.0 over 4.00 open stalls = 22.50 per stall; mean daily profit: reference 46078; extra-1 (javanese, 940) 43702 | MORE STALLS: 1 extra owner stall beside the reference |
+| 146 | A | 20261109 | median + 2 extra | final chosen values (gentler shape); --extra-stalls 2 | w12=1.3489! w19=1.3556! b12=0.8578 b19=0.8289! w10=0.7089 w14-17=0.5726 night=0.0662 short=0 open=1.0 ow12=1.3941 ow19=1.6044 share=0.5757 | arrivals 2232, served 1285; left on arrival: chose_to_leave:4, no_compatible_main:71, no_open_stall:4, nothing_affordable:596, nothing_available:3, wait_too_long:242; main_failed 26; equivalents by day 2.810/2.799/2.806; scale by day 3.000/3.000/3.000; noon arrivals a day 90.0 over 5.00 open stalls = 18.00 per stall; mean daily profit: reference 32469; extra-1 (javanese, 940) 29341, extra-2 (yoruba, 930) 19187 | MORE STALLS: 2 extra owner stalls beside the reference |
+| 147 | A | 20261109 | median + 3 extra | final chosen values (gentler shape); --extra-stalls 3 | w12=1.0844! w19=1.4911! b12=0.7733! b19=0.8511 w10=0.4711! w14-17=0.5007 night=0.0661 short=0 open=1.0 ow12=1.0611 ow19=1.4089 share=0.5676 | arrivals 2366, served 1343; left on arrival: chose_to_leave:2, no_compatible_main:72, no_open_stall:3, nothing_affordable:611, nothing_available:3, wait_too_long:309; main_failed 22; equivalents by day 3.264/3.256/3.263; scale by day 3.023/3.264/3.256; noon arrivals a day 95.0 over 6.00 open stalls = 15.83 per stall; mean daily profit: reference 25789; extra-1 (javanese, 940) 19331, extra-2 (yoruba, 930) 12438, extra-3 (sichuan, 950) 24064 | MORE STALLS: 3 extra owner stalls beside the reference |
+| 148 | A | 20261109 | median + 5 extra | final chosen values (gentler shape); --extra-stalls 5 | w12=1.3689! w19=1.2444! b12=0.8711 b19=0.8889 w10=0.3533! w14-17=0.6111 night=0.0616 short=0 open=1.0 ow12=1.3204 ow19=1.2693 share=0.5623 | arrivals 3016, served 1696; left on arrival: chose_to_leave:3, no_compatible_main:81, no_open_stall:21, nothing_affordable:777, nothing_available:9, wait_too_long:397; main_failed 31; equivalents by day 4.171/4.158/4.138; scale by day 3.835/4.171/4.158; noon arrivals a day 121.7 over 8.00 open stalls = 15.21 per stall; mean daily profit: reference 34077; extra-1 (javanese, 940) 20754, extra-2 (yoruba, 930) 9636, extra-3 (sichuan, 950) 30396, extra-4 (ethiopian, 920) 14725, extra-5 (european, 920) 11632 | MORE STALLS: 5 extra owner stalls beside the reference |
+| 149 | A | 7 | median + 2 extra | final chosen values (gentler shape); --extra-stalls 2 | w12=1.5133! w19=1.4044! b12=0.8378! b19=0.8511 w10=0.3778! w14-17=0.5563 night=0.0702 short=0 open=1.0 ow12=1.5363 ow19=1.4919 share=0.569 | arrivals 2232, served 1270; left on arrival: chose_to_leave:5, no_compatible_main:69, no_open_stall:3, nothing_affordable:583, nothing_available:3, wait_too_long:272; main_failed 27; equivalents by day 2.806/2.805/2.810; scale by day 3.000/3.000/3.000; noon arrivals a day 90.0 over 5.00 open stalls = 18.00 per stall; mean daily profit: reference 30300; extra-1 (javanese, 940) 27202, extra-2 (yoruba, 930) 18530 | MORE STALLS: 2 extra owner stalls beside the reference |
+| 150 | A | 12345 | median + 2 extra | final chosen values (gentler shape); --extra-stalls 2 | w12=1.4444! w19=1.6711! b12=0.8578 b19=0.8933 w10=0.5222 w14-17=0.6296 night=0.0772 short=0 open=1.0 ow12=1.7156 ow19=1.8178 share=0.5874 | arrivals 2232, served 1311; left on arrival: chose_to_leave:2, no_compatible_main:67, no_open_stall:1, nothing_affordable:549, nothing_available:3, wait_too_long:280; main_failed 20; equivalents by day 2.808/2.808/2.810; scale by day 3.000/3.000/3.000; noon arrivals a day 90.0 over 5.00 open stalls = 18.00 per stall; mean daily profit: reference 34666; extra-1 (javanese, 940) 30966, extra-2 (yoruba, 930) 21162 | MORE STALLS: 2 extra owner stalls beside the reference |
+| 151 | B | 20261109 | - | final chosen values (gentler shape); --set npc.starter_shifts.mainstream=12,0 --set npc.starter_shifts.premium=19,7 | na_share=0.0022 day0=288 share=0.3678 | arrivals 2232, served 821; left on arrival: chose_to_leave:3, no_compatible_main:83, no_open_stall:90, nothing_affordable:565, nothing_available:3, wait_too_long:648; main_failed 16; equivalents by day 1.383/1.414/1.351; scale by day 3.000/3.000/3.000 | SENSITIVITY (added so the report's table is all at the chosen values): starter shifts back at today's |
+| 152 | B | 20261109 | - | final chosen values (gentler shape); --set npc.fallback_trays_per_day=10 | na_share=0.0023 day0=255 share=0.4091 | arrivals 2232, served 913; left on arrival: chose_to_leave:2, no_compatible_main:72, no_open_stall:28, nothing_affordable:577, nothing_available:3, wait_too_long:618; main_failed 20; equivalents by day 1.388/1.412/1.403; scale by day 3.000/3.000/3.000 | SENSITIVITY (added so the report's table is all at the chosen values): fallback back at 10 |
+| 153 | A | 20261109 | median | final chosen values (gentler shape); --hours 9-21 | w12=2.3889! w19=0.3489! b12=0.9578 b19=0.0267! w10=1.1111 w14-17=0.9281 night=0.0622 short=0 open=0.8333! ow12=2.3889 ow19=0.3489 share=0.5242 | arrivals 2232, served 1170; left on arrival: chose_to_leave:4, no_compatible_main:70, no_open_stall:6, nothing_affordable:610, nothing_available:3, wait_too_long:347; main_failed 20; equivalents by day 1.933/1.932/1.914; scale by day 3.000/3.000/3.000 | FINDING 1 at the chosen values (added beyond the requested list): the design's 09:00-21:00 schedule; open share by hour 10:1.0, 12:1.0, 14:1.0, 15:1.0, 16:1.0, 19:0.0; exit status 1 by design |
+| 154 | A | 424242 | median | sharper alternative: chosen values with --set demand.arrivals_per_equivalent=252 --set demand.hourly_weights=3,2,1,0,0,2,3,5,7,8,11,19,34,17,12,12,12,14,19,33,15,10,8,5 | w12=3.2489 w19=2.9889 b12=0.9756 b19=0.9978 w10=0.8089 w14-17=1.1044 night=0.0872 short=0 open=1.0 ow12=3.2489 ow19=2.9889 share=0.5181 | arrivals 2268, served 1175; left on arrival: chose_to_leave:3, no_compatible_main:82, nothing_affordable:585, nothing_available:3, wait_too_long:393; main_failed 27; equivalents by day 1.882/1.894/1.893; scale by day 3.000/3.000/3.000 | HELD-OUT SEED, sharper alternative (added beyond the requested list, for a like-for-like column) |
+| 155 | B | 424242 | - | sharper alternative: chosen values with --set demand.arrivals_per_equivalent=252 --set demand.hourly_weights=3,2,1,0,0,2,3,5,7,8,11,19,34,17,12,12,12,14,19,33,15,10,8,5 | na_share=0.0022 day0=290 share=0.3977 | arrivals 2268, served 902; left on arrival: chose_to_leave:3, no_compatible_main:64, no_open_stall:21, nothing_affordable:595, nothing_available:3, wait_too_long:657; main_failed 21; equivalents by day 1.385/1.393/1.406; scale by day 3.000/3.000/3.000 | HELD-OUT SEED, sharper alternative (added beyond the requested list, for a like-for-like column) |
 
 ## Runs not in the table
 
@@ -232,7 +291,7 @@ arrivals who left without ordering, by reason.
 - Run 21 is not a run of a committed driver: it used a scratch copy of the old
   driver whose only change forced the reference owner's cuisine. It prompted
   the reference-cuisine ruling; no value was chosen from it.
-- Runs 64 and 101 were started through the wrapper script below, which calls
+- Runs 64, 101 and 136 were started through the wrapper script below, which calls
   the driver's own `Hall.run` and `CLI.print` and then prints what the command
   line does not: the midnight ledger the driver already collects (cash and
   arrears per restaurant) and a tally of `tray_cancelled` and
@@ -253,7 +312,29 @@ arrivals who left without ordering, by reason.
 
 Counting those, 123 driver runs were made by the task, and the controller made run 124 afterwards: 124 of a budget of 150.
 
-### The wrapper for runs 64 and 101
+In the final fix wave (runs 125 to 155; the budget was raised to 200):
+
+- Run 125 was made twice. The first was discarded because the driver's new
+  per-stall list counted the warm-up day's ingredient shortage; its verdict
+  rows and counts were identical to the run 125 in the table.
+- Runs 151 to 155 were not in the wave's requested list. Runs 151 and 152
+  repeat the starter-shift and fallback reverts at the gentler values so that
+  the report's sensitivity table is measured at one set of values; run 153
+  repeats run 124 (the design's 09:00 to 21:00 schedule) at the gentler
+  values; runs 154 and 155 measure the sharper alternative on the held-out
+  seed, so that the two day shapes are compared on the same four seeds.
+- The held-out seed, 424242, was used for no choice of value: it was first run
+  after the gentler values were written into the code.
+- The acceptance test was run five times in this wave (ten driver runs): at
+  the gentler values before and after its row lists were restructured, twice
+  with its seed changed to 7 to see it fail (it failed once the documented
+  miss for seed 7 was removed), and once in the final checks.
+- The short runs inside `customer_sim_test.exs` (at most one measured day) are
+  not counted, as before.
+
+Counting those, 42 driver runs were made in the wave: 166 of a budget of 200.
+
+### The wrapper for runs 64, 101 and 136
 
 Saved outside the repository as `long_run.exs` and run from `server/`:
 
@@ -269,7 +350,7 @@ alias FeudHall.Domain.Clock
 alias FeudHall.Infrastructure.HallAuthority
 {:ok, args} = CLI.parse(System.argv())
 {:ok, tuning} = CLI.tuning(args.tuning, args.set)
-opts = %{run: args.run, tuning: tuning, via: args.via, days: args.days, seed: args.seed, hours: args.hours, cuisine: args.cuisine}
+opts = %{run: args.run, tuning: tuning, via: args.via, days: args.days, seed: args.seed, hours: args.hours, cuisine: args.cuisine, extra_stalls: args.extra_stalls}
 {:ok, result} = Hall.run(opts)
 {store_mod, store} = HallAuthority.store(result.authority)
 {:ok, batches} = store_mod.read_from(store, 0)
