@@ -223,6 +223,7 @@ arrivals who left without ordering, by reason.
 | 109 | A | 12345 | salmon (--cuisine) | final chosen values | w12=2.2089! w19=2.1067! b12=0.8822 b19=0.9733 w10=0.6911 w14-17=0.5881 night=0.1207 short=0 open=1.0 share=0.4687 | arrivals 2268, served 1063; left on arrival: chose_to_leave:2, no_compatible_main:16, nothing_affordable:625, nothing_available:2, wait_too_long:541 | HARDER CASE: --cuisine coast_salish (roasted_salmon, 1220) at the final values |
 | 110 | A | 20261109 | salmon (--cuisine) | today's values | w12=0.3733! w19=0.4333! b12=0.3111! b19=0.4089! w10=0.1533! w14-17=0.2215! night=0.067 short=31! open=1.0 share=0.379 | arrivals 810, served 307; left on arrival: chose_to_leave:1, no_compatible_main:3, nothing_affordable:280, nothing_available:138, wait_too_long:80 | REPRODUCTION CHECK: run 1 through --cuisine coast_salish on the current driver |
 | 111 | A | 20261109 | median | final chosen values; --set demand.arrivals_per_equivalent=249 --set demand.hourly_weights=3,2,1,0,0,2,3,5,7,9,15,19,24,19,14,14,14,15,19,24,16,11,8,5 | w12=2.1044! w19=2.5178 b12=0.9511 b19=0.9644 w10=1.9156 w14-17=1.3785 night=0.0815 short=0 open=1.0 share=0.5319 | arrivals 2241, served 1192; left on arrival: chose_to_leave:2, no_compatible_main:64, no_open_stall:3, nothing_affordable:587, nothing_available:3, wait_too_long:363 | REPRODUCTION CHECK: run 77 (flat shape) through --set on the final chosen values |
+| 124 | A | 20261109 | median | final chosen values; --hours 9-21 | w12=3.1267 w19=0.5222! b12=1.0 b19=0.0289! w10=1.2822 w14-17=1.0815 night=0.1285 short=0 open=0.8333! share=0.5075 | arrivals and reasons not recorded (the controller kept only the verdict rows) | RUN BY THE CONTROLLER at commit 3442eb8, after the task: the design's 09:00-21:00 schedule; open share by hour 10:1.0, 12:1.0, 14:1.0, 15:1.0, 16:1.0, 19:0.0; exit status 1 by design |
 
 ## Runs not in the table
 
@@ -250,7 +251,7 @@ arrivals who left without ordering, by reason.
 - One run with no measured day was made by hand to read the driver's new
   header line.
 
-Counting those, 123 driver runs were made, of a budget of 150.
+Counting those, 123 driver runs were made by the task, and the controller made run 124 afterwards: 124 of a budget of 150.
 
 ### The wrapper for runs 64 and 101
 

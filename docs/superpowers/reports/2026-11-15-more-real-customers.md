@@ -1,5 +1,23 @@
 # More real customers: measurements and chosen values
 
+## What to decide
+
+1. **Apply the change or not.** The chosen values are proposed tuning and no
+   hall has them; an operator applies them with
+   [the operator request](../../DEPLOYMENT.md#applying-the-customer-tuning).
+   The measurements are in [Result in short](#result-in-short).
+2. **Whether costs should rise first.** At unchanged prices, rent and wages a
+   stall's profit goes from about -10,000 to 63,100 to 66,500 a day (the
+   range over three seeds of the three-day mean daily profit; 62,900 a day
+   over 14 days). See [Profit](#profit).
+3. **Which day shape.** The chosen shape meets every acceptance check; the
+   gentler one gives up one check on one seed for fewer full queues. See
+   [The choice between two day shapes](#the-choice-between-two-day-shapes).
+4. **Whether to act on findings 1 to 3** under
+   [For the owner's attention](#for-the-owners-attention): the ten-hour staff
+   rule, orders lost at a break or closing, and diners who cannot afford any
+   open stall. None is tuning, and none was changed.
+
 Evidence for Project 4 of the
 [livelier hall design](../specs/2026-11-13-livelier-hall-design.md#project-4-more-real-customers):
 what a sparse hall does on today's values, the values chosen from measured
@@ -21,23 +39,6 @@ The values are `FeudHall.Domain.Content.Tuning.chosen/0`. They are proposed
 tuning. A hall does not start on them and no hall receives them at boot: they
 are applied by the recorded `retune_rules` change, as a separate step after
 the owner's decision on costs.
-
-## What to decide
-
-1. **Apply the change or not.** The chosen values are proposed tuning and no
-   hall has them; an operator applies them with
-   [the operator request](../../DEPLOYMENT.md#applying-the-customer-tuning).
-   The measurements are in [Result in short](#result-in-short).
-2. **Whether costs should rise first.** At unchanged prices, rent and wages a
-   stall's profit goes from about -10,000 to about 64,000 a day. See
-   [Profit](#profit).
-3. **Which day shape.** The chosen shape meets every acceptance check; the
-   gentler one gives up one check on one seed for fewer full queues. See
-   [The choice between two day shapes](#the-choice-between-two-day-shapes).
-4. **Whether to act on findings 1 to 3** under
-   [For the owner's attention](#for-the-owners-attention): the ten-hour staff
-   rule, orders lost at a break or closing, and diners who cannot afford any
-   open stall. None is tuning, and none was changed.
 
 ## Result in short
 
@@ -102,8 +103,8 @@ and the slowest method. That stall is kept as the harder case
 (`--cuisine coast_salish`).
 
 Values were tuned on seed 20261109 and confirmed on seeds 7 and 12345. A check
-counts as met only if it is met on all three. 123 driver runs were made, one
-at a time, of a budget of 150; each three-day run takes 5 to 10 seconds.
+counts as met only if it is met on all three. 124 driver runs were made, one
+at a time, of a budget of 150 (run 124 by the controller, after the task); each three-day run takes 5 to 10 seconds.
 
 Only these were changed: `demand.arrivals_per_equivalent`, the shape of
 `demand.hourly_weights`, `market.target_stock_per_equivalent` and
@@ -226,7 +227,7 @@ As a difference from today's values (`Tuning.of(LaunchCatalog.catalog())`):
 | --- | --- | --- |
 | `demand.arrivals_per_equivalent` | 90 | 252 |
 | `demand.hourly_weights` (hour 0 first) | `2,1,1,0,0,1,2,4,6,6,8,12,14,12,8,6,6,8,12,14,10,8,5,3` | `3,2,1,0,0,2,3,5,7,8,11,19,34,17,12,12,12,14,19,33,15,10,8,5` |
-| `market.target_stock_per_equivalent` | 6 portions of each starter main's first-choice ingredients; 400 for most other products | at least 100 portions of the largest recipe line that uses the product; never below today's |
+| `market.target_stock_per_equivalent` (per product, per business equivalent, in the product's own unit) | the larger of a base quantity (400 by default; nine named staples have their own, 100 to 5,000) and 6 times the quantity the starter mains' recipe lines use; salmon 870 g (6 x 145 g), frozen salmon 400 g | the larger of today's target and 100 times the largest quantity any recipe line uses of the product (a substitute at its converted quantity, rounded up); no target falls; salmon 14,500 g, frozen salmon 14,500 g |
 | `market.replenish_cap` | 4 times the target | 4 times the target |
 | `npc.fallback_trays_per_day` | 10 | 50 |
 | `npc.expected_use` | `even_share` | `even_share` |
@@ -631,8 +632,9 @@ What this says for the cost decision:
   19,900 to 22,800 for the salmon stall). At the chosen values it is 24% to
   25% of the median reference stall's revenue, 32% to 34% of the salmon
   stall's, and 23% to 28% of a computer-run restaurant's.
-- A typical new owner clears about 64,000 a day on a starting grant of
-  500,000; the dearest-starter owner about half that.
+- A typical new owner clears 63,100 to 66,500 a day (three-seed range of the
+  three-day mean daily profit; 62,900 a day over 14 days) on a starting grant
+  of 500,000; the dearest-starter owner about half that.
 - The median reference stall's purchases are 13% of its revenue (11% today);
   the salmon stall's are 24% to 25% (21% to 24% today).
 - In run B (runs 98 to 100, no reference stall) the computer-run restaurants'
@@ -684,10 +686,12 @@ changed. Each is the owner's to act on or leave.
    restaurant has three starter staff, and they take an automatic one-hour
    protective break after ten working hours. A stall opened 09:00 to 21:00
    therefore stops at 19:00, in the middle of the dinner rush, every day. The
-   driver's reference stall had to be moved to 10:00 to 20:00 for this reason;
-   the driver observed the closure on the design's schedule while it was being
-   built, and it is not one of the logged runs. The ten-hour rule is a staff
-   rule, not one of the allowed values.
+   driver's reference stall had to be moved to 10:00 to 20:00 for this reason.
+   Run 124 (the design's schedule at the chosen values, seed 20261109) shows
+   it: the stall is open for 0.0 of the 19:00 hour on every measured day,
+   with 0.52 orders waiting against 2.5 to 4.5 and the counter busy 0.029 of
+   the time against 0.85, while noon is unaffected at 3.13. The ten-hour rule
+   is a staff rule, not one of the allowed values.
 2. **About 2% of accepted orders are lost when a stall stops with a queue.** A
    stall that reaches its break or the end of its shift with orders waiting
    does not serve them. In the final runs 1.6% to 3.0% of admitted orders
@@ -701,7 +705,8 @@ changed. Each is the owner's to act on or leave.
    [What binds](#what-binds), item 3.
 4. **The profit effect at unchanged prices, rent and wages** is the input to
    the decision on costs. The reference stall goes from losing about 10,000 a
-   day to making 63,100 to 66,500 a day. See [Profit](#profit).
+   day to making 63,100 to 66,500 a day (three-seed range of the three-day
+   mean daily profit). See [Profit](#profit).
 5. **The choice between the chosen day shape and the gentler one.** The chosen
    shape meets every check on every seed and has about twice the full-queue
    turnaways and a lower served share; the gentler shape misses one check on
@@ -892,7 +897,7 @@ were made before any task started, the rest as tasks reported.
 9. **The determinism test gains a one-measured-day run A comparison.** It
    settles a reviewer's doubt that multi-day output is byte-identical. *If
    wrong:* none beyond test time.
-10. **The run budget was raised from 30 to 150 driver runs** (123 were used). A
+10. **The run budget was raised from 30 to 150 driver runs** (124 were used). A
     three-day run takes 5 to 10 seconds, not the minutes the plan assumed, so
     the cap no longer protected anything and a wider search over several seeds
     gives sturdier values. Runs stay one at a time. *If wrong:* only time was
@@ -948,10 +953,9 @@ Not measured, as a list of what the runs do not cover:
   hall with open orders and leases (the change's own tests cover pinned
   terms; they do not use these values).
 - Live, genesis and snapshot-tail agreement at the chosen values.
-- The reference stall with the design's 09:00 to 21:00 hours (the driver
-  showed the closure at 19:00 while it was being built; no tuning was
-  measured on that schedule), or with any cuisine other than the
-  median-priced one and `coast_salish`.
+- The reference stall with the design's 09:00 to 21:00 hours beyond run 124
+  (one run, one seed, no tuning chosen on it), or with any cuisine other than
+  the median-priced one and `coast_salish`.
 - Arrival levels above or below the final values with the median-priced
   reference stall, other than the three columns under
   [The choice between two day shapes](#the-choice-between-two-day-shapes).
@@ -1056,6 +1060,7 @@ same output.
 | Sensitivity | 103-106 | seed 20261109: `SIM --run a --tuning chosen --days 3 --seed 20261109 --set demand.arrivals_per_equivalent=90`; `SIM --run b --tuning FILE --days 3 --seed 20261109` with FILE holding `%{Tuning.chosen() \| market: Tuning.of(LaunchCatalog.catalog()).market}` after `alias FeudHall.Domain.Content.{LaunchCatalog, Tuning}`; `SIM --run b --tuning chosen --days 3 --seed 20261109 --set npc.starter_shifts.mainstream=12,0 --set npc.starter_shifts.premium=19,7`; `SIM --run b --tuning chosen --days 3 --seed 20261109 --set npc.fallback_trays_per_day=10` | "Verdict" block; day 0 line for mains on day 0 |
 | Applied by the recorded change; first day | 102 against 95 | `SIM --run a --tuning chosen --days 3 --seed 20261109 --via retune`, against the same without `--via retune` | "Verdict" block; for the first day, the `d1` hour lines and the "day 1" line with its `profit` lines |
 | Profit | 80-82, 95-97, 1, 3, 5, 107-109, 2, 4, 6, 98-100 | the Before, After and Harder-case commands | "Per game day": each `profit` line gives profit, revenue, purchases, rent+wages and other for one restaurant and day; each figure here is the mean of days 1 to 3 |
+| Finding 1, design schedule | 124 | `SIM --run a --tuning chosen --days 3 --seed 20261109 --hours 9-21` (exits non-zero by design) | "Verdict" block, row "A ref open during checked hours" |
 | Fourteen days: verdict | 101 | `SIM --run a --tuning chosen --days 14 --seed 20261109` | "Verdict" block |
 | Fourteen days: cash by day; cancelled trays by reason and hour | 101 | the wrapper script printed in the tuning log under "Runs not in the table", with the same arguments | its "Ledger at each midnight" and "Cancelled trays" lines; the command line alone prints each day's cash change, not the balance, and no cancellation reasons |
 

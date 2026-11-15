@@ -400,12 +400,12 @@ Demand follows the announced meal-period curve, small seeded variation, and occa
 
 The initial tuning target is roughly 90 potential diner arrivals per game day per established operating business equivalent, with a floor of three equivalents. This is an economic tuning input, not a guaranteed number of purchases. The arrival curve is zero during 03:00–05:00 and distributes the unchanged finite daily target over the remaining 22 hours; cleaning produces no queued arrivals or reopening catch-up surge. The arrival curve and starting cash must allow new businesses to survive the adaptation delay. The game must be tested at sparse, medium, and full stall occupancy.
 
-**More real customers (proposed tuning).** The target feel is three or four orders waiting at a well-stocked stall in the lunch and dinner rush, one or two mid-morning and mid-afternoon, and a nearly empty hall overnight. A hall runs on the first column below until an operator applies the second through a [recorded rule change](ARCHITECTURE.md#the-recorded-rule-change); a new hall also starts on the first. Both columns are proposed tuning, and only these demand values are tuned. The pool stays finite and is not multiplied by stalls, and the segment budgets, patience and queue limit are unchanged.
+**More real customers (proposed tuning).** The target feel is three or four orders waiting at a well-stocked stall in the lunch and dinner rush, one or two mid-morning and mid-afternoon, and a nearly empty hall overnight. A hall runs on the first column below until an operator applies the second through a [recorded rule change](ARCHITECTURE.md#the-recorded-rule-change); a new hall also starts on the first. The first column is what a hall uses now; the second is proposed tuning. Only these demand values are tuned. The pool stays finite and is not multiplied by stalls, and the segment budgets, patience and queue limit are unchanged.
 
-| Value | Today | Chosen (proposed) |
+| Value | Current | Chosen (proposed, not applied) |
 | --- | --- | --- |
 | Potential arrivals per business equivalent per day | 90 | 252 |
-| Share of the day by hour, 00:00 first (weights, summing to the arrivals above) | 2, 1, 1, 0, 0, 1, 2, 4, 6, 6, 8, 12, 14, 12, 8, 6, 6, 8, 12, 14, 10, 8, 5, 3 | 3, 2, 1, 0, 0, 2, 3, 5, 7, 8, 11, 19, 34, 17, 12, 12, 12, 14, 19, 33, 15, 10, 8, 5 |
+| Share of the day by hour, 00:00 first (proportions; the demand model normalizes them, and the chosen weights also equal arrivals per equivalent in each hour, summing to 252) | 2, 1, 1, 0, 0, 1, 2, 4, 6, 6, 8, 12, 14, 12, 8, 6, 6, 8, 12, 14, 10, 8, 5, 3 | 3, 2, 1, 0, 0, 2, 3, 5, 7, 8, 11, 19, 34, 17, 12, 12, 12, 14, 19, 33, 15, 10, 8, 5 |
 
 The chosen day has a one-hour peak at 12:00 and at 19:00. The [report](superpowers/reports/2026-11-15-more-real-customers.md#the-chosen-values) gives the measurements behind these values, including a gentler day shape the owner may choose instead and what each costs in served meals.
 
@@ -711,10 +711,12 @@ At midnight, wholesale stock is topped up toward the target set by the previous 
 
 **Stock size (proposed tuning).** Target stock is set per business equivalent and the cap is four times the target. A hall runs on the first column until the [recorded rule change](ARCHITECTURE.md#the-recorded-rule-change) is applied; a new hall also starts on it. Raising arrivals alone mostly adds diners who find nothing available, so the market is sized with them.
 
-| Value | Today | Chosen (proposed) |
+| Value | Current | Chosen (proposed, not applied) |
 | --- | --- | --- |
-| Target stock per equivalent | 6 portions of each starter main's first-choice ingredients; 400 for most other products | At least 100 portions of the largest recipe line that uses the product, never below today's; a substitute counts at its converted quantity |
+| Target stock per equivalent, per product, in the product's own unit (grams, millilitres or units) | The larger of a base quantity (400 by default; nine named staples have their own, from 100 for cilantro to 5,000 ml for filtered water) and six times the quantity the starter mains' recipe lines use | The larger of the current target and 100 times the largest quantity any recipe line uses of the product (a substitute at its converted quantity, rounded up); no product's target falls |
 | Replenishment cap | 4 times the target | 4 times the target |
+
+Two examples, per business equivalent: frozen salmon, which substitutes for salmon at one gram per gram, goes from 400 g to 14,500 g (the largest recipe line uses 145 g of salmon), a rise of about 36 times; long rice, a staple, goes from 1,200 g to 5,500 g (the largest line uses 55 g). 257 of the 274 products rise.
 
 Applying the change adds stock in proportion to each raised target at that moment, so published prices do not jump. The new targets and the higher arrival rate take effect at the next game midnight. The [report](superpowers/reports/2026-11-15-more-real-customers.md#the-chosen-values) lists examples and how the size of 100 portions was chosen.
 
@@ -1094,7 +1096,7 @@ NPCs make bounded management decisions at meaningful event boundaries and a regu
 
 **Planning values (proposed tuning).** Two computer-run values are data and move with the customer tuning: the number of trays a computer-run owner stocks for before it has a previous day to go on, and the hours of each profile's starter shift. The expected-use method is unchanged. A hall runs on the first column until the [recorded rule change](ARCHITECTURE.md#the-recorded-rule-change) is applied; a new hall also starts on it, and the planner reads the new values at its next plan.
 
-| Value | Today | Chosen (proposed) |
+| Value | Current | Chosen (proposed, not applied) |
 | --- | --- | --- |
 | Fallback trays per day | 10 | 50 |
 | Starter shift, budget | 05:00-17:00 | 05:00-17:00 |
@@ -1705,7 +1707,7 @@ The owner has resolved the central concept, population, time, absence policy, fa
 | Inactive leases | Dormancy after seven available-service days with neither trading nor owner management; reopening retains the venture and receives no new grant. |
 | Market clearing | Ten real seconds; tune fairness, feedback, and stock volatility. |
 | Arrival scale | Approximately 90 potential arrivals per business equivalent per day, floor three equivalents; calibrate adaptation and actual conversion. |
-| Customer tuning | Proposed and not yet applied to any hall: 252 potential arrivals per equivalent (today 90) with a one-hour peak at 12:00 and 19:00, wholesale targets of at least 100 portions of the largest recipe line per product (today 6 for starter mains, 400 for most others), computer-run fallback 50 trays (today 10), and mainstream and premium starter shifts 11:00-23:00 and 17:00-03:00 (today 12:00-00:00 and 19:00-07:00). Details in [§7](#a-finite-pool-of-diners), [§8](#market-structure) and [§14](#the-early-hall). A hall stays on today's values until an operator applies the [recorded rule change](ARCHITECTURE.md#the-recorded-rule-change); the owner decides first whether rent, wages and prices should rise. Evidence and the choice of day shape: [report](superpowers/reports/2026-11-15-more-real-customers.md). |
+| Customer tuning | Chosen values are proposed and not applied to any hall: 252 potential arrivals per equivalent (current 90) with a one-hour peak at 12:00 and 19:00, wholesale targets, per product in its own unit, of the larger of the current target and 100 times the largest quantity any recipe line uses (current: the larger of a base of 400 by default, more for named staples, and six times the starter mains' line quantity; no target falls), computer-run fallback 50 trays (current 10), and mainstream and premium starter shifts 11:00-23:00 and 17:00-03:00 (current 12:00-00:00 and 19:00-07:00). Details in [§7](#a-finite-pool-of-diners), [§8](#market-structure) and [§14](#the-early-hall). A hall stays on the current values until an operator applies the [recorded rule change](ARCHITECTURE.md#the-recorded-rule-change); the owner decides first whether rent, wages and prices should rise. Evidence and the choice of day shape: [report](superpowers/reports/2026-11-15-more-real-customers.md). |
 | Economic scheduling | One-real-second wake-up, plus server-timestamped command advances; proposed unobserved gap over five real seconds enters recovery. Benchmark batching, readiness, and GC under the full owner/guest/helper workload. |
 | Service windows | Confirmed hall cleaning closure 03:00–05:00 game time, five real minutes; owners choose service windows within the other 22 hours. No diner backlog accrues during cleaning. Tune overnight demand within the existing daily arrival budget. |
 | Awards | Seven elapsed game days; 50 finalized simulated-visit minimum with a served main; guest outcomes separate; per-stall applicable benefit capped at 15% for one review period. |
