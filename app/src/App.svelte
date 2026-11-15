@@ -9,6 +9,7 @@
   import HallScene from "./HallScene.svelte";
   import type { CameraState, HallTarget } from "./hall-scene";
   import { splitTabletMessage } from "./tablet-text";
+  import { CLIENT_CHECK_MS, newerClientServed } from "./client-version";
   import { servedTrays } from "./diner-pickup";
   import { assignSpots } from "./room-layout";
   import { rentExplanation } from "./rent";
@@ -183,6 +184,19 @@
   );
   function reloadClient() {
     location.reload();
+  }
+  let updateAvailable = $state(false);
+  let checkingClient = false;
+  let lastClientCheck = Date.now();
+  async function checkClient() {
+    if (nativeClient || updateAvailable || checkingClient) return;
+    checkingClient = true;
+    lastClientCheck = Date.now();
+    try {
+      updateAvailable = await newerClientServed();
+    } finally {
+      checkingClient = false;
+    }
   }
   let nextPoll = 0;
   let pollFailures = 0;
@@ -981,9 +995,13 @@
     void refresh();
     const timer = window.setInterval(() => {
       if (!document.hidden && Date.now() >= nextPoll) void refresh();
+      if (!document.hidden && Date.now() - lastClientCheck >= CLIENT_CHECK_MS)
+        void checkClient();
     }, 850);
     const resume = () => {
-      if (!document.hidden) void refresh();
+      if (document.hidden) return;
+      void checkClient();
+      void refresh();
     };
     document.addEventListener("visibilitychange", resume);
     window.addEventListener("online", resume);
@@ -1167,6 +1185,7 @@
     refreshRunning = true;
     const requested = checkoutKey;
     let stale = false;
+    let recovered = false;
     try {
       const current = await getView(checkoutScope);
       if (!view || current.hall.position >= view.hall.position) {
@@ -1206,6 +1225,9 @@
       }
       connected = true;
       updateRequired = false;
+      // A deploy restarts the hall, so a returning connection may now be
+      // served a newer client.
+      recovered = pollFailures > 0;
       pollFailures = 0;
       nextPoll = 0;
       // The choice changed while this request was in flight, and the refresh
@@ -1220,6 +1242,7 @@
     } finally {
       refreshRunning = false;
     }
+    if (recovered) void checkClient();
     if (stale) void refresh();
   }
 
@@ -2336,6 +2359,13 @@
           type="button"
           onclick={reloadClient}>{t("reload")}</button
         >{/if}
+    </p>{/if}
+  {#if updateAvailable && connected && !inWorldNotices}<p
+      class="banner"
+      role="status"
+    >
+      {t("newVersion")}
+      <button type="button" onclick={reloadClient}>{t("reload")}</button>
     </p>{/if}
   <span class="sr-only" role="status">
     {inWorldNotices && tabletView?.noticeError

@@ -377,7 +377,12 @@ projections. A one-game-day run gives short-window evidence.
 
 Run `bun run test:browser --grep 'release boundary'` from `app/` to exercise
 the protocol, origin protection and a replayed revoked cookie against a
-disposable hall. From `app/src-tauri/`, run `cargo fmt --check` and
+disposable hall. `bun run test:browser client-version.spec.ts`, after
+`bun run --bun build`, checks that web requests send the protocol header, that a
+refused protocol asks the tab to reload, and the reload notice when the hall
+serves a newer client: after a deploy (a different entry script), never for the
+same client, an error page or a page with no entry script, and checked on
+visibility and on reconnection. From `app/src-tauri/`, run `cargo fmt --check` and
 `cargo test --locked --bin feud-hall` after `bun run desktop:assets` in
 `app/`. Keep Cargo to one local build job. The native workflow builds the
 macOS bundle, installs both Linux packages, and attempts their launch; a

@@ -249,6 +249,7 @@ const en = {
     "This desktop app and hall use different versions. Update the app or check with the hall operator.",
   reloadRequired: "This page is out of date. Reload to continue.",
   reload: "Reload",
+  newVersion: "A new version of Feud Hall is available.",
   loading: "Opening the hall…",
   startGuest: "Create visitor profile",
   name: "Display name",
@@ -664,6 +665,7 @@ const ja: Record<Key, string> = {
   reloadRequired:
     "このページは古くなっています。続けるには再読み込みしてください。",
   reload: "再読み込み",
+  newVersion: "新しいバージョンのFeud Hallが利用できます。",
   loading: "ホールを読み込み中…",
   startGuest: "来店者プロフィールを作成",
   name: "表示名",
