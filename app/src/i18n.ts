@@ -203,6 +203,8 @@ const en = {
 
   tired: "Fatigued",
   protectiveBreak: "Protective break",
+  offDutyRoles:
+    "Not on duty now: {roles}. Set start and end hours that include the current hour and save them, or hire a worker for each missing role.",
   starterStock: "Suggested starter ingredients",
   queueOpening: "Queue opening after cleaning",
   optionalInvite: "Invitation code (optional)",
@@ -619,6 +621,8 @@ const ja: Record<Key, string> = {
 
   tired: "疲労あり",
   protectiveBreak: "安全のため休憩中",
+  offDutyRoles:
+    "現在勤務中でない担当：{roles}。現在の時刻を含む開始時と終了時を保存するか、不足している担当を雇用してください。",
   starterStock: "開業時のおすすめ食材",
   queueOpening: "清掃後の営業を予約",
   optionalInvite: "招待コード（任意）",

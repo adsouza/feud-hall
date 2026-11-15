@@ -2050,6 +2050,16 @@
           {ownerStall.id} · {ownerStall.lease.start_hour}:00–{ownerStall.lease
             .end_hour}:00
         </p>
+        {#if ownerStall.mode !== "open" && ownerStall.off_duty_roles?.length}
+          <p class="staff-gap" role="note">
+            {t("offDutyRoles").replace(
+              "{roles}",
+              ownerStall.off_duty_roles
+                .map(title)
+                .join(locale === "ja" ? "、" : ", "),
+            )}
+          </p>
+        {/if}
         <div class="actions">
           <button
             {disabled}

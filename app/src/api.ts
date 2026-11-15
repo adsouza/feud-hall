@@ -49,6 +49,7 @@ export type OwnerStall = {
   tier: string;
   mode: string;
   can_open: boolean;
+  off_duty_roles?: string[];
   ready_at?: number | null;
   refit_cost?: Money;
   cuisine?: string;

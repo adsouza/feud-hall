@@ -544,6 +544,66 @@ defmodule FeudHall.Application.ManagementTest do
     assert HallManagement.adapt_course(rt.state, "s001", course) == course
   end
 
+  test "the owner view names exactly the roles that keep a stall from opening" do
+    rt = boot(InMemoryEventStore, InMemoryEventStore.new())
+    {rt, owner} = register(rt, "owner-device", "Owner")
+    rt = run(rt, "seed", {:system, :admin}, :seed_owner, %{principal: owner, reviewer?: true})
+    rt = client(rt, "owner-device", "reserve", :reserve_stall, %{stall_id: "s001"})
+
+    rt =
+      client(rt, "owner-device", "lease", :create_restaurant, %{
+        restaurant_id: "r1",
+        stall_id: "s001",
+        name: "Kitchen",
+        cuisine: "sichuan"
+      })
+
+    gap = fn rt ->
+      assert {:ok, %{profile: %{restaurant: %{stalls: [stall]}}}} = Management.view(rt, "owner-device")
+      assert HallManagement.staffed?(rt.state, "s001", rt.state.now) == (stall.off_duty_roles == [])
+      if stall.off_duty_roles != [], do: refute(stall.can_open)
+      stall.off_duty_roles
+    end
+
+    hour = div(rem(rt.state.now, Clock.day()), Clock.hour())
+    assert gap.(rt) == []
+
+    rt = client(rt, "owner-device", "dismiss", :dismiss_staff, %{stall_id: "s001", worker_id: "s001:counter"})
+    assert gap.(rt) == [:counter]
+    assert HallManagement.allow_open(rt.state, "s001") == {:error, :staff_off_duty}
+
+    later = rem(hour + 2, 24)
+
+    rt =
+      client(rt, "owner-device", "hire-late", :hire_staff, %{
+        stall_id: "s001",
+        role: :counter,
+        start_hour: later,
+        end_hour: rem(later + 8, 24)
+      })
+
+    assert gap.(rt) == [:counter], "a worker whose shift starts later does not cover the current hour"
+
+    rt =
+      client(rt, "owner-device", "hire-now", :hire_staff, %{
+        stall_id: "s001",
+        role: :counter,
+        start_hour: hour,
+        end_hour: rem(hour + 8, 24)
+      })
+
+    assert gap.(rt) == []
+
+    rt =
+      client(rt, "owner-device", "move-crew", :set_staff_schedule, %{
+        stall_id: "s001",
+        start_hour: later,
+        end_hour: rem(later + 8, 24)
+      })
+
+    assert gap.(rt) == [:prep_cook, :finish_cook], "the stall-wide schedule moves starters; the hired counter stays"
+  end
+
   test "standby alone does not create licensing eligibility" do
     start = 0
     stop = Clock.service_duration(60_000)

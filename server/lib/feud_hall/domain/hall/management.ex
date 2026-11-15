@@ -472,10 +472,13 @@ defmodule FeudHall.Domain.Hall.Management do
     end
   end
 
-  def staffed?(state, sid, at) do
+  def staffed?(state, sid, at), do: off_duty_roles(state, sid, at) == []
+
+  @doc "Roles that block opening for lack of on-duty staff; unleased stalls have none."
+  def off_duty_roles(state, sid, at) do
     case get_in(state, [:management, :leases, sid]) do
-      nil -> true
-      lease -> Staff.covered?(lease.workers, at)
+      nil -> []
+      lease -> Staff.off_duty_roles(lease.workers, at)
     end
   end
 

@@ -191,8 +191,8 @@ const messages = {
     "レストラン、予約、または空き待ちの現在の状況では、この変更はできません。",
   ],
   staff_off_duty: [
-    "The stall is missing on-duty staff for preparation, finishing, or counter service.",
-    "仕込み、仕上げ、またはカウンター業務の担当者が勤務中ではありません。",
+    "The stall needs a prep cook, finish cook, and counter worker on duty now. In Staff and hours, save hours that include the current hour or hire the missing workers.",
+    "仕込み、仕上げ、カウンターの各担当が今勤務している必要があります。「スタッフと営業時間」で現在の時刻を含む時間を保存するか、不足している担当を雇用してください。",
   ],
   unpaid_rent: [
     "The stall has unpaid rent. It can’t serve customers until the rent is paid.",

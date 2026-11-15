@@ -51,9 +51,12 @@ defmodule FeudHall.Domain.Hall.Staff do
     |> Enum.sort_by(& &1.id)
   end
 
-  def covered?(roster, at) do
+  def covered?(roster, at), do: off_duty_roles(roster, at) == []
+
+  @doc "Roles with no worker on shift and off break at `at`, in roster role order."
+  def off_duty_roles(roster, at) do
     active_roles = roster |> active(at) |> MapSet.new(& &1.role)
-    Enum.all?(@roles, &MapSet.member?(active_roles, &1))
+    Enum.reject(@roles, &MapSet.member?(active_roles, &1))
   end
 
   def support(roster, now), do: Enum.find(active(roster, now), &(&1.role == :counter))
