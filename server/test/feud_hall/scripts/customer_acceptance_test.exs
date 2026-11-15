@@ -24,8 +24,9 @@ defmodule FeudHall.CustomerAcceptanceTest do
 
   @share "served share (mains served / arrivals; no bound here)"
 
-  # The rows the report says pass on all three measured seeds (20261109, 7, 12345). Run A's
-  # reference stall is the driver's default: the median-priced unused starter.
+  # The rows that pass on seed 20261109, the seed this test pins (the design's single
+  # acceptance run and the seed the values were chosen on). Run A's reference stall is the
+  # driver's default: the median-priced unused starter.
   @met %{
     a: [
       "A ref waiting 12:00-13:00",
@@ -41,10 +42,22 @@ defmodule FeudHall.CustomerAcceptanceTest do
     b: ["B nothing_available share of left on arrival", "B mains served on day 0"]
   }
 
-  # Rows that fail at the chosen tuning, with the reason; they would be reported, not
-  # asserted. None fails with the default reference. The report's harder case (the dearest
-  # starter, `--cuisine coast_salish`) misses the two rush-waiting rows; it is not run here.
-  @not_met %{a: %{}, b: %{}}
+  # Rows the driver reports without a bound.
+  @reported %{
+    a: [@share, "A owner stalls mean waiting 12:00-13:00", "A owner stalls mean waiting 19:00-20:00"],
+    b: [@share]
+  }
+
+  # Rows that a measured seed misses at the chosen tuning, as seed => row => reason. They are
+  # documented, not asserted: only seed 20261109 is run here, and it meets every row. The
+  # report measured four seeds (20261109, 7, 12345 and the held-out 424242); run numbers are
+  # lines of the tuning log. A row missed on the pinned seed would be listed under 20261109 and
+  # would then not be asserted below. The report's harder case (`--cuisine coast_salish`)
+  # misses the two rush-waiting rows on every seed; it is not run here.
+  @not_met %{
+    7 => %{"A ref waiting 12:00-13:00" => "2.45 against 2.5 to 4.5: short by 0.05 (run 126)"},
+    424_242 => %{"A ref waiting 12:00-13:00" => "2.33 against 2.5 to 4.5: short by 0.17 (run 131)"}
+  }
 
   # Served share under today's values (`Tuning.of(LaunchCatalog.catalog())`), same run, seed and days.
   # To regenerate, run from server/ and read the "served share" verdict row:
@@ -63,10 +76,13 @@ defmodule FeudHall.CustomerAcceptanceTest do
       verdict = Stats.verdict(run, result.stats)
       rows = Map.new(verdict, &{&1.check, &1})
 
-      # Every row is either asserted or listed as not met, so a new row cannot go unclassified.
-      assert Enum.sort(Map.keys(rows)) == Enum.sort(@met[run] ++ Map.keys(@not_met[run]) ++ [@share])
+      # Every row is asserted or only reported, so a new row cannot go unclassified, and
+      # every row documented as missed on some seed is a real row.
+      assert Enum.sort(Map.keys(rows)) == Enum.sort(@met[run] ++ @reported[run])
+      for {_seed, misses} <- @not_met, {check, _reason} <- misses, do: assert(check in (@met.a ++ @met.b))
+      missed_here = Map.keys(Map.get(@not_met, @seed, %{}))
 
-      for check <- @met[run] do
+      for check <- @met[run] -- missed_here do
         assert rows[check].pass, "#{check}: #{inspect(rows[check])}"
       end
 
