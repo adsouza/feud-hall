@@ -7,6 +7,10 @@ defmodule FeudHall.Domain.LaunchCatalogTest do
   alias FeudHall.Domain.Content.LaunchCatalog
   alias FeudHall.Domain.Hall.Invariants
 
+  test "the launch catalog's content hash is unchanged by the planner tuning data" do
+    assert Content.hash(LaunchCatalog.catalog()) == "86fc1c12fadebfa30e2cda8badc1ad12481d18455d6c7d5a469dd18969f6b21d"
+  end
+
   test "all launch cuisines serve their starter, drink and later dessert with funded wholesale stock" do
     catalog = quiet_catalog(LaunchCatalog.catalog())
     assert :ok = Content.validate(catalog)

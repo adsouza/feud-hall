@@ -21,7 +21,8 @@ defmodule FeudHall.Domain.Npc.Planner do
 
   Expected use is the last day summary's admitted trays, shared evenly across
   the stalls in the view, times the menu's average per-item ingredient use.
-  With no summary yet it assumes `@fallback_trays_per_day`.
+  With no summary yet it assumes the catalog's `fallback_trays_per_day`. That
+  fallback and the starter shifts come from `FeudHall.Domain.Content.Tuning.npc/1`.
 
   The planner draws no randomness today; the PRNG state is returned unchanged
   so later heuristics can draw without changing the interface. Iteration is
@@ -29,24 +30,29 @@ defmodule FeudHall.Domain.Npc.Planner do
   """
 
   alias FeudHall.Domain.{Clock, Inventory}
+  alias FeudHall.Domain.Content.Tuning
 
-  # Tuning literals not yet in content (move to the NPC profiles in a content pass).
+  # Not tunable yet.
   @unlock_cash_multiple 4
   @price_limit_permille 1_500
-  @fallback_trays_per_day 10
-  @starter_shifts %{"budget" => {5, 17}, "mainstream" => {12, 0}, "premium" => {19, 7}}
 
   @max_qty 1_000_000
   @max_price_limit 1_000_000_000
 
+  @doc "The names of the expected-use heuristics a tuning may select."
+  @spec expected_use_heuristics() :: [String.t()]
+  defdelegate expected_use_heuristics, to: Tuning
+
   @spec plan(map(), map(), map(), map(), term()) :: {[tuple()], term()}
   def plan(view, own, profile, catalog, rng) do
+    npc = Tuning.npc(catalog)
+
     actions =
-      opening_actions(view, own, profile) ++
+      opening_actions(view, own, profile, npc) ++
         unlock_recipe(own, catalog) ++
         menu_prices(own, profile, catalog) ++
         substitution_policies(own, profile, catalog) ++
-        purchases(view, own, profile, catalog)
+        purchases(view, own, profile, catalog, npc)
 
     {actions, rng}
   end
@@ -68,10 +74,10 @@ defmodule FeudHall.Domain.Npc.Planner do
 
   # -- opening ------------------------------------------------------------------
 
-  defp opening_actions(view, own, profile) do
+  defp opening_actions(view, own, profile, npc) do
     case Enum.find(view.stalls, &(&1.restaurant_id == own.id)) do
       %{open?: open?, stall_id: id} ->
-        schedule = staff_schedule(own[:lease], @starter_shifts[profile.id], id)
+        schedule = staff_schedule(own[:lease], npc.starter_shifts[profile.id], id)
         # A schedule change reopens a staffed stall if it already has an opening request.
         reopening? = schedule != [] and own.lease.opening_requested
 
@@ -84,7 +90,7 @@ defmodule FeudHall.Domain.Npc.Planner do
     end
   end
 
-  defp staff_schedule(%{start_hour: start, end_hour: finish}, {new_start, new_finish}, stall_id)
+  defp staff_schedule(%{start_hour: start, end_hour: finish}, [new_start, new_finish], stall_id)
        when {start, finish} != {new_start, new_finish},
        do: [{:set_staff_schedule, %{stall_id: stall_id, start_hour: new_start, end_hour: new_finish}}]
 
@@ -134,13 +140,13 @@ defmodule FeudHall.Domain.Npc.Planner do
 
   # -- restocking -----------------------------------------------------------------
 
-  defp purchases(view, own, profile, catalog) do
+  defp purchases(view, own, profile, catalog, npc) do
     recipes = for id <- Enum.sort(own.unlocked), do: catalog.recipes[id]
 
     if recipes == [] do
       []
     else
-      trays = expected_trays_per_day(view)
+      trays = expected_trays_per_day(view, npc)
       menu_size = length(recipes)
       uses = per_item_use(recipes, profile)
       room = catalog.rules.storage_capacity - Inventory.storage_used(own.batches, catalog)
@@ -173,9 +179,10 @@ defmodule FeudHall.Domain.Npc.Planner do
 
   # Trays the stall can expect per day: the last summary's admitted trays shared
   # evenly across the hall's stalls, or a fixed fallback before any summary.
-  defp expected_trays_per_day(%{demand: []}), do: @fallback_trays_per_day
+  defp expected_trays_per_day(%{demand: []}, npc), do: npc.fallback_trays_per_day
 
-  defp expected_trays_per_day(%{demand: summaries, stalls: stalls}) do
+  # The "even_share" heuristic, the only one `expected_use_heuristics/0` lists.
+  defp expected_trays_per_day(%{demand: summaries, stalls: stalls}, _npc) do
     %{admitted: admitted} = List.last(summaries)
     shares = max(length(stalls), 1)
     div(admitted + shares - 1, shares)

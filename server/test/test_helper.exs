@@ -7,4 +7,6 @@
   Enum.reject(Application.spec(:feud_hall, :modules), &:code.is_loaded/1)
 )
 
+# The customer acceptance runs take about 20 s; run them with `--only acceptance`.
+ExUnit.configure(exclude: [:acceptance])
 ExUnit.start()

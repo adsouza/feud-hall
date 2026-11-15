@@ -17,6 +17,7 @@ defmodule FeudHall.Domain.Content do
   """
 
   alias FeudHall.Domain.{Dietary, Money, Random}
+  alias FeudHall.Domain.Content.Tuning
 
   @units [:g, :ml, :each]
   @origins [:plant, :mineral, :meat, :fish, :dairy, :egg, :honey, :gelatin, :animal_rennet, :animal_fat_stock]
@@ -66,6 +67,7 @@ defmodule FeudHall.Domain.Content do
         layout_problems(get(catalog, :layout), get(rules, :rooms)) ++
         rooms_rule_problems(get(rules, :rooms)) ++
         npc_problems(get(catalog, :npc_profiles)) ++
+        npc_rules_problems(catalog, get(rules, :npc)) ++
         progression_problems(catalog, get(rules, :progression))
 
     if problems == [], do: choice_weight_problems(rules), else: problems
@@ -336,6 +338,11 @@ defmodule FeudHall.Domain.Content do
   end
 
   defp npc_problems(_), do: [{:npc, nil, :bad_profile}]
+
+  # `rules.npc` is optional: absent means the planner's defaults.
+  defp npc_rules_problems(_catalog, nil), do: []
+
+  defp npc_rules_problems(catalog, npc), do: Tuning.npc_problems(catalog, npc)
 
   defp npc_profile_problems(p) do
     ok =

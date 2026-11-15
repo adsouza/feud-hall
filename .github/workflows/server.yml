@@ -60,6 +60,11 @@ jobs:
       # Full suite runs in hosted CI only; locally, run focused files.
       # Local full runs need the owner's permission.
       - run: mix test --warnings-as-errors
+      # Pins the measured customer tuning (Tuning.chosen/0): runs A and B at the
+      # chosen values must still meet the acceptance rows. The suite above
+      # excludes it by tag; it takes about 20 seconds.
+      - name: Check the customer tuning still meets its measured acceptance rows
+        run: mix test --only acceptance test/feud_hall/scripts/customer_acceptance_test.exs
 
   mutation:
     # Bounded curated cohort, one worker per slice, each in a disposable copy.

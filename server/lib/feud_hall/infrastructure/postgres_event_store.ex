@@ -429,6 +429,9 @@ defmodule FeudHall.Infrastructure.PostgresEventStore do
 
   # `[:safe]` never creates atoms: a term naming one this build does not define is refused.
   defp safe_term(binary) do
+    # Content rows of a retuned catalog, and retune receipts, name atoms only these modules define.
+    Code.ensure_loaded!(FeudHall.Domain.Content.Tuning)
+    Code.ensure_loaded!(FeudHall.Domain.Hall.Retune)
     {:ok, :erlang.binary_to_term(binary, [:safe])}
   rescue
     ArgumentError -> :error
