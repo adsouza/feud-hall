@@ -3,9 +3,9 @@ defmodule FeudHall.Domain.RetuneTest do
 
   import FeudHall.Fixtures
 
-  alias FeudHall.Domain.{Clock, Content, Demand, Hall}
+  alias FeudHall.Domain.{Clock, Content, Demand, Hall, Market}
   alias FeudHall.Domain.Content.{LaunchCatalog, SliceCatalog, Tuning}
-  alias FeudHall.Domain.Hall.Retune
+  alias FeudHall.Domain.Hall.{CatalogExpansion, Retune}
 
   @catalog LaunchCatalog.catalog()
   @admin {:system, :admin}
@@ -50,6 +50,12 @@ defmodule FeudHall.Domain.RetuneTest do
 
   defp versioned(catalog, version), do: %{Tuning.of(catalog) | version: version}
 
+  defp prices(state),
+    do: Map.new(Map.keys(state.catalog.products), &{&1, Market.price(state.catalog, state.market, &1)})
+
+  defp with_targets(tuning, targets),
+    do: put_in(tuning.market.target_stock_per_equivalent, Map.merge(tuning.market.target_stock_per_equivalent, targets))
+
   defp events_after(log, before), do: Enum.drop(log, length(before))
   defp day_closed(events), do: for(%{type: :day_closed} = e <- events, do: e)
   defp arrivals_of_day(events, day), do: Enum.filter(events, &match?(%{type: :diner_arrived}, &1)) |> of_day(day)
@@ -61,13 +67,18 @@ defmodule FeudHall.Domain.RetuneTest do
     assert tuning.demand.arrivals_per_equivalent == 2 * state.catalog.rules.demand.arrivals_per_equivalent
     assert {:ok, [event]} = Retune.decide(state, tuning)
     assert event.type == :hall_rules_retuned and event.tuning == tuning
-    assert Map.keys(event) |> Enum.sort() == [:content_hash, :tuning, :type]
+    assert Map.keys(event) |> Enum.sort() == [:content_hash, :stock, :tuning, :type]
+    assert map_size(event.stock) > 0
 
     after_state = Retune.evolve(state, event)
     assert Tuning.of(after_state.catalog) == tuning
     assert after_state.content_hash == Content.hash(after_state.catalog)
     assert after_state.content_hash != state.content_hash
-    assert Map.drop(after_state, [:catalog, :content_hash]) == Map.drop(state, [:catalog, :content_hash])
+
+    # Besides the catalog and its hash, only market stock changes: by exactly the recorded top-up.
+    rest = &(&1 |> Map.drop([:catalog, :content_hash]) |> put_in([:market, :stock], nil))
+    assert rest.(after_state) == rest.(state)
+    assert after_state.market.stock == Map.merge(state.market.stock, event.stock, fn _p, old, added -> old + added end)
 
     # The hall's decider and evolver route the command and event to the same place.
     assert {:ok, [^event]} = decide(state, tuning)
@@ -75,13 +86,21 @@ defmodule FeudHall.Domain.RetuneTest do
   end
 
   test "today keeps its recorded quotas; the next midnight uses the new values" do
-    {noon_state, _} = world = launch_world() |> advance_hall(14 * @hour)
+    {noon_state, noon_log} = launch_world() |> advance_hall(14 * @hour)
+    # One product below its target, so the midnight replenishes it under both the old and new values.
+    [short | _] = noon_state.market.stock |> Map.keys() |> Enum.sort()
+    noon_state = put_in(noon_state.market.stock[short], div(noon_state.market.stock[short], 3))
+    world = {noon_state, noon_log}
     day0_quotas = noon_state.demand.hour_quotas_millis
     tuning = doubled(noon_state.catalog)
 
     {retuned, retuned_log} = retuned_world = run!(world, retune(tuning), @admin, "retune:2")
     assert retuned.demand == noon_state.demand
-    assert retuned.market == noon_state.market
+    [%{stock: top_up}] = events_after(retuned_log, noon_log)
+    assert map_size(top_up) > 0
+
+    topped_up = Map.merge(noon_state.market.stock, top_up, fn _, a, b -> a + b end)
+    assert retuned.market == %{noon_state.market | stock: topped_up}
 
     {final, log} = advance_hall(retuned_world, @day)
     {_plain, plain_log} = advance_hall(world, @day)
@@ -102,7 +121,8 @@ defmodule FeudHall.Domain.RetuneTest do
     assert closed.hour_quotas_millis != Demand.hour_quotas(noon_state.catalog.rules.demand, closed.scale_millis)
     assert final.demand.hour_quotas_millis == closed.hour_quotas_millis
 
-    # Its replenishment fills each product to min(new target, new cap), computed here from the formula.
+    # Its replenishment fills each product, from the topped-up stock it finds, to min(new target,
+    # new cap), computed here from the formula.
     at_close = Hall.replay(Enum.take_while(advanced, &(&1.type != :day_closed)), retuned)
     floor = new_rules.equivalent_floor_millis
     open = for {_, %{mode: :open, restaurant: r}} <- at_close.stalls, uniq: true, do: r
@@ -117,9 +137,11 @@ defmodule FeudHall.Domain.RetuneTest do
       end)
 
     assert closed.replenishment == expected
-    assert Enum.all?(expected, fn {_, qty} -> qty > 0 end)
+    assert at_close.market.stock[short] == 2 * noon_state.market.stock[short]
+    assert expected[short] > 0
     assert [plain_closed] = day_closed(plain_log)
-    assert Enum.all?(plain_closed.replenishment, fn {_, qty} -> qty == 0 end)
+    assert plain_closed.replenishment[short] > 0
+    assert expected[short] == 2 * plain_closed.replenishment[short]
   end
 
   test "stock above a lowered target is kept" do
@@ -155,6 +177,66 @@ defmodule FeudHall.Domain.RetuneTest do
     assert [closed] = day_closed(final_log)
     assert closed.replenishment[product] == 0
     assert final.market.stock[product] == 500
+  end
+
+  describe "prices at the retune" do
+    test "a raised target scales stock with it, so no price moves" do
+      state = launch_hall()
+      [product | _] = for {p, 400} <- Enum.sort(state.catalog.rules.market.target_stock_per_equivalent), do: p
+
+      [empty | _] =
+        for {p, t} <- Enum.sort(state.catalog.rules.market.target_stock_per_equivalent), p != product, t > 0, do: p
+
+      state = state |> put_in([:market, :stock, product], 900) |> put_in([:market, :stock, empty], 0)
+      tuning = doubled(state.catalog)
+      assert tuning.market.target_stock_per_equivalent[product] == 800
+
+      assert {:ok, [event]} = decide(state, tuning)
+      assert event.stock[product] == 900
+      refute Map.has_key?(event.stock, empty)
+
+      after_state = Hall.evolve(state, event)
+      assert after_state.market.stock[product] == 1_800
+      assert after_state.market.stock[empty] == 0
+      assert prices(after_state) == prices(state)
+    end
+
+    test "a lowered target adds nothing and no price rises; an unchanged target is absent" do
+      state = launch_hall()
+      [lowered | _] = for {p, 400} <- Enum.sort(state.catalog.rules.market.target_stock_per_equivalent), do: p
+      tuning = with_targets(versioned(state.catalog, 2), %{lowered => 200})
+
+      assert {:ok, [event]} = decide(state, tuning)
+      assert event.stock == %{}
+
+      after_state = Hall.evolve(state, event)
+      assert after_state.market.stock == state.market.stock
+      assert prices(after_state)[lowered] <= prices(state)[lowered]
+      assert Map.delete(prices(after_state), lowered) == Map.delete(prices(state), lowered)
+    end
+  end
+
+  test "a catalog expansion after a retune keeps the retuned values" do
+    state = launch_hall()
+    base = Tuning.of(state.catalog)
+    [raised | _] = base.market.target_stock_per_equivalent |> Map.keys() |> Enum.sort()
+
+    tuning =
+      %{base | version: 2, demand: %{base.demand | arrivals_per_equivalent: 150}}
+      |> with_targets(%{raised => base.market.target_stock_per_equivalent[raised] + 100})
+      |> put_in([:npc, :fallback_trays_per_day], 25)
+
+    {:ok, [retune_event]} = decide(state, tuning)
+    state = Hall.evolve(state, retune_event)
+
+    newer = %{LaunchCatalog.catalog() | version: state.catalog.version + 1}
+    assert {:ok, [expanded]} = CatalogExpansion.decide(state, newer)
+    state = CatalogExpansion.evolve(state, expanded)
+
+    assert state.catalog.version == newer.version
+    assert Tuning.of(state.catalog) == tuning
+    assert state.catalog.rules.tuning.version == 2
+    assert Content.validate(state.catalog) == :ok
   end
 
   describe "refusals record nothing" do

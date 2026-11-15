@@ -118,6 +118,11 @@ defmodule FeudHall.Application.RetuneTest do
     tuning = doubled(noon.hall.catalog)
     assert {:accepted, _} = HallAuthority.execute(hall.pid, env("retune:2", @admin, retune(tuning)))
     retuned_at = HallAuthority.state(hall.pid).position
+
+    assert {:ok, [%{events: [%{type: :hall_rules_retuned, stock: top_up}]}]} =
+             InMemoryEventStore.read_from(elem(HallAuthority.store(hall.pid), 1), retuned_at - 1)
+
+    assert map_size(top_up) > 0
     tick_hours(hall, 40)
 
     live = HallAuthority.state(hall.pid)
@@ -211,16 +216,20 @@ defmodule FeudHall.Application.RetuneTest do
     launch = LaunchCatalog.catalog()
     tuning = doubled(launch)
     assert map_size(tuning.market.target_stock_per_equivalent) == map_size(launch.products)
-    {:ok, [event]} = FeudHall.Domain.Hall.Retune.decide(%{catalog: launch}, tuning)
+    market = %{stock: FeudHall.Domain.Market.opening_stock(launch)}
+    {:ok, [event]} = FeudHall.Domain.Hall.Retune.decide(%{catalog: launch, market: market}, tuning)
+    assert map_size(event.stock) == map_size(launch.products)
 
     assert {:ok, decoded} = event |> EventCodec.encode!() |> EventCodec.decode()
     assert decoded == event
 
     # As the PostgreSQL store writes and reads it, and as a hall retuned there is reopened.
     rt = boot(PostgresEventStore, PostgresEventStore.new(Repo, @scope))
+    {:ok, [expected]} = FeudHall.Domain.Hall.Retune.decide(rt.state, tuning)
+    assert map_size(expected.stock) > 0
     rt = accepted(rt, @admin, :retune_rules, %{tuning: tuning}, "retune:2")
     assert {:ok, [%{events: [stored]}]} = PostgresEventStore.read_from(rt.store, rt.position - 1)
-    assert stored == %{event | content_hash: rt.state.content_hash}
+    assert stored == expected
     assert stored.tuning == tuning
 
     rt = advance(rt, Clock.service_ms(Clock.day()))
