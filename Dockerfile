@@ -11,7 +11,7 @@ FROM elixir:1.20.4-otp-29-slim@sha256:6245171c91cf90808437f203f22856738d0095d310
 WORKDIR /source/server
 ENV MIX_ENV=prod
 # The slim image has no CA bundle, so Hex downloads fail TLS verification
-# without it. The runtime stage makes no TLS connections and stays without one.
+# without it.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -21,13 +21,20 @@ COPY server/config/ config/
 RUN mix deps.compile
 COPY server/lib/ lib/
 COPY server/priv/ priv/
+COPY server/rel/ rel/
 COPY --from=web /source/server/priv/static/ priv/static/
 RUN mix compile --warnings-as-errors && mix release
 
 FROM elixir:1.20.4-otp-29-slim@sha256:6245171c91cf90808437f203f22856738d0095d310f4f9030219e53111823ff8
 WORKDIR /app
+# Hosted PostgreSQL such as Neon requires TLS; Postgrex verifies the server
+# certificate against this bundle.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=beam --chown=10001:10001 /source/server/_build/prod/rel/feud_hall/ ./
 ENV HOME=/tmp
 USER 10001:10001
 EXPOSE 4000
-CMD ["/app/bin/feud_hall", "start"]
+# Migrates, then starts; the free Render plan has no pre-deploy command.
+CMD ["/app/bin/migrate_and_start"]

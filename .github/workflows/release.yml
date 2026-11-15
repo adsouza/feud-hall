@@ -52,10 +52,11 @@ jobs:
           load: true
           cache-from: type=gha,scope=release-container
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=release-container' || '' }}
-      - name: Migrate and boot the assembled release
+      # The image's CMD (bin/migrate_and_start) migrates the empty database
+      # before the hall starts, as it does on Render.
+      - name: Boot the assembled release on an empty database
         run: |
           envs=(-e FEUD_HALL_SERVE -e FEUD_HALL_SECRET -e FEUD_HALL_ORIGIN -e DATABASE_URL -e ERL_FLAGS)
-          docker run --rm --network host "${envs[@]}" --entrypoint /app/bin/feud_hall feud-hall-ci eval 'FeudHall.Release.migrate()'
           docker run -d --name feud-hall-ci --network host "${envs[@]}" feud-hall-ci
           curl --fail --retry 30 --retry-all-errors --retry-delay 1 http://localhost:4000/healthz
           curl --fail -H 'x-feud-protocol: 1' http://localhost:4000/api/state | jq -e '.hall.visitor_play'

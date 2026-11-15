@@ -343,10 +343,12 @@ existing local/hosted resource budgets rather than adding an unrestricted suite.
 
 ## Release qualification commands
 
-The `release qualification` workflow builds the assembled server container,
-runs its explicit migrations, then probes health, protocol and restart against
-disposable PostgreSQL. Its optional capacity job runs both peak distributions
-and the launch catalog's archive and restore drill.
+The `release qualification` workflow builds the assembled server container and
+boots it on an empty disposable PostgreSQL database. Its start command,
+`bin/migrate_and_start`, applies the migrations before the hall starts. The job
+then probes health, protocol and restart, which reruns the migrations as a
+no-op. Its optional capacity job runs both peak distributions and the launch
+catalog's archive and restore drill.
 
 Run the following from `server/` with matching PostgreSQL utilities on the
 path. Use a local PostgreSQL role that can create and drop disposable databases.

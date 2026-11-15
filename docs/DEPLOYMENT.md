@@ -134,20 +134,66 @@ replay external notifications.
 ### Render Blueprint
 
 Import `render.yaml` into the intended Render workspace for an isolated
-release-test service. The Blueprint uses an always-running web service and
-private PostgreSQL 18. Its service and database sizes are starting values for
-qualification. Set `FEUD_HALL_ADMIN_KEY` through Render and retain the generated
-signing secret across deploys. Render supplies the canonical external origin
-and the internal database URL. Set `FEUD_HALL_ORIGIN` explicitly for a custom
-domain.
+release-test service. The Blueprint uses a free Render web service in
+`virginia` and an external Neon PostgreSQL 18 database. A free instance sleeps
+after 15 minutes without inbound traffic and takes about a minute to wake.
+While it sleeps the hall's clocks stop, as during platform downtime, with no
+catch-up. This configuration does not meet the
+[always-running requirement](ARCHITECTURE.md#deployment-and-clients) for a
+persistent multiplayer hall. A free workspace's 750 instance hours a month are
+shared by all of its free services.
 
-The pre-deploy command runs `/app/bin/feud_hall eval 'FeudHall.Release.migrate()'`.
-It starts the repository for migration without starting the hall.
-`/healthz` checks that the local authority has initialized, is keeping up
-with the clock, and holds the current database fencing epoch. Auto-deploy is
-disabled. Schedule incompatible migrations and the first handover from a
-pre-M6 writer as maintenance. Stop the old writer before starting the new
-one. A fenced M6 authority exits its supervisor child.
+Create a Neon project with PostgreSQL 18 in AWS `us-east-1`, next to the
+service, and set its maximum compute size to 0.25 CU. Paste its direct
+connection string (the host without `-pooler`) as `DATABASE_URL` when
+importing. The runtime turns `sslmode=require`, `verify-ca`, or `verify-full`
+into verified TLS against the image's CA bundle, drops `channel_binding`, and
+refuses modes that could fall back to plaintext. Neon's free plan allows 100
+CU-hours a month (about 400 awake hours at 0.25 CU), suspends compute after 5
+idle minutes, keeps a 6-hour restore window, and fails writes beyond 1 GB of
+storage. The capacity run grew by about 43 MiB per game day (one real hour) with
+150 occupied stalls; a quieter hall's growth is not measured. Watch storage and
+take `pg_dump` backups, which Neon accepts from outside Render.
+
+Set `FEUD_HALL_ADMIN_KEY` through Render and retain the generated signing
+secret across deploys. Render supplies the canonical external origin. Set
+`FEUD_HALL_ORIGIN` explicitly for a custom domain.
+
+The image starts with `bin/migrate_and_start`. It runs
+`/app/bin/feud_hall eval 'FeudHall.Release.migrate()'`, which starts the
+repository without the hall, and then starts the server. A failed migration
+exits before the hall authority starts. Each wake from sleep reruns the
+migrations as a no-op. `/healthz` checks that the local authority has
+initialized, is keeping up with the clock, and holds the current database
+fencing epoch.
+
+Render deploys `main` automatically after every GitHub check on the commit
+has passed (`autoDeployTrigger: checksPass`). It skips a commit with a failed
+check or with no checks at all. The build filter limits deploys to changes in
+the image inputs: the Dockerfile and `.dockerignore`, the Blueprint, `app/`,
+`server/`, and `assets/`, but not `app/src-tauri/` or `server/test/`.
+
+Render starts the new instance while the old one still receives traffic, and
+switches traffic once the new instance passes `/healthz`. The new authority
+acquires the hall at start-up, before it is ready, so requests fail while it
+recovers. A fenced M6 authority exits its supervisor child, and the old
+instance's `/healthz` then returns 503. A new instance that stops before its
+authority starts, such as on a failed migration, leaves the old instance in
+charge. If a new instance acquires the hall and never becomes ready, Render
+cancels the deploy after 15 minutes and keeps routing to the fenced instance
+until it restarts that instance after 60 seconds of failed health checks. A
+recovery longer than about 60 seconds could let that restart take the hall
+back from the new instance. This behavior comes from the code and Render's
+documentation; rehearse a failed deploy and measure recovery time before
+players depend on the service. Keep `numInstances: 1` and leave autoscaling
+off.
+
+The start-up migration runs while the old release is still the writer.
+Merge only migrations that the running release tolerates. Before merging an
+incompatible migration, turn auto-deploy off in the service settings and
+follow the maintenance sequence above: stop the old writer before starting
+the new one. The next `render.yaml` change syncs the Blueprint and restores
+`checksPass`. Treat the first handover from a pre-M6 writer the same way.
 
 Rehearse the sequence in the release-test service before public provisioning.
 Select production capacity from the measured workload and verify that the
