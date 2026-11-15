@@ -270,6 +270,10 @@
       if (pending && connected && !submitting) await deliver(pending);
       return;
     }
+    if (action.kind === "reload") {
+      reloadClient();
+      return;
+    }
     if (disabled) return;
     switch (action.kind) {
       case "main":
@@ -808,6 +812,10 @@
       );
     }
 
+    // The reload offer sits here in place of the page banner.
+    if (connected && updateAvailable) rows.push({ text: t("newVersion") });
+    if (connected ? updateAvailable : updateRequired && !nativeClient)
+      rows.push({ text: t("reload"), action: { kind: "reload" } });
     if (pending)
       rows.push({
         text: t("retry"),
@@ -2375,7 +2383,9 @@
           .join(locale === "ja" ? "" : " ")
       : status === "update"
         ? t("update")
-        : ""}
+        : inWorldNotices && updateAvailable && connected
+          ? t("newVersion")
+          : ""}
   </span>
   {#if status === "update"}
     <div

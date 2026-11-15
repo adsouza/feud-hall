@@ -1,4 +1,4 @@
-import { createGuest, expect, state, test } from "./hall";
+import { createGuest, expect, serveNewerClient, state, test } from "./hall";
 import type { Page } from "@playwright/test";
 
 test.use({
@@ -526,4 +526,39 @@ test("confirmation errors open their tablet page and preserve whole red words", 
   );
   await page.locator(".refusal-notice button").click();
   await expect(page.locator(".refusal-notice")).toHaveCount(0);
+});
+
+test("the hall tablet offers the reload in place of a page banner", async ({
+  page,
+  hall,
+}) => {
+  await page.goto(hall.origin);
+  await createGuest(page, "Reload diner");
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await focusStall(page, "s001");
+  await stationControl(page, "menu").click();
+  await expect(page.locator("[data-hall-canvas]")).toHaveAttribute(
+    "data-hall-tablet",
+    "s001",
+  );
+
+  await serveNewerClient(page, hall.origin);
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  const rows = page.locator(".tablet-text-controls");
+  await expect(rows).toContainText("A new version of Feud Hall is available.");
+  await expect(rows.locator('[data-tablet-kind="reload"]')).toBeAttached();
+  await expect(page.locator("main > .sr-only[role=status]")).toHaveText(
+    "A new version of Feud Hall is available.",
+  );
+  await expect(page.locator("main > .banner:not(.success-notice)")).toHaveCount(
+    0,
+  );
+
+  await page.unroute(new URL("/", hall.origin).href);
+  await Promise.all([
+    page.waitForEvent("load", { timeout: 10_000 }),
+    tapTablet(page, "reload"),
+  ]);
 });

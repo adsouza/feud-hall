@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, test } from "./hall";
+import { expect, serveNewerClient, test } from "./hall";
 
 test("web requests send the client protocol and a refused protocol asks for a reload", async ({
   page,
@@ -36,21 +36,6 @@ function servedPages(page: Page) {
       fetches.push(request.url());
   });
   return fetches;
-}
-
-// Serves the real page with another entry script, as after a deploy that
-// changed the client code.
-async function serveNewerClient(page: Page, origin: string) {
-  await page.route(new URL("/", origin).href, async (route) => {
-    const response = await route.fetch();
-    const original = await response.text();
-    const body = original.replace(
-      /src="\/assets\/index-[^"]+\.js"/,
-      'src="/assets/index-newer.js"',
-    );
-    expect(body).not.toBe(original);
-    await route.fulfill({ response, body });
-  });
 }
 
 async function openHall(page: Page, origin: string) {
@@ -98,7 +83,7 @@ test("an open tab offers a reload once the hall serves a newer client", async ({
 
   await page.unroute(new URL("/", hall.origin).href);
   await Promise.all([
-    page.waitForEvent("load"),
+    page.waitForEvent("load", { timeout: 10_000 }),
     japanese.getByRole("button", { name: "再読み込み" }).click(),
   ]);
   await expect(page.getByText(newVersion)).toHaveCount(0);

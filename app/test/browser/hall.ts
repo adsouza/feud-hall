@@ -139,4 +139,19 @@ export async function state(page: Page) {
   return response.json();
 }
 
+// Serves the real page with another entry script, as after a deploy that
+// changed the client code.
+export async function serveNewerClient(page: Page, origin: string) {
+  await page.route(new URL("/", origin).href, async (route) => {
+    const response = await route.fetch();
+    const original = await response.text();
+    const body = original.replace(
+      /src="\/assets\/index-[^"]+\.js"/,
+      'src="/assets/index-newer.js"',
+    );
+    expect(body).not.toBe(original);
+    await route.fulfill({ response, body });
+  });
+}
+
 export { expect };

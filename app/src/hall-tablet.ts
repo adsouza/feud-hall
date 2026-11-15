@@ -18,6 +18,7 @@ export type TabletAction =
         | "guest"
         | "cancel"
         | "retry"
+        | "reload"
         | "visit";
     };
 export type TabletRow = {
