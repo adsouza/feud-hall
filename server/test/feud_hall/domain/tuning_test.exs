@@ -78,11 +78,11 @@ defmodule FeudHall.Domain.TuningTest do
       %{arrivals_per_equivalent: arrivals, hourly_weights: weights} = Tuning.chosen().demand
       assert Enum.at(weights, 3) == 0
       assert Enum.at(weights, 4) == 0
-      assert arrivals == 249
+      assert arrivals == 252
       assert Enum.sum(weights) == arrivals
-      # The two rushes are the busiest hours; overnight is the quietest open time.
-      assert Enum.at(weights, 12) == Enum.max(weights)
-      assert Enum.at(weights, 19) == Enum.max(weights)
+      # The two rushes are the two busiest hours; overnight is the quietest open time.
+      busiest = weights |> Enum.with_index() |> Enum.sort(:desc) |> Enum.take(2) |> Enum.map(&elem(&1, 1))
+      assert Enum.sort(busiest) == [12, 19]
       assert Enum.max(Enum.slice(weights, 0, 3)) < Enum.min(Enum.slice(weights, 7, 16))
     end
 
