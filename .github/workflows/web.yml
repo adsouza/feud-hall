@@ -10,14 +10,45 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes its running checks; main runs finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 defaults:
   run:
     working-directory: app
 
+env:
+  NODE_OPTIONS: --max-old-space-size=1536
+
 jobs:
-  check:
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26.13.0"
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun check
+      - run: bun run --bun build
+
+  browser:
+    # One Chromium worker per shard; Playwright splits the tests evenly.
+    name: browser (${{ matrix.shard }}/6)
     runs-on: ubuntu-24.04
     timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     services:
       postgres:
         image: postgres:18
@@ -34,33 +65,39 @@ jobs:
       PGUSER: postgres
       PGPASSWORD: postgres
       PGHOST: localhost
-      NODE_OPTIONS: --max-old-space-size=1536
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.4"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "26.13.0"
-      - run: bun install --frozen-lockfile
-      - run: bun run format:check
-      - run: bun run lint
-      - run: bun check
-      - run: bun run --bun build
       - uses: erlef/setup-beam@v1
         with:
           version-file: server/.tool-versions
           version-type: strict
+      - uses: actions/cache@v6
+        with:
+          path: |
+            server/deps
+            server/_build
+          key: mix-${{ runner.os }}-${{ hashFiles('server/.tool-versions', 'server/mix.lock') }}
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('app/bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - run: bun run --bun build
       - run: mix deps.get --check-locked && mix compile --warnings-as-errors
         working-directory: server
         env:
           MIX_ENV: test
       - run: bun run playwright install --with-deps chromium
-      - run: bun run test:browser
+      - run: bun run test:browser --shard=${{ matrix.shard }}/6
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: browser-failures
+          name: browser-failures-${{ matrix.shard }}
           path: app/test-results/
           if-no-files-found: ignore

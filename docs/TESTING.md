@@ -160,7 +160,7 @@ disposable databases.
 | Model-based property (pure) | `mix test test/feud_hall/properties/hall_trace_property_test.exs --max-cases 1` | Pure; 100 runs, at most 70 generated actions plus the closing service; the oracle checks every accepted command. Includes a deterministic example that the bare closing service alone reaches every structural floor (the case shrinking collapses to). About 130 MB peak RSS locally (measured at Milestone 1). |
 | Model-based property (PostgreSQL) | `mix test test/feud_hall/properties/postgres_trace_property_test.exs --max-cases 1` | Replays pure traces through `CommandWorkflow` on PostgreSQL with snapshots, restarts, aborted commits, and lost replies, and an observed-clock arm that folds every other advance into its successor's catch-up batch (with lost replies and aborted commits on the catch-up append); structural floors on injections, catch-ups, and served trays; checks projection rebuild and genesis replay at the end. |
 | Full suite | `mix test --max-cases 1 [--seed N]` | Locally permitted only because the owner gave advance permission on 2026-11-09, serially, with combined `beam.smp` and `postgres` RSS sampled every second and the run killed above 2 GiB. Otherwise hosted CI. |
-| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>`; `elixir scripts/mutation_cohort.exs --check` | 49 patches including NPC refusal serialization, premature handover credit, and device revocation. Copies the project into `<empty-dir>`, never edits the checkout, and runs mutants with `MIX_ENV=test` against `feud_hall_mutation`. One worker runs focused files per mutant with a recorded seed and verifies the baseline before and after. A structured ExUnit formatter separates behavioral assertions from setup and runtime failures. `--check` verifies that every patch matches exactly once. Append `--match '<name fragment>'` to an isolated run to select a bounded subset. Hosted CI runs the cohort. |
+| Curated mutation cohort | `elixir scripts/mutation_cohort.exs <empty-dir>`; `elixir scripts/mutation_cohort.exs --check` | 62 patches including NPC refusal serialization, premature handover credit, and device revocation. Copies the project into `<empty-dir>`, never edits the checkout, and runs mutants with `MIX_ENV=test` against `feud_hall_mutation`. One worker runs focused files per mutant with a recorded seed and verifies the baseline before and after. A structured ExUnit formatter separates behavioral assertions from setup and runtime failures. `--check` verifies that every patch matches exactly once. Append `--match '<name fragment>'` to an isolated run to select a bounded subset, or `--shard I/N` for the I-th of N contiguous slices (each with its own baseline; the slices together are the whole cohort). Hosted CI runs four slices in parallel, beside the full suite rather than after it. |
 | Projection rebuild (maintenance) | `PostgresEventStore.rebuild_projections/1`, `Postgres.DailyActivityProjector.rebuild/1` | Recompute derived tables from the log. Not a Mix task and exercised by tests only; never point it at a live hall without an operations procedure. |
 | Project C capacity measurement | `python3 scripts/capacity_bench.py --output /tmp/feud-hall-capacity.json` | Standalone, serial benchmark on local PostgreSQL 18. Creates and drops `feud_hall_bench` and refuses an existing database of that name. Defaults to three complete game days, with `--days` accepting one through seven. Stops above 2 GiB combined RSS. |
 
@@ -378,7 +378,9 @@ the protocol, origin protection and a replayed revoked cookie against a
 disposable hall. From `app/src-tauri/`, run `cargo fmt --check` and
 `cargo test --locked --bin feud-hall` after `bun run desktop:assets` in
 `app/`. Keep Cargo to one local build job. The native workflow builds the
-macOS bundle, installs both Linux packages, and attempts their launch.
+macOS bundle, installs both Linux packages, and attempts their launch; a
+parallel job runs the trust-boundary tests on both systems. Hosted Cargo uses
+every runner core and restores dependency builds cached from `main`.
 In each packaged client, check Cmd (macOS) or Ctrl (Linux) with `+`/`=`, `-`,
 and `0` for whole-page zoom and reset. Check reflow, focused input/draft
 continuity, English/Japanese text, and the hall canvas at enlarged zoom; the
@@ -478,7 +480,8 @@ version, its validation and codec; `recovery_test.exs` restarts a launch hall
 on PostgreSQL across the upgrade and checks it is recorded once.
 
 The web workflow runs frozen Bun install, Prettier, Oxlint, native `bun check`,
-and a Vite production build. It also runs a one-worker Chromium suite for
+and a Vite production build. It also runs the Chromium suite, split by test
+into six parallel shards of one worker each, for
 changes to the web client, server, or branding assets. The suite exercises
 dining, helper handover, invitation and cuisine selection, and NPC startup
 recovery through the built client, Phoenix, and disposable PostgreSQL databases.

@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes its running checks; main runs finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 defaults:
   run:
     working-directory: server
@@ -20,6 +25,7 @@ env:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:18
@@ -37,12 +43,12 @@ jobs:
       PGPASSWORD: postgres
       PGHOST: localhost
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: erlef/setup-beam@v1
         with:
           version-file: server/.tool-versions
           version-type: strict
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             server/deps
@@ -56,10 +62,16 @@ jobs:
       - run: mix test --warnings-as-errors
 
   mutation:
-    # Bounded curated cohort, one worker, in a disposable copy.
-    needs: check
+    # Bounded curated cohort, one worker per slice, each in a disposable copy.
+    # Each slice verifies its own baseline before and after, so it does not
+    # wait for the check job; the four slices together are the whole cohort.
+    name: mutation (${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:18
@@ -77,22 +89,22 @@ jobs:
       PGPASSWORD: postgres
       PGHOST: localhost
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: erlef/setup-beam@v1
         with:
           version-file: server/.tool-versions
           version-type: strict
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             server/deps
             server/_build
           key: mix-${{ runner.os }}-${{ hashFiles('server/.tool-versions', 'server/mix.lock') }}
       - run: mix deps.get --check-locked && mix compile
-      - run: elixir scripts/mutation_cohort.exs "$RUNNER_TEMP/mutation"
+      - run: elixir scripts/mutation_cohort.exs "$RUNNER_TEMP/mutation" --shard ${{ matrix.shard }}/4
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: mutation-report
+          name: mutation-report-${{ matrix.shard }}
           path: ${{ runner.temp }}/mutation/mutation_report.txt
           if-no-files-found: ignore

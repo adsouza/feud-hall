@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes its running checks; main runs finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   container:
     runs-on: ubuntu-24.04
@@ -36,8 +41,17 @@ jobs:
       DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:5432/feud_hall_release'
       ERL_FLAGS: '+S 2:2 +SDio 1 +SDcpu 1'
     steps:
-      - uses: actions/checkout@v4
-      - run: docker build --tag feud-hall-ci .
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # Layer cache: dependency layers rebuild only when lockfiles change.
+      # Pull requests read main's cache without writing their own.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          tags: feud-hall-ci
+          load: true
+          cache-from: type=gha,scope=release-container
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=release-container' || '' }}
       - name: Migrate and boot the assembled release
         run: |
           envs=(-e FEUD_HALL_SERVE -e FEUD_HALL_SECRET -e FEUD_HALL_ORIGIN -e DATABASE_URL -e ERL_FLAGS)
@@ -74,7 +88,7 @@ jobs:
       PGPASSWORD: postgres
       ERL_FLAGS: '+S 2:2 +SDio 1 +SDcpu 1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: erlef/setup-beam@v1
         with:
           version-file: server/.tool-versions
@@ -95,7 +109,7 @@ jobs:
           python3 scripts/peak_sessions.py --scenario owners --output "$RUNNER_TEMP/owners.json"
           python3 scripts/peak_sessions.py --scenario expanded --output "$RUNNER_TEMP/expanded.json"
           python3 scripts/capacity_bench.py --mode launch --days 1 --restore --output "$RUNNER_TEMP/capacity.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-capacity
           path: |
