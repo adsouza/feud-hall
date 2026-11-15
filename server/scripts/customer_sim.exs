@@ -421,10 +421,14 @@ defmodule FeudHall.CustomerSim.Stats do
           products -> %{open: 1, short: bit(products != []), products: Map.new(products, &{&1, 1})}
         end
 
+      # Measured days only, as the verdict's row for the reference stall counts them.
       owner_short =
         Enum.reduce(obs.owner_short, stats.owner_short, fn
-          {_sid, nil}, acc -> acc
-          {sid, products}, acc -> Map.update(acc, sid, bit(products != []), &(&1 + bit(products != [])))
+          {sid, products}, acc when products != nil and day >= 1 ->
+            Map.update(acc, sid, bit(products != []), &(&1 + bit(products != [])))
+
+          _closed_or_warm_up, acc ->
+            acc
         end)
 
       %{
@@ -1602,7 +1606,7 @@ defmodule FeudHall.CustomerSim.CLI do
       bounds = "#{if row.low == nil, do: "-", else: row.low}..#{if row.high == nil, do: "-", else: row.high}"
 
       IO.puts(
-        "  #{if row.pass, do: "PASS", else: "FAIL"}  #{String.pad_trailing(row.check, 52)} #{row.value}  [#{bounds}]" <>
+        "  #{verdict_label(row)}  #{String.pad_trailing(row.check, 52)} #{row.value}  [#{bounds}]" <>
           if(row[:hours], do: "  open share by hour " <> reasons(row.hours), else: "")
       )
     end
@@ -1617,6 +1621,11 @@ defmodule FeudHall.CustomerSim.CLI do
       )
     end
   end
+
+  # A row with no bound is reported, not judged.
+  defp verdict_label(%{low: nil, high: nil}), do: "INFO"
+  defp verdict_label(%{pass: true}), do: "PASS"
+  defp verdict_label(_row), do: "FAIL"
 
   defp reasons(map) when map_size(map) == 0, do: "-"
   defp reasons(map), do: map |> Enum.sort() |> Enum.map_join(",", fn {k, v} -> "#{k}:#{v}" end)

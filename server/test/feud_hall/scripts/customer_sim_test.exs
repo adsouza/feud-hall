@@ -379,6 +379,13 @@ defmodule FeudHall.CustomerSimTest do
     assert_in_delta measured["arrivals"], 90 * warm_up.scale_millis / 1_000, 1
     assert length(json["owners"]) == 3
     assert length(json["checked_hours"]) == 6
+    # An owner stall's short count covers the measured days only, like the verdict's row
+    # (the reference is short for its first hour of the warm-up day), and no computer-run stall has one.
+    by_stall = Map.new(json["checked_hours"], &{&1["stall"], &1})
+    short_row = row(Stats.verdict(:a, result.stats), "A ref open instants short of an ingredient")
+    assert by_stall[reference.stall_id]["short"] == short_row.value
+    assert Enum.count(json["checked_hours"], &(&1["short"] == nil)) == 3
+    assert Stats.summary(result.stats).days |> hd() |> Map.fetch!(:reference_short_samples) > 0
 
     for row <- json["checked_hours"], key <- ~w(waiting_12 waiting_19 busy_12 busy_19 waiting_10 waiting_14_17) do
       assert is_number(row[key]), "#{row["stall"]} #{key}"
