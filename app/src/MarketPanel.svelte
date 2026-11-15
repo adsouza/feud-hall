@@ -208,7 +208,7 @@
   // ---------------------------------------------------------------------
   type Shown = {
     sent: SentLine;
-    state: Tracked["state"] | "unconfirmed";
+    state: Tracked["state"] | "unconfirmed" | "sent";
     filled: number;
     short: number;
     reason: string | null;
@@ -219,8 +219,9 @@
     return [...draft.sent].reverse().map((sent): Shown => {
       const none = { sent, filled: 0, short: 0, reason: null, cost: null };
       if (sent.uncertain) return { ...none, state: "unconfirmed" };
-      // An older server sends no purchases: say only that it was sent.
-      if (!purchases) return { ...none, state: "pending" };
+      // An older server sends no purchases, so no outcome can be known: say
+      // only that it was sent; like a settled line it leaves after a minute.
+      if (!purchases) return { ...none, state: "sent" };
       const requestId = requestIdFor(sent.commandId);
       const [line] = track(
         [{ requestId, product: sent.product }],
@@ -279,6 +280,8 @@
         });
       case "rejected":
         return fill("orderRejected", { reason });
+      case "sent":
+        return t("orderSent");
       default:
         return t("orderSettled");
     }

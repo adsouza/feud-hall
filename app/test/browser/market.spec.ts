@@ -765,6 +765,7 @@ test("market: every market string exists in Japanese", async ({
     "orderShort",
     "orderRejected",
     "orderSettled",
+    "orderSent",
     "noteReplacesPending",
     "notePriceAboveLimit",
     "noteMoreThanStock",
@@ -857,5 +858,24 @@ test("market: a malformed price or a missing crate cannot be added, and nothing 
   await expect(olderRow).toContainText(name(older));
   await expect(addButton(panel, older)).toBeDisabled();
   await expect(olderRow.getByRole("meter")).toHaveCount(0);
+
+  // Without purchases the panel cannot know the outcome: it says only "sent",
+  // and the line leaves a minute later.
+  const usable = owner.products[2];
+  expect(usable).toBeDefined();
+  owner.setOnAccepted(() => {});
+  await chooseVendorOf(panel, usable);
+  await addButton(panel, usable).click();
+  await panel
+    .getByRole("button", { name: en("sendOrder"), exact: true })
+    .click();
+  await expect.poll(() => owner.commands.length).toBe(1);
+  const way = wayList(panel).getByRole("listitem");
+  await expect(way).toHaveCount(1);
+  await expect(way).toHaveAttribute("data-way-state", "sent");
+  await expect(way).toContainText(en("orderSent"));
+  await expect(way).not.toContainText(en("fillsAtNextClearing"));
+  await page.clock.fastForward(61_000);
+  await expect(way).toHaveCount(0);
   expect(errors).toEqual([]);
 });
