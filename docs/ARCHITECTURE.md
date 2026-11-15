@@ -525,7 +525,9 @@ Balance values are data, and a managed launch hall changes them only through a r
 
 **Replay, snapshots and pinned terms.** Events before the change replay under the old values because the catalog is part of state at each position. Accepted orders, leases, drafts and funding slices keep the terms they were accepted under. A guest's confirmed offer made before the change must be reconfirmed, as after a catalog expansion, because the content hash changed. Live, genesis replay and snapshot-tail replay agree across a retune; a snapshot taken after it holds the retuned catalog. The event codec allowlists the new event and keys, and the Postgres event store and snapshot decoder load the `Tuning` and `Retune` modules before safe term decoding, because `binary_to_term/2` with `:safe` refuses atoms of modules a fresh VM has not loaded.
 
-**A later catalog expansion.** `CatalogExpansion` merges only new definitions and keeps pinned values, so an expansion after a retune keeps the retuned tuning. A test pins this because start-up issues an expansion whenever a new launch version ships.
+**A later catalog expansion.** `CatalogExpansion` merges only new definitions and keeps pinned values, so an expansion after a retune keeps the retuned tuning. A test pins this because start-up issues an expansion whenever a new launch version ships. A later launch catalog version that adds products gives a retuned hall those products at the launch catalog's own targets and caps, not at the tuning's rule: the tuning that was applied is the recorded set of values, and it names only the products that existed then. Only a newer tuning version can change the new products' values; the same version is refused. A second test pins this.
+
+**Reverting.** The event is never removed. A retuned hall returns to earlier values, or moves to any others, through a newer tuning version applied the same way: `Retune.decide/2` accepts any version above the hall's own. Stock added by an earlier top-up is not taken back, and a lowered target only stops replenishment until stock has sold down to it.
 
 ### Diners on the floor
 

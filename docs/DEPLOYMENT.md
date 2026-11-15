@@ -459,42 +459,73 @@ brings more diners, larger wholesale stock and a changed computer-run planner
 (see the report for the values). No release, start-up or recovery applies it,
 including a start-up of a new hall or of an existing one. An operator applies
 it to a hall once, on purpose, with a request to `POST /api/operator/retune`.
-It records one `hall_rules_retuned` event, and it cannot be undone: the event
-stays in the hall's history, and a restore of an earlier backup is the only way
-back. The owner has not yet decided whether costs should rise with the extra
+It records one `hall_rules_retuned` event.
+
+**Changing it back.** The event cannot be removed: it stays in the hall's
+history. The values can be changed again, by applying a newer tuning version
+in the same way. A version 3 carrying the current values would return
+arrivals and stock targets to today's from the next game midnight. Stock that
+the change added stays until it sells, so wholesale prices sit low meanwhile.
+No version 3 exists in the code today. Making one is a code change and a
+release: the values in `FeudHall.Domain.Content.Tuning`, and the route's
+version gate in `FeudHall.Web.Router`, which accepts only the version
+`Tuning.chosen/0` carries. A restore of an earlier backup also undoes
+everything players did since that backup, so it is the last resort.
+
+**Changing the day shape.** The report measures
+[two day shapes](superpowers/reports/2026-11-15-more-real-customers.md#the-choice-between-two-day-shapes).
+Before the change is applied to a hall, the other shape is an edit of
+`Tuning.chosen/0`. After it is applied, switching is likewise a new version,
+not an edit: the hall is already at version 2, and the route would answer
+`retune_unavailable` to a second version 2 whatever `Tuning.chosen/0` then
+holds.
+
+The owner has not yet decided whether costs should rise with the extra
 customers; read
-[the report's section for the owner's attention](superpowers/reports/2026-11-15-more-real-customers.md#for-the-owners-attention)
-and the [profit tables](superpowers/reports/2026-11-15-more-real-customers.md#profit)
+[the report's section for the owner's attention](superpowers/reports/2026-11-15-more-real-customers.md#for-the-owners-attention),
+the [profit tables](superpowers/reports/2026-11-15-more-real-customers.md#profit)
+and [what more stalls do to both](superpowers/reports/2026-11-15-more-real-customers.md#with-more-stalls)
 before applying it to a hall players use.
 
-1. Take a database backup first, as described under
+1. Announce the change to players before applying it. Arrivals nearly triple
+   from the next game midnight, and each owner's restock targets and daily
+   budgets are their own settings: ones sized for today's trade will run a
+   stall out of stock on the first day until its owner raises them.
+2. Take a database backup, as described under
    [Rollback, interruption, and restore](#rollback-interruption-and-restore)
    and in the backup notes of the [local management game](#local-management-game).
-2. Send the request with the operator secret (the value of
+3. Send the request with the operator secret (the value of
    `FEUD_HALL_ADMIN_KEY`; never paste a real key into notes or a shared shell
-   history). Use a new `command_id` for a new attempt and keep it: repeating the
-   same request returns the original receipt without a second change.
+   history).
 
    ```sh
    curl -sS -X POST "$FEUD_HALL_ORIGIN/api/operator/retune" \
      -H "Authorization: Bearer $FEUD_HALL_ADMIN_KEY" \
      -H "Content-Type: application/json" \
-     -d '{"command_id": "operator-retune:2", "version": 2}'
+     -d '{"command_id": "upgrade:retune-2", "version": 2}'
    ```
+
+   Use this `command_id`. The `upgrade:` prefix is reserved for system
+   actors, so no player's device can spend the ID first; an ID outside the
+   reserved prefixes can be taken by any device, and the operator's request
+   with it would then apply nothing. Keep the ID: repeating the same request
+   returns the original receipt without a second change. For a new attempt
+   use a new ID under the same prefix.
 
    `version` must equal the tuning version the release carries (2 for this
    tuning). Any other value, or a missing or non-integer one, is refused with
    `unknown_tuning_version` (HTTP 422) and nothing is recorded. A missing or
-   wrong key, or a body without a text `command_id`, is refused with HTTP 403
-   `forbidden`. A hall that cannot take the change, or already has this
-   version or a newer one, answers `{"accepted": false, "reason":
-   "retune_unavailable"}` and records nothing.
-3. What changes at once: wholesale stock is topped up in the same event, so
-   prices do not jump, and the computer-run planner's new values apply at its
-   next plan. What changes at the next game midnight: the diner arrival rate and
-   the wholesale replenishment. A guest partway through checkout must
-   reconfirm, as after a catalog expansion.
-4. Confirm it took effect. A repeat of the request answers `{"accepted": true}`
+   wrong key, a configured key that is unset or shorter than 32 bytes, or a
+   body without a text `command_id`, is refused with HTTP 403 `forbidden`. A
+   hall that cannot take the change, or already has this version or a newer
+   one, answers `{"accepted": false, "reason": "retune_unavailable"}` and
+   records nothing.
+4. What changes at once: wholesale stock is topped up in the same event, so
+   no wholesale price rises, and the computer-run planner's new values apply
+   at its next plan. What changes at the next game midnight: the diner
+   arrival rate and the wholesale replenishment. A guest partway through
+   checkout must reconfirm, as after a catalog expansion.
+5. Confirm it took effect. A repeat of the request answers `{"accepted": true}`
    with the same `position`. In the database, the event exists:
 
    ```sh
@@ -503,3 +534,6 @@ before applying it to a hall players use.
 
    Exactly one row means it was applied once. After the next game midnight,
    compare the day's `diner_arrived` count with the days before it.
+6. When the operator work is done, unset `FEUD_HALL_ADMIN_KEY` and restart
+   the service, as after [seeding](#local-management-game): both
+   operator routes are live wherever the key is set.

@@ -404,10 +404,10 @@ The initial tuning target is roughly 90 potential diner arrivals per game day pe
 
 | Value | Current | Chosen (proposed, not applied) |
 | --- | --- | --- |
-| Potential arrivals per business equivalent per day | 90 | 252 |
-| Share of the day by hour, 00:00 first (proportions; the demand model normalizes them, and the chosen weights also equal arrivals per equivalent in each hour, summing to 252) | 2, 1, 1, 0, 0, 1, 2, 4, 6, 6, 8, 12, 14, 12, 8, 6, 6, 8, 12, 14, 10, 8, 5, 3 | 3, 2, 1, 0, 0, 2, 3, 5, 7, 8, 11, 19, 34, 17, 12, 12, 12, 14, 19, 33, 15, 10, 8, 5 |
+| Potential arrivals per business equivalent per day | 90 | 248 |
+| Share of the day by hour, 00:00 first (proportions; the demand model normalizes them, and the chosen weights also equal arrivals per equivalent in each hour, summing to 248) | 2, 1, 1, 0, 0, 1, 2, 4, 6, 6, 8, 12, 14, 12, 8, 6, 6, 8, 12, 14, 10, 8, 5, 3 | 3, 2, 1, 0, 0, 2, 3, 5, 7, 9, 11, 19, 30, 19, 12, 12, 12, 14, 19, 28, 16, 11, 8, 5 |
 
-The chosen day has a one-hour peak at 12:00 and at 19:00. The [report](superpowers/reports/2026-11-15-more-real-customers.md#the-chosen-values) gives the measurements behind these values, including a gentler day shape the owner may choose instead and what each costs in served meals.
+The chosen day has a one-hour peak at 12:00 and at 19:00. The [report](superpowers/reports/2026-11-15-more-real-customers.md#the-chosen-values) gives the measurements behind these values. A sharper alternative (252 arrivals per equivalent, with 34 and 33 in the two rush hours) was measured beside it and is the owner's to choose instead: see [the choice between two day shapes](superpowers/reports/2026-11-15-more-real-customers.md#the-choice-between-two-day-shapes).
 
 ### Human visitor customers
 
@@ -718,7 +718,7 @@ At midnight, wholesale stock is topped up toward the target set by the previous 
 
 Two examples, per business equivalent: frozen salmon, which substitutes for salmon at one gram per gram, goes from 400 g to 14,500 g (the largest recipe line uses 145 g of salmon), a rise of about 36 times; long rice, a staple, goes from 1,200 g to 5,500 g (the largest line uses 55 g). 257 of the 274 products rise.
 
-Applying the change adds stock in proportion to each raised target at that moment, so published prices do not jump. The new targets and the higher arrival rate take effect at the next game midnight. The [report](superpowers/reports/2026-11-15-more-real-customers.md#the-chosen-values) lists examples and how the size of 100 portions was chosen.
+Applying the change adds stock in proportion to each raised target at that moment, so published prices do not jump. The new targets and the higher arrival rate take effect at the next game midnight. The [report](superpowers/reports/2026-11-15-more-real-customers.md#the-chosen-values) lists examples and how the size of 100 portions was chosen. That size leaves nothing scarce on any measured day, which is a choice the owner may revisit.
 
 ### Purchasing and clearing
 
@@ -1707,7 +1707,7 @@ The owner has resolved the central concept, population, time, absence policy, fa
 | Inactive leases | Dormancy after seven available-service days with neither trading nor owner management; reopening retains the venture and receives no new grant. |
 | Market clearing | Ten real seconds; tune fairness, feedback, and stock volatility. |
 | Arrival scale | Approximately 90 potential arrivals per business equivalent per day, floor three equivalents; calibrate adaptation and actual conversion. |
-| Customer tuning | Chosen values are proposed and not applied to any hall: 252 potential arrivals per equivalent (current 90) with a one-hour peak at 12:00 and 19:00, wholesale targets, per product in its own unit, of the larger of the current target and 100 times the largest quantity any recipe line uses (current: the larger of a base of 400 by default, more for named staples, and six times the starter mains' line quantity; no target falls), computer-run fallback 50 trays (current 10), and mainstream and premium starter shifts 11:00-23:00 and 17:00-03:00 (current 12:00-00:00 and 19:00-07:00). Details in [§7](#a-finite-pool-of-diners), [§8](#market-structure) and [§14](#the-early-hall). A hall stays on the current values until an operator applies the [recorded rule change](ARCHITECTURE.md#the-recorded-rule-change); the owner decides first whether rent, wages and prices should rise. Evidence and the choice of day shape: [report](superpowers/reports/2026-11-15-more-real-customers.md). |
+| Customer tuning | Chosen values are proposed and not applied to any hall: 248 potential arrivals per equivalent (current 90) with a one-hour peak of 30 at 12:00 and 28 at 19:00 (a sharper alternative, 252 with 34 and 33, is measured in the report), wholesale targets, per product in its own unit, of the larger of the current target and 100 times the largest quantity any recipe line uses (current: the larger of a base of 400 by default, more for named staples, and six times the starter mains' line quantity; no target falls), computer-run fallback 50 trays (current 10), and mainstream and premium starter shifts 11:00-23:00 and 17:00-03:00 (current 12:00-00:00 and 19:00-07:00). Details in [§7](#a-finite-pool-of-diners), [§8](#market-structure) and [§14](#the-early-hall). A hall stays on the current values until an operator applies the [recorded rule change](ARCHITECTURE.md#the-recorded-rule-change); the owner decides first whether rent, wages and prices should rise. Evidence and the choice of day shape: [report](superpowers/reports/2026-11-15-more-real-customers.md). |
 | Economic scheduling | One-real-second wake-up, plus server-timestamped command advances; proposed unobserved gap over five real seconds enters recovery. Benchmark batching, readiness, and GC under the full owner/guest/helper workload. |
 | Service windows | Confirmed hall cleaning closure 03:00–05:00 game time, five real minutes; owners choose service windows within the other 22 hours. No diner backlog accrues during cleaning. Tune overnight demand within the existing daily arrival budget. |
 | Awards | Seven elapsed game days; 50 finalized simulated-visit minimum with a served main; guest outcomes separate; per-stall applicable benefit capped at 15% for one review period. |
