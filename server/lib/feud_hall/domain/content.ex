@@ -339,15 +339,10 @@ defmodule FeudHall.Domain.Content do
 
   defp npc_problems(_), do: [{:npc, nil, :bad_profile}]
 
-  # `rules.npc` is optional: absent means the planner's defaults. The shifts
-  # are checked against the profiles, which are only usable once they are a list.
+  # `rules.npc` is optional: absent means the planner's defaults.
   defp npc_rules_problems(_catalog, nil), do: []
 
-  defp npc_rules_problems(catalog, npc) do
-    if is_list(get(catalog, :npc_profiles)) and Enum.all?(catalog.npc_profiles, &is_map/1),
-      do: Tuning.npc_problems(catalog, npc),
-      else: []
-  end
+  defp npc_rules_problems(catalog, npc), do: Tuning.npc_problems(catalog, npc)
 
   defp npc_profile_problems(p) do
     ok =

@@ -139,4 +139,37 @@ defmodule FeudHall.Domain.TuningTest do
       end
     end
   end
+
+  describe "malformed shapes return errors instead of raising" do
+    defp without_id(catalog), do: update_in(catalog.npc_profiles, &(&1 ++ [%{price_permille: 1000}]))
+
+    test "a profile without an id, with rules.npc present" do
+      catalog = without_id(put_in(@catalog, [:rules, :npc], Tuning.npc_defaults()))
+      assert {:error, [_ | _]} = Tuning.validate(catalog, base())
+      assert {:error, problems} = Content.validate(catalog)
+      assert {:npc, nil, :bad_profile} in problems
+    end
+
+    test "malformed tuning and rules.npc shapes" do
+      good = Tuning.npc_defaults()
+
+      tunings = [
+        put_in(base(), [:npc], nil),
+        put_in(base(), [:npc], []),
+        put_in(base(), [:npc, :starter_shifts], []),
+        put_in(base(), [:npc, :starter_shifts, "budget"], 5),
+        put_in(base(), [:npc, :starter_shifts, "budget"], [5]),
+        put_in(base(), [:demand, :hourly_weights], :none),
+        put_in(base(), [:demand], []),
+        put_in(base(), [:market, :replenish_cap], []),
+        put_in(base(), [:market], nil)
+      ]
+
+      for tuning <- tunings, do: assert({:error, [_ | _]} = Tuning.validate(@catalog, tuning))
+
+      npcs = [:bad, [], %{good | starter_shifts: []}, %{good | starter_shifts: %{"budget" => 5}}]
+
+      for npc <- npcs, do: assert({:error, [_ | _]} = Content.validate(put_in(@catalog, [:rules, :npc], npc)))
+    end
+  end
 end

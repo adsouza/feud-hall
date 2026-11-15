@@ -128,7 +128,7 @@ defmodule FeudHall.Domain.Content.Tuning do
 
   defp market_problems(catalog, market) do
     if exact_keys?(market, @market_keys) do
-      products = catalog.products |> Map.keys() |> Enum.sort()
+      products = catalog |> Map.get(:products, %{}) |> Map.keys() |> Enum.sort()
 
       for key <- @market_keys,
           values = Map.fetch!(market, key),
@@ -141,13 +141,18 @@ defmodule FeudHall.Domain.Content.Tuning do
   end
 
   defp shift_problems(catalog, shifts) do
-    profiles = catalog.npc_profiles |> Enum.map(& &1.id) |> Enum.sort()
+    # Profile shape is Content's concern (it reports `:bad_profile`); here ids are read
+    # tolerantly, and a profile without one means the shifts cannot be matched.
+    list = if is_list(Map.get(catalog, :npc_profiles)), do: catalog.npc_profiles, else: []
+    ids = for %{id: id} <- list, do: id
+    profiles = Enum.sort(ids)
+    unmatched = if length(ids) == length(list), do: [], else: [{:npc, :bad_profile}]
 
     ok =
       is_map(shifts) and Enum.sort(Map.keys(shifts)) == profiles and
         Enum.all?(Map.values(shifts), &shift?/1)
 
-    if ok, do: [], else: [{:npc, :bad_starter_shifts}]
+    unmatched ++ if(ok, do: [], else: [{:npc, :bad_starter_shifts}])
   end
 
   defp shift?([start, finish]), do: start in 0..23 and finish in 0..23
