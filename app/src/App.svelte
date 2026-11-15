@@ -7,6 +7,8 @@
   import CuisineArtwork from "./CuisineArtwork.svelte";
   import DinerCompare from "./DinerCompare.svelte";
   import HallScene from "./HallScene.svelte";
+  import MarketPanel from "./MarketPanel.svelte";
+  import { resolveSent, type Delivery } from "./market-state.svelte";
   import type { CameraState, HallTarget } from "./hall-scene";
   import { splitTabletMessage } from "./tablet-text";
   import { CLIENT_CHECK_MS, newerClientServed } from "./client-version";
@@ -706,6 +708,9 @@
 
   const t = (key: Key) => label(locale, key);
   const title = (id: string) => contentLabel(locale, id);
+  /** A market price that the server sent malformed must not break the page. */
+  const marketPrice = (price: string) =>
+    /^[0-9]+$/.test(price) ? cash(price) : t("priceUnavailable");
   const rentLine = (slot: Slot & { expires_at?: number }) =>
     rentExplanation(slot, {
       t,
@@ -1274,9 +1279,13 @@
     }
   }
 
-  async function submit(kind: string, payload: Record<string, unknown> = {}) {
-    if (disabled || composing) return;
-    await deliver(command(kind, payload));
+  async function submit(
+    kind: string,
+    payload: Record<string, unknown> = {},
+  ): Promise<Delivery> {
+    if (disabled || composing)
+      return { outcome: "skipped", commandId: null, reason: null };
+    return deliver(command(kind, payload));
   }
 
   function reviewApplication(id: string, decision: "approved" | "rejected") {
@@ -1289,9 +1298,14 @@
     });
   }
 
-  async function deliver(action: Pending) {
+  async function deliver(action: Pending): Promise<Delivery> {
     submitting = true;
     status = null;
+    let delivery: Delivery = {
+      outcome: "uncertain",
+      commandId: action.command_id,
+      reason: null,
+    };
     try {
       const result = await send(action);
       if (
@@ -1315,13 +1329,14 @@
           if (action.kind === "select_handover") acknowledgedHandover = action;
           else status = "update";
           clearQuote();
+          delivery = { ...delivery, outcome: "accepted" };
         } else {
-          status = {
-            refusal:
-              result.reason === "unavailable"
-                ? "ingredients_unavailable"
-                : (result.reason ?? result.error ?? "unknown_rejection"),
-          };
+          const refusal =
+            result.reason === "unavailable"
+              ? "ingredients_unavailable"
+              : (result.reason ?? result.error ?? "unknown_rejection");
+          status = { refusal };
+          delivery = { ...delivery, outcome: "refused", reason: refusal };
         }
       }
       await refresh();
@@ -1329,9 +1344,28 @@
       pending = action;
       status = "uncertain";
       connected = false;
+      delivery = { ...delivery, outcome: "uncertain", reason: null };
     } finally {
       submitting = false;
     }
+    // Resolved here, not in the panel, so a retry from the banner settles a
+    // market send even while the Supply section is not mounted.
+    resolveSent(delivery);
+    return delivery;
+  }
+
+  /** The hall's Stock panel links to the market on the Business page. */
+  function openMarket() {
+    navigate("business", false, "supply");
+    void tick().then(() => {
+      const heading = document.querySelector<HTMLElement>(
+        "[data-market-panel] .market-heading",
+      );
+      heading?.focus({ preventScroll: true });
+      heading
+        ?.closest("[data-business-section]")
+        ?.scrollIntoView({ block: "start" });
+    });
   }
 
   async function register(restore = false) {
@@ -1890,10 +1924,28 @@
     {#if section === "supply"}
       <section
         data-business-section="supply"
+        class:supply-with-market={!embedded}
         class:phone-section-hidden={!embedded &&
           visibleBusinessSection !== "supply"}
       >
         <h2>{t("supply")}</h2>
+        {#if embedded}
+          <button type="button" onclick={openMarket}>{t("openMarket")}</button>
+        {:else}
+          <MarketPanel
+            {restaurant}
+            trips={view.hall.market_trips ?? []}
+            stalls={view.hall.stalls}
+            visible={page === "business" &&
+              (!phone || visibleBusinessSection === "supply")}
+            {disabled}
+            {submit}
+            {title}
+            {cash}
+            {t}
+            reasonText={(code) => refusalMessage(locale, code)}
+          />
+        {/if}
         {#if starterStock && starterStock.items.length > 0}
           <details>
             <summary>{t("starterStock")} · {cash(starterStock.budget)}</summary>
@@ -1931,7 +1983,7 @@
               ><option value="">—</option
               >{#each Object.entries(restaurant.market) as [id, item] (id)}<option
                   value={id}
-                  >{title(id)} · {cash(item.price)} · {item.stock}</option
+                  >{title(id)} · {marketPrice(item.price)} · {item.stock}</option
                 >{/each}</select
             ></label
           >
