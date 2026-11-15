@@ -221,6 +221,8 @@ arrivals who left without ordering, by reason.
 | 107 | A | 20261109 | salmon (--cuisine) | final chosen values | w12=2.4022! w19=1.8422! b12=0.98 b19=0.8267! w10=0.6133 w14-17=0.8422 night=0.1272 short=0 open=1.0 share=0.4819 | arrivals 2268, served 1093; left on arrival: chose_to_leave:3, no_compatible_main:23, nothing_affordable:602, nothing_available:3, wait_too_long:514 | HARDER CASE: --cuisine coast_salish (roasted_salmon, 1220) at the final values |
 | 108 | A | 7 | salmon (--cuisine) | final chosen values | w12=2.1933! w19=1.7778! b12=0.9511 b19=0.8867 w10=0.6933 w14-17=0.7778 night=0.1061 short=0 open=1.0 share=0.4731 | arrivals 2268, served 1073; left on arrival: chose_to_leave:3, no_compatible_main:20, nothing_affordable:612, nothing_available:3, wait_too_long:535 | HARDER CASE: --cuisine coast_salish (roasted_salmon, 1220) at the final values |
 | 109 | A | 12345 | salmon (--cuisine) | final chosen values | w12=2.2089! w19=2.1067! b12=0.8822 b19=0.9733 w10=0.6911 w14-17=0.5881 night=0.1207 short=0 open=1.0 share=0.4687 | arrivals 2268, served 1063; left on arrival: chose_to_leave:2, no_compatible_main:16, nothing_affordable:625, nothing_available:2, wait_too_long:541 | HARDER CASE: --cuisine coast_salish (roasted_salmon, 1220) at the final values |
+| 110 | A | 20261109 | salmon (--cuisine) | today's values | w12=0.3733! w19=0.4333! b12=0.3111! b19=0.4089! w10=0.1533! w14-17=0.2215! night=0.067 short=31! open=1.0 share=0.379 | arrivals 810, served 307; left on arrival: chose_to_leave:1, no_compatible_main:3, nothing_affordable:280, nothing_available:138, wait_too_long:80 | REPRODUCTION CHECK: run 1 through --cuisine coast_salish on the current driver |
+| 111 | A | 20261109 | median | final chosen values; --set demand.arrivals_per_equivalent=249 --set demand.hourly_weights=3,2,1,0,0,2,3,5,7,9,15,19,24,19,14,14,14,15,19,24,16,11,8,5 | w12=2.1044! w19=2.5178 b12=0.9511 b19=0.9644 w10=1.9156 w14-17=1.3785 night=0.0815 short=0 open=1.0 share=0.5319 | arrivals 2241, served 1192; left on arrival: chose_to_leave:2, no_compatible_main:64, no_open_stall:3, nothing_affordable:587, nothing_available:3, wait_too_long:363 | REPRODUCTION CHECK: run 77 (flat shape) through --set on the final chosen values |
 
 ## Runs not in the table
 
@@ -229,18 +231,65 @@ arrivals who left without ordering, by reason.
 - Run 21 is not a run of a committed driver: it used a scratch copy of the old
   driver whose only change forced the reference owner's cuisine. It prompted
   the reference-cuisine ruling; no value was chosen from it.
-- Runs 64 and 101 were started through a scratch wrapper that calls the
-  driver's own `Hall.run` and `CLI.print` and then prints what the command
+- Runs 64 and 101 were started through the wrapper script below, which calls
+  the driver's own `Hall.run` and `CLI.print` and then prints what the command
   line does not: the midnight ledger the driver already collects (cash and
-  arrears per restaurant) and, for run 101, a tally of `tray_cancelled` and
+  arrears per restaurant) and a tally of `tray_cancelled` and
   `dessert_cancelled` events by reason and hall hour read from the run's
-  committed events.
+  committed events. (Run 64 used an earlier version that printed only the
+  ledger.)
+- Runs 110 and 111 check that the report's reproduction commands give the
+  earlier runs exactly: run 110 repeats run 1 through `--cuisine
+  coast_salish` on the current driver, and run 111 repeats run 77 through
+  `--set` on the final chosen values. Both match their originals in every
+  verdict row and count.
 - The acceptance test (`test/feud_hall/scripts/customer_acceptance_test.exs`)
   makes one run A and one run B each time it is run. It was run three times
   against the first chosen values (once with today's values in their place to
   see it fail) and twice against the final values.
-
 - One run with no measured day was made by hand to read the driver's new
   header line.
 
-Counting those, 121 driver runs were made, of a budget of 150.
+Counting those, 123 driver runs were made, of a budget of 150.
+
+### The wrapper for runs 64 and 101
+
+Saved outside the repository as `long_run.exs` and run from `server/`:
+
+    mix run --no-start PATH/long_run.exs -- --run a --tuning chosen --days 14 --seed 20261109
+
+```elixir
+# Scratch wrapper: one ordinary driver run (same Hall.run and printing as the CLI), then the
+# midnight ledger the driver already collects and a tally of cancelled trays read from the committed events.
+System.put_env("CUSTOMER_SIM_NO_MAIN", "1")
+Code.require_file("scripts/customer_sim.exs")
+alias FeudHall.CustomerSim.{CLI, Hall}
+alias FeudHall.Domain.Clock
+alias FeudHall.Infrastructure.HallAuthority
+{:ok, args} = CLI.parse(System.argv())
+{:ok, tuning} = CLI.tuning(args.tuning, args.set)
+opts = %{run: args.run, tuning: tuning, via: args.via, days: args.days, seed: args.seed, hours: args.hours, cuisine: args.cuisine}
+{:ok, result} = Hall.run(opts)
+{store_mod, store} = HallAuthority.store(result.authority)
+{:ok, batches} = store_mod.read_from(store, 0)
+GenServer.stop(result.authority)
+CLI.print(result, args)
+if args.json, do: File.write!(args.json, CLI.json(result, args))
+IO.puts("\nLedger at each midnight (day N's row is the end of day N-1): cash, arrears")
+for {day, ledger} <- Enum.sort(result.stats.ledger) do
+  cells = ledger |> Enum.sort() |> Enum.map_join("  ", fn {id, l} -> "#{id} #{l.cash}/#{l.arrears}" end)
+  IO.puts("midnight #{day}: #{cells}")
+end
+measured = for b <- batches, b.hall_ms != nil and b.hall_ms > Clock.day(), do: b
+cancels = for b <- measured, %{type: t} = e <- b.events, t in [:tray_cancelled, :dessert_cancelled], do: {t, e.reason, div(rem(b.hall_ms - 1, Clock.day()), Clock.hour()), e}
+IO.puts("\nCancelled trays and desserts on measured days, by type and reason: #{inspect(Enum.frequencies_by(cancels, fn {t, r, _, _} -> {t, r} end))}")
+IO.puts("By reason and hall hour: #{inspect(cancels |> Enum.frequencies_by(fn {_, r, h, _} -> {r, h} end) |> Enum.sort())}")
+waste = for {:tray_cancelled, _, _, e} <- cancels, c <- e.components, reduce: 0, do: (acc -> acc + c.waste_cost)
+started = Enum.count(cancels, fn {t, _, _, e} -> t == :tray_cancelled and Enum.any?(e.components, &(&1.waste_cost > 0)) end)
+IO.puts("Cancelled trays with ingredients already consumed: #{started}; waste cost written off: #{waste}")
+finals = for b <- measured, %{type: :visit_finalized} = e <- b.events, do: e.reason
+IO.puts("Visits finalized on measured days by reason: #{inspect(Enum.frequencies(finals))}")
+breaks = for b <- measured, %{type: :staff_condition_changed} = e <- b.events, e.condition == :protective_break, do: {e.stall_id, div(rem(b.hall_ms, Clock.day()), Clock.hour())}
+IO.puts("Protective breaks by stall and hall hour: #{inspect(Enum.frequencies(breaks) |> Enum.sort())}")
+IO.puts("problems: #{inspect(result.problems)}")
+```

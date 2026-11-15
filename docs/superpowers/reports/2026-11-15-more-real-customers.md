@@ -7,6 +7,16 @@ runs, what they change, and what they do to profit. Every number here comes
 from a run listed in the [tuning log](2026-11-15-more-real-customers-tuning-log.md);
 "run 95" means line 95 of that log.
 
+A log line holds a run's verdict rows, its arrivals, its mains served and its
+arrivals' reasons for leaving. The other figures here (profit and its
+components, orders waiting per stall and per hour, wholesale products at
+zero, `main_failed` counts, single-day values and the first-day table) are
+not in the log lines: they are read from the fuller output the driver prints
+for the same run. Runs are deterministic, so repeating a line's command
+prints them again;
+[Reproducing the tables](#reproducing-the-tables) gives the command for each
+table.
+
 The values are `FeudHall.Domain.Content.Tuning.chosen/0`. They are proposed
 tuning. A hall does not start on them and no hall receives them at boot: they
 are applied by the recorded `retune_rules` change, as a separate step after
@@ -36,6 +46,14 @@ the owner's decision on costs.
   hold 4.7 to 5.3 orders at 12:00 (the queue limit is 6) and 1.9% to 3.3% of
   arrivals find every open queue full. Run B's served share is 0.055 to 0.072
   above today's; that margin is what stopped the rushes being set higher.
+- **The rush targets were bought with served share.** Meeting them needed a
+  sharper one-hour rush than the first chosen shape. Against that flatter
+  shape, run A's served share is lower on every seed (mean 0.516 against
+  0.535), run B's on two seeds (mean 0.403 against 0.407), and when the
+  computer-run stalls trade alone about twice as many arrivals find every
+  queue full (2.6% against 1.25% on average). A gentler rush avoids the extra
+  full queues and misses one row on one seed. The owner can choose it: see
+  [The choice between two day shapes](#the-choice-between-two-day-shapes).
 - **Profit.** At unchanged prices, rent and wages the reference stall moves
   from losing 10,100 a day to making 63,100 to 66,500 a day (the salmon stall
   from losing 7,100 to 10,000 to making 30,300 to 34,700), and the
@@ -66,7 +84,7 @@ and the slowest method. That stall is kept as the harder case
 (`--cuisine coast_salish`).
 
 Values were tuned on seed 20261109 and confirmed on seeds 7 and 12345. A check
-counts as met only if it is met on all three. 121 driver runs were made, one
+counts as met only if it is met on all three. 123 driver runs were made, one
 at a time, of a budget of 150; each three-day run takes 5 to 10 seconds.
 
 Only these were changed: `demand.arrivals_per_equivalent`, the shape of
@@ -113,12 +131,21 @@ reference stall.
 10. **Shape only** (runs 83 to 94). Weight was moved from 10:00 and the
     afternoon into the two rush hours, and trimmed from 09:00, 13:00, 20:00
     and 21:00. A first step (30 and 28 at the rushes) still missed noon on
-    seed 7 (2.45); the second (34 and 33) meets every row on every seed. See
-    [How the shape was reached](#how-the-shape-was-reached). Supply, fallback
-    and shifts were not touched.
+    seed 7 (2.45); the second (34 and 33) meets every row on every seed.
+    Supply, fallback and shifts were not touched. The step has a cost: against
+    the first chosen shape, run A's served share fell on all three seeds
+    (0.532 to 0.529, 0.531 to 0.513, 0.543 to 0.508), run B's on two (0.408 to
+    0.404, 0.416 to 0.403; 0.398 to 0.402 on the third), and the share of run
+    B's arrivals that found every open queue full rose on two (0.5% to 3.3%,
+    1.0% to 2.7%; 2.2% to 1.9% on the third). The first step cost less and
+    missed one row on one seed. See
+    [The choice between two day shapes](#the-choice-between-two-day-shapes).
 11. **Stop.** Tuning stopped there, with the rush rows at least 0.47 inside
     their bounds on every seed and run B's lowest served share (0.402) 0.054
-    above today's highest (0.348). No value was tuned toward the salmon stall.
+    above today's highest (0.348). The second step was kept because it is the
+    only candidate that meets every row on every seed while served share
+    stays above today's in all six comparisons. No value was tuned toward the
+    salmon stall.
 
 ## Before: today's values
 
@@ -194,9 +221,18 @@ arrivals per business equivalent: 34 and 33 at the rushes, 15 to 19 in the
 hours beside them, 11 to 14 mid-morning and through the afternoon, 1 to 3
 overnight. At the floor of three equivalents that is 756 arrivals a day (270
 today): 102 and 99 an hour at 12:00 and 19:00 (26 and 25 today) and 33 to 42
-an hour mid-morning and afternoon (11 to 15 today). The rush hours are 1.7
-to 2.2 times the hours beside them; today's shape is flatter (1.2 to 1.4
-times).
+an hour mid-morning and afternoon (11 to 15 today).
+
+Each rush is now one hour long: 34 at 12:00 against 19 at 11:00 and 17 at
+13:00, and 33 at 19:00 against 19 at 18:00 and 15 at 20:00, so a rush hour
+has 1.7 to 2.2 times the arrivals of the hours beside it (today's shape: 1.2
+to 1.4 times). 12:00 and 19:00 are exactly the hours the rush checks
+measure. The reference stall's queue shows the same single-hour peak (runs
+95 to 97, seeds 20261109 / 7 / 12345): 1.86 / 1.61 / 1.48 at 11:00, 2.97 /
+3.11 / 3.54 at 12:00 and 1.33 / 1.90 / 2.08 at 13:00; 1.46 / 1.83 / 1.93 at
+18:00 and 3.45 / 3.09 / 3.49 at 19:00 (it closes at 20:00). "Three or four
+people queuing" holds for the checked hour, not for the hours around it,
+where the stall has one or two.
 
 **Wholesale targets.** A product's target is the larger of today's target and
 100 times the largest quantity any recipe line uses of it; a substitute counts
@@ -225,6 +261,73 @@ day 0 with a fallback of 10, 304 with 30, 311 with 50 and 312 with 90 (runs
 with today, 11:00 to 12:00 and 17:00 to 19:00 gain a second computer-run
 stall, and 05:00 to 07:00 and 23:00 to 00:00 lose their second one.
 "Mainstream" takes its protective break at 21:00 instead of 22:00.
+
+## The choice between two day shapes
+
+The hourly shape was changed after the reference stall became the
+median-priced one, to lift its rush queues into range. That change has a
+cost, and there is a gentler alternative. Three candidates follow, each
+measured on seeds 20261109 / 7 / 12345 with the median-priced reference
+stall. Supply, fallback and shifts are the same in all three.
+
+| | Flat rush (the first chosen shape) | Gentler rush | Chosen rush |
+| --- | --- | --- | --- |
+| Runs (A; B) | 77-79; 57-59 | 83-85; 86-88 | 95-97; 98-100 |
+| Arrivals per equivalent | 249 | 248 | 252 |
+| Weights 09:00 to 21:00 | 9, 15, 19, 24, 19, 14, 14, 14, 15, 19, 24, 16, 11 | 9, 11, 19, 30, 19, 12, 12, 12, 14, 19, 28, 16, 11 | 8, 11, 19, 34, 17, 12, 12, 12, 14, 19, 33, 15, 10 |
+| Reference waiting 12:00 (2.5 to 4.5) | 2.10 / 2.17 / 2.46 | 3.25 / 2.45 / 3.05 | 2.97 / 3.11 / 3.54 |
+| Reference waiting 19:00 (2.5 to 4.5) | 2.52 / 2.28 / 3.03 | 2.76 / 2.54 / 3.15 | 3.45 / 3.09 / 3.49 |
+| Reference busy 12:00 (at least 0.85) | 0.951 / 0.991 / 0.947 | 1.000 / 0.998 / 1.000 | 1.000 / 1.000 / 0.978 |
+| Reference busy 19:00 (at least 0.85) | 0.964 / 0.993 / 0.987 | 0.996 / 0.953 / 0.976 | 1.000 / 0.991 / 1.000 |
+| Reference waiting 10:00 (0.5 to 2) | 1.92 / 1.70 / 1.50 | 1.04 / 1.42 / 1.03 | 1.28 / 0.99 / 0.94 |
+| Reference waiting 14:00-17:00 (0.5 to 2) | 1.38 / 1.40 / 1.46 | 1.01 / 1.03 / 0.98 | 1.16 / 1.21 / 1.08 |
+| **Acceptance rows missed** | Noon waiting on all three seeds (short by 0.40, 0.33, 0.04); 19:00 waiting on seed 7 (short by 0.22) | Noon waiting on seed 7 (short by 0.05) | None |
+| Run A served share | 0.532 / 0.531 / 0.543 | 0.522 / 0.531 / 0.522 | 0.529 / 0.513 / 0.508 |
+| Run B served share | 0.408 / 0.416 / 0.398 | 0.411 / 0.413 / 0.395 | 0.404 / 0.403 / 0.402 |
+| Run B served share above today's | 0.076 / 0.068 / 0.054 | 0.079 / 0.065 / 0.052 | 0.072 / 0.055 / 0.059 |
+| Run B arrivals that found every open queue full | 0.5% / 1.0% / 2.2% (12, 23, 49 of 2,241) | 0.6% / 1.5% / 1.5% (14, 34, 33 of 2,232) | 3.3% / 2.7% / 1.9% (74, 61, 44 of 2,268) |
+| Run B arrivals that left for the wait | 27.6% / 27.6% / 27.0% | 27.0% / 28.3% / 27.8% | 26.7% / 26.9% / 26.2% |
+| Run A mains served, three days | 1,192 / 1,189 / 1,217 | 1,165 / 1,186 / 1,165 | 1,199 / 1,163 / 1,152 |
+| Run B mains served, three days | 915 / 933 / 891 | 917 / 922 / 881 | 916 / 915 / 911 |
+
+Every candidate meets every other acceptance row on every seed, and in every
+candidate served share is above today's in all six comparisons.
+
+The chosen shape buys the rush queue targets with a lower served share than
+the flat shape and with about twice the full-queue turnaways when the
+computer-run stalls trade alone: run A's served share is a mean of 0.516
+(0.508 to 0.529) against 0.535 (0.531 to 0.543), lower on every seed, with
+28 fewer mains served over three days on average; run B's is 0.403 (0.402 to
+0.404) against 0.407 (0.398 to 0.416), lower on two seeds, with the same
+mains served (914 against 913 on average) from 27 more arrivals; and 2.6% of
+run B's arrivals find every open queue full against 1.25% (more on two
+seeds, fewer on seed 12345). The gentler shape is the alternative if the
+owner prefers fewer full queues: its full-queue share is the flat shape's
+(1.2% on average) and run A's served share is 0.525, and it misses exactly
+one acceptance row on one seed, the noon queue on seed 7 (2.45 against 2.5);
+on the other two seeds, including the one the acceptance test pins, it meets
+every row.
+
+The design ranks served share above the queue targets where the two pull
+against each other. The chosen shape was kept because it is the only one of
+the three that meets every acceptance row on every seed while served share
+stays above today's in all six comparisons, not because it serves more: it
+does not.
+
+To switch to the gentler shape, two values change in `Tuning.chosen/0`
+(`server/lib/feud_hall/domain/content/tuning.ex`):
+`@chosen_arrivals_per_equivalent` from 252 to 248, and
+`@chosen_hourly_weights` to
+`3,2,1,0,0,2,3,5,7,9,11,19,30,19,12,12,12,14,19,28,16,11,8,5`. The tests
+that pin the chosen values then need regenerating from runs at those values:
+the arrival figure and fingerprint in `tuning_test.exs`, and in
+`customer_acceptance_test.exs` the lists of rows met and not met (the noon
+row fails on seed 7). That test's served-share constants are for today's
+values and do not depend on the shape.
+
+Earlier measurements with the salmon stall at 15% fewer and 15% more arrivals
+than the first chosen values are runs 65 to 76 in the log: at 15% more, run
+B's share was only 0.024 to 0.031 above today's.
 
 ## After: the chosen values on three seeds
 
@@ -303,12 +406,18 @@ Orders waiting per stall, three-day mean, three seeds:
 | "Premium" (run B) | closed | closed | closed | 3.65 to 4.54 | 0.31 to 0.48 |
 | Reference, salmon (harder case) | 0.61 to 0.69 | 2.19 to 2.40 | 0.59 to 0.84 | 1.78 to 2.11 | closed |
 
-In run A all four stalls are at the owner's feel: three or four waiting at
-the rushes (the budget stall slightly over on one seed), one or two mid-day
-(the budget stall, alone until 11:00, at two to three), nearly empty
-overnight. In run B, with one stall fewer, the rush queues are above it: 4.7
-to 5.3 at 12:00 and 3.7 to 4.7 at 19:00, against a queue limit of 6. The
-budget stall's afternoon mean includes its break hour.
+Against the owner's feel (three or four at the rushes, one or two mid-day,
+nearly empty overnight), run A reads: at 12:00 the reference stall has 3.0
+to 3.5, the mainstream stall 3.4 to 4.1 and the budget stall 3.9 to 4.6
+(over four on two seeds); at 19:00 the reference stall has 3.1 to 3.5, the
+mainstream stall 3.6 to 4.0 and the premium stall 2.7 to 3.1, about three
+rather than three or four. Mid-day the reference stall has about one, the mainstream stall
+1.4 to 2.0 and the budget stall 1.4 to 1.7 in the afternoon but 2.1 to 2.8
+at 10:00, when it is the only computer-run stall open. Overnight the one
+open stall has about half an order waiting. In run B, with one stall fewer,
+the rush queues are above the feel: 4.7 to 5.3 at 12:00 and 3.7 to 4.7 at
+19:00, against a queue limit of 6. The budget stall's afternoon mean
+includes its break hour.
 
 ### Hour by hour, seed 20261109
 
@@ -402,29 +511,6 @@ above today's highest (0.348), where the spread between seeds is 0.016 for
 today's values and 0.002 for the chosen ones. Run B's share falls as arrivals
 rise, because its three stalls are already full at the rushes; that is why
 the rushes were not set higher than the checks needed.
-
-## How the shape was reached
-
-Run A with the median-priced reference stall and run B, seeds 20261109 / 7 /
-12345. Supply, fallback and shifts are the same in all three columns.
-
-| | First chosen values (runs 77-79, 57-59) | First step (runs 83-88) | Final (runs 95-100) |
-| --- | --- | --- | --- |
-| Arrivals per equivalent | 249 | 248 | 252 |
-| Weights 09:00 to 21:00 | 9, 15, 19, 24, 19, 14, 14, 14, 15, 19, 24, 16, 11 | 9, 11, 19, 30, 19, 12, 12, 12, 14, 19, 28, 16, 11 | 8, 11, 19, 34, 17, 12, 12, 12, 14, 19, 33, 15, 10 |
-| Reference waiting 12:00 | 2.10 / 2.17 / 2.46 | 3.25 / 2.45 / 3.05 | 2.97 / 3.11 / 3.54 |
-| Reference waiting 19:00 | 2.52 / 2.28 / 3.03 | 2.76 / 2.54 / 3.15 | 3.45 / 3.09 / 3.49 |
-| Reference busy 12:00 | 0.951 / 0.991 / 0.947 | 1.000 / 0.998 / 1.000 | 1.000 / 1.000 / 0.978 |
-| Reference busy 19:00 | 0.964 / 0.993 / 0.987 | 0.996 / 0.953 / 0.976 | 1.000 / 0.991 / 1.000 |
-| Reference waiting 10:00 | 1.92 / 1.70 / 1.50 | 1.04 / 1.42 / 1.03 | 1.28 / 0.99 / 0.94 |
-| Reference waiting 14:00-17:00 | 1.38 / 1.40 / 1.46 | 1.01 / 1.03 / 0.98 | 1.16 / 1.21 / 1.08 |
-| Run A served share | 0.532 / 0.531 / 0.543 | 0.522 / 0.531 / 0.522 | 0.529 / 0.513 / 0.508 |
-| Run B served share | 0.408 / 0.416 / 0.398 | 0.411 / 0.413 / 0.395 | 0.404 / 0.403 / 0.402 |
-| Run B share above today's | 0.076 / 0.068 / 0.054 | 0.079 / 0.065 / 0.052 | 0.072 / 0.055 / 0.059 |
-
-Earlier measurements with the salmon stall at 15% fewer and 15% more arrivals
-than the first chosen values are runs 65 to 76 in the log: at 15% more, run
-B's share was only 0.024 to 0.031 above today's.
 
 ## Sensitivity
 
@@ -705,7 +791,7 @@ never short. Whether it trimmed any computer-run purchase was not measured.
   cuisine other than the median-priced one and `coast_salish`.
 - Arrival levels above or below the final values with the median-priced
   reference stall, other than the three columns under
-  [How the shape was reached](#how-the-shape-was-reached).
+  [The choice between two day shapes](#the-choice-between-two-day-shapes).
 - Market size and fallback at the final arrivals: they were sized at 249
   arrivals per equivalent and re-checked at 252 only by the absence of
   shortages in the final runs and by the two reverts.
@@ -719,6 +805,28 @@ never short. Whether it trimmed any computer-run purchase was not measured.
 - The full test suite and hosted CI. Only the files named in
   [Checks](#checks) were run.
 
+## Reproducing the tables
+
+All commands run from `server/`; `SIM` stands for
+`mix run --no-start scripts/customer_sim.exs --`. Add `--json FILE` to get
+the same numbers as data. Runs are deterministic: the same command prints the
+same output.
+
+| Table | Runs | Command (repeat for seeds 20261109, 7, 12345 unless one seed is named) | Where in the output |
+| --- | --- | --- | --- |
+| Before, run A and run B | 80-82; 2, 4, 6 | `SIM --run a --tuning current --days 3 --seed SEED`; the same with `--run b` | "Verdict" block; "Per game day" lines for arrivals, served, reasons and products at zero |
+| Before, salmon stall | 1, 3, 5 | `SIM --run a --tuning current --days 3 --seed SEED --cuisine coast_salish` | "Verdict" block |
+| After, run A and run B | 95-97; 98-100 | `SIM --run a --tuning chosen --days 3 --seed SEED`; the same with `--run b` | "Verdict" block; "Per game day" lines, where `main_failed` is the count after the bar |
+| Harder case | 107-109 | `SIM --run a --tuning chosen --days 3 --seed SEED --cuisine coast_salish` | "Verdict" block |
+| Orders waiting per stall; hour by hour | 80, 2, 95-100, 107-109 | the Before, After and Harder-case commands | "Per hall hour" lines: `w` is orders waiting and `b` the busy share for each stall; each figure here is the mean of the three measured days' lines for that hour |
+| The choice between two day shapes | 77-79, 57-59; 83-88; 95-100 | flat: `SIM --run a --tuning chosen --days 3 --seed SEED --set demand.arrivals_per_equivalent=249 --set demand.hourly_weights=3,2,1,0,0,2,3,5,7,9,15,19,24,19,14,14,14,15,19,24,16,11,8,5`; gentler: the same with `248` and `3,2,1,0,0,2,3,5,7,9,11,19,30,19,12,12,12,14,19,28,16,11,8,5`; chosen: no `--set`; each also with `--run b` | "Verdict" block; "Per game day" lines: `no_open_stall` and `wait_too_long` before the bar, summed over days 1 to 3 and divided by arrivals |
+| Served share | as Before and After | as Before and After | the "served share" verdict row |
+| Sensitivity | 103-106 | seed 20261109: `SIM --run a --tuning chosen --days 3 --seed 20261109 --set demand.arrivals_per_equivalent=90`; `SIM --run b --tuning FILE --days 3 --seed 20261109` with FILE holding `%{Tuning.chosen() \| market: Tuning.of(LaunchCatalog.catalog()).market}` after `alias FeudHall.Domain.Content.{LaunchCatalog, Tuning}`; `SIM --run b --tuning chosen --days 3 --seed 20261109 --set npc.starter_shifts.mainstream=12,0 --set npc.starter_shifts.premium=19,7`; `SIM --run b --tuning chosen --days 3 --seed 20261109 --set npc.fallback_trays_per_day=10` | "Verdict" block; day 0 line for mains on day 0 |
+| Applied by the recorded change; first day | 102 against 95 | `SIM --run a --tuning chosen --days 3 --seed 20261109 --via retune`, against the same without `--via retune` | "Verdict" block; for the first day, the `d1` hour lines and the "day 1" line with its `profit` lines |
+| Profit | 80-82, 95-97, 1, 3, 5, 107-109, 2, 4, 6, 98-100 | the Before, After and Harder-case commands | "Per game day": each `profit` line gives profit, revenue, purchases, rent+wages and other for one restaurant and day; each figure here is the mean of days 1 to 3 |
+| Fourteen days: verdict | 101 | `SIM --run a --tuning chosen --days 14 --seed 20261109` | "Verdict" block |
+| Fourteen days: cash by day; cancelled trays by reason and hour | 101 | the wrapper script printed in the tuning log under "Runs not in the table", with the same arguments | its "Ledger at each midnight" and "Cancelled trays" lines; the command line alone prints each day's cash change, not the balance, and no cancellation reasons |
+
 ## Checks
 
 From `server/`, one at a time, at the final values:
@@ -727,7 +835,9 @@ From `server/`, one at a time, at the final values:
   new: the median rule on hand-built catalogs, the override's refusals, the
   option's parsing, and a run whose reference price equals the median the
   test computes from the launch catalog).
-- `mix test test/feud_hall/domain/tuning_test.exs`: 28 passed.
+- `mix test test/feud_hall/domain/tuning_test.exs`: 29 passed (one pins the
+  chosen values: product count, sum of market targets and a SHA-256
+  fingerprint, so a launch-catalog change cannot silently change them).
 - `mix test --only acceptance test/feud_hall/scripts/customer_acceptance_test.exs`:
   2 passed (runs A and B at the chosen values, seed 20261109; asserts every
   verdict row and that each served share is above today's).
