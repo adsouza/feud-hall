@@ -39,7 +39,7 @@ defmodule FeudHall.Application.CommandWorkflow do
 
   @management_commands Management.commands() ++ Progression.commands() ++ CounterPlay.commands()
   @helper_commands [:accept_helper_shift, :select_handover, :report_helper_presence] ++ CounterPlay.commands()
-  @commands ~w(initialize_hall upgrade_simulation expand_catalog enable_visitor_play advance_clock create_restaurant open_stall close_stall unlock_recipe
+  @commands ~w(initialize_hall upgrade_simulation expand_catalog retune_rules enable_visitor_play advance_clock create_restaurant open_stall close_stall unlock_recipe
                set_menu_price remove_menu_item set_substitution_policy submit_purchase_request
                cancel_purchase_request grant_allowance admit_visit cancel_tray accept_dessert decline_dessert
                cancel_dessert npc_plan)a

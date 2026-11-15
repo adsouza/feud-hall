@@ -25,6 +25,7 @@ defmodule FeudHall.Domain.Hall.Decider do
     Management,
     OperatingPolicy,
     Progression,
+    Retune,
     Rooms,
     Settlement,
     SimulationUpgrade
@@ -72,6 +73,8 @@ defmodule FeudHall.Domain.Hall.Decider do
 
   def decide(state, {:expand_catalog, %{catalog: catalog}}, %{actor: {:system, :admin}}),
     do: CatalogExpansion.decide(state, catalog)
+
+  def decide(state, {:retune_rules, %{tuning: tuning}}, %{actor: {:system, :admin}}), do: Retune.decide(state, tuning)
 
   def decide(%{catalog: %{rules: rules}}, _command, _ctx) when not is_map_key(rules, :kitchen),
     do: {:error, :simulation_upgrade_required}

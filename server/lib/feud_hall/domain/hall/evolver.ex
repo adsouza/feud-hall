@@ -104,6 +104,8 @@ defmodule FeudHall.Domain.Hall.Evolver do
   def evolve(state, %{type: :hall_catalog_expanded} = event),
     do: FeudHall.Domain.Hall.CatalogExpansion.evolve(state, event)
 
+  def evolve(state, %{type: :hall_rules_retuned} = event), do: FeudHall.Domain.Hall.Retune.evolve(state, event)
+
   def evolve(state, %{type: :hall_simulation_upgraded} = event), do: SimulationUpgrade.evolve(state, event)
 
   def evolve(state, %{type: :day_closed} = e) do

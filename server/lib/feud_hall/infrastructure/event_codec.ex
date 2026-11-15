@@ -37,6 +37,7 @@ defmodule FeudHall.Infrastructure.EventCodec do
     location_equipped equipment_salvaged technique basis from_storage keep_equipment
     location_added location_refitted location_refitting ready_at location_released released_debt distress_started distress_cleared venture_activity_recorded stock_salvaged
     business_bankrupted record cuisines opened_at ended_at peak_stalls final_ledger unpaid bankruptcy business_distressed
+    hall_rules_retuned tuning fallback_trays_per_day expected_use starter_shifts
     hall_initialized hall_simulation_upgraded hall_catalog_expanded clock_advanced hall_cleaning_started hall_cleaning_ended restaurant_created
     starter_grant_issued stall_opened stall_closed recipe_unlocked menu_price_set menu_item_removed
     substitution_policy_set stock_purchased stock_spoiled allowance_granted visit_admitted tray_accepted
