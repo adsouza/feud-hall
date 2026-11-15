@@ -994,6 +994,58 @@ defmodule FeudHall.Application.ManagementTest do
                restaurant_view(rt, "rival-device").purchases.recent
     end
 
+    # Products of the recipes' lines and each line's substitute, from the catalog.
+    defp products_of(catalog, recipe_ids) do
+      recipe_ids
+      |> Enum.flat_map(fn id ->
+        Enum.flat_map(catalog.recipes[id].lines, fn line ->
+          [line.product | if(line.substitute, do: [line.substitute.product], else: [])]
+        end)
+      end)
+      |> Enum.uniq()
+      |> Enum.sort()
+    end
+
+    test "the owner's view names the supplies their menu uses, and only the owner sees it" do
+      rt = market_world()
+      catalog = rt.state.catalog
+
+      starters =
+        for {id, %{cuisine: "mughlai_punjabi", starter: true}} <- catalog.recipes, do: id
+
+      owner = restaurant_view(rt, "owner-device")
+      assert Enum.sort(Map.keys(owner.menu)) == Enum.sort(starters)
+      expected = products_of(catalog, starters)
+      assert expected != []
+      assert Enum.any?(starters, fn id -> Enum.any?(catalog.recipes[id].lines, & &1.substitute) end)
+      assert owner.menu_products == expected
+
+      # Taking the recipes off the menu takes their supplies off the list.
+      rt =
+        starters
+        |> Enum.with_index()
+        |> Enum.reduce(rt, fn {id, i}, rt ->
+          client(rt, "owner-device", "remove-#{i}", :remove_menu_item, %{
+            restaurant_id: "r1",
+            stall_id: "s001",
+            recipe_id: id
+          })
+        end)
+
+      assert restaurant_view(rt, "owner-device").menu == %{}
+      assert restaurant_view(rt, "owner-device").menu_products == []
+
+      # A rival sees only their own restaurant's list; nobody's is public.
+      assert {:ok, %{hall: hall, profile: profile}} = Management.view(rt, "rival-device")
+      refute Jason.encode!(hall) =~ "menu_products"
+      assert profile.restaurant.id == "r2"
+      rival_starters = for {id, %{cuisine: "sichuan", starter: true}} <- catalog.recipes, do: id
+      assert profile.restaurant.menu_products == products_of(catalog, rival_starters)
+
+      assert {:ok, guest} = Management.view(rt, nil)
+      refute Jason.encode!(guest) =~ "menu_products"
+    end
+
     test "a rival's view carries the trip and nothing private" do
       {rt, p, _crate, _limit} = owner_and_rival_requests()
       rt = to_clearing(rt)

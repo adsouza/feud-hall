@@ -6,7 +6,9 @@ defmodule FeudHall.Application.Management do
   for recent clearings, per restaurant, the product IDs that filled and a cart
   size bucket. Quantities, costs, price limits, pending requests, unfilled
   amounts and reasons appear only in the owning restaurant's private view
-  (`restaurant.purchases`).
+  (`restaurant.purchases`). That view also names the supplies its menu uses
+  (`restaurant.menu_products`: the products of each menu recipe's lines and
+  their substitutes), which no other view carries.
   """
   alias FeudHall.Application.DinerBrowse
   alias FeudHall.Application.Projections.MarketActivity
@@ -453,6 +455,7 @@ defmodule FeudHall.Application.Management do
       equipment_salvage: equipment_salvage(state, restaurant),
       unlocked: restaurant.unlocked,
       menu: Map.new(restaurant.menu, fn {recipe, value} -> {recipe, cents(value)} end),
+      menu_products: menu_products(state, restaurant),
       ledger: Map.new(restaurant.ledger, fn {account, value} -> {account, cents(value)} end),
       starter_stock: starter_stock(state, id),
       reports:
@@ -531,6 +534,22 @@ defmodule FeudHall.Application.Management do
     else
       []
     end
+  end
+
+  # The supplies the menu the owner sees uses: each stall's menu (as the
+  # kitchen cooks it), or the restaurant's own menu while it has no stall.
+  defp menu_products(state, restaurant) do
+    recipes =
+      case Progression.stalls(state, restaurant.id) do
+        [] -> Map.keys(restaurant.menu)
+        sids -> Enum.flat_map(sids, &Map.keys(Progression.stall_menu(state, state.stalls[&1], restaurant)))
+      end
+
+    recipes
+    |> Enum.flat_map(fn id -> Map.get(state.catalog.recipes[id] || %{}, :lines, []) end)
+    |> Enum.flat_map(fn line -> [line.product | if(line[:substitute], do: [line.substitute.product], else: [])] end)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp starter_stock(state, id, sid \\ nil) do

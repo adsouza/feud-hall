@@ -133,6 +133,8 @@ export type Restaurant = {
   equipment_salvage?: { stall_id: string; technique: string; amount: Money }[];
   unlocked: string[];
   menu: Record<string, Money>;
+  /** Supplies the current menu uses (recipe lines and their substitutes); missing from an older server. */
+  menu_products?: string[];
   ledger: Record<string, Money>;
   starter_stock: { budget: Money; items: { product: string; qty: number }[] };
   reports: { day: number; delta: Record<string, Money> }[];
