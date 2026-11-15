@@ -1,7 +1,8 @@
 # Measures customers at sparse-hall settings. Run from server/:
 #
 #   mix run --no-start scripts/customer_sim.exs -- --run a|b --tuning current|chosen|PATH \
-#     --days N --seed S [--via init|retune] [--set KEY=VALUE ...] [--json PATH]
+#     --days N --seed S [--via init|retune] [--hours START-END] [--cuisine ID] \
+#     [--set KEY=VALUE ...] [--json PATH]
 #
 # A real hall authority runs in memory (no web endpoint, no database) with a
 # manual clock, ticked once per service second as the live hall is. The only
@@ -711,7 +712,9 @@ defmodule FeudHall.CustomerSim.Hall do
   Starts a managed launch hall authority in memory and drives it tick by tick.
 
   Run A adds the reference owner at the start of its schedule (`hours`,
-  default 10:00-20:00) on the warm-up day: a registered
+  default 10:00-20:00) on the warm-up day, selling the starter main of
+  `reference_cuisine/2` (the median-priced unused starter unless `cuisine`
+  names another): a registered
   principal admitted by the admin the way a seeded owner is, who then issues
   ordinary owner commands through `HallAuthority.management_execute/3`.
   `--via retune` applies the tuning with `retune_rules` at 12:00 of the
@@ -735,7 +738,8 @@ defmodule FeudHall.CustomerSim.Hall do
   @doc """
   Runs the hall: one warm-up day and `days` measured days, one tick per
   service second. Options: `run` (`:a | :b`), `tuning`, `via` (`:init |
-  :retune`), `days`, `seed`, and optionally `observer` (called as
+  :retune`), `days`, `seed`, and optionally `hours`, `cuisine` (the reference
+  owner's cuisine, overriding the default), `observer` (called as
   `observer.(tick, authority)` after each tick's commands) and `progress`
   (called with `{day, stats}` at each midnight).
 
@@ -798,7 +802,7 @@ defmodule FeudHall.CustomerSim.Hall do
 
         reference =
           if opts.run == :a and tick == start * ticks_per_hour(),
-            do: open_reference(authority, hours),
+            do: open_reference(authority, hours, opts[:cuisine]),
             else: reference
 
         if opts.via == :retune and tick == 12 * ticks_per_hour() do
@@ -867,10 +871,10 @@ defmodule FeudHall.CustomerSim.Hall do
   """
   def default_hours, do: {10, 20}
 
-  defp open_reference(authority, {start, finish}) do
+  defp open_reference(authority, {start, finish}, override) do
     state = hall(authority)
-    cuisine = reference_cuisine(state)
-    starter = state.catalog.recipes |> Map.values() |> Enum.find(&(&1.starter and &1.cuisine == cuisine))
+    cuisine = reference_cuisine(state, override)
+    starter = starter_mains(state.catalog)[cuisine]
     sid = reference_spot(state)
 
     client(authority, "register", {:bootstrap_guest, %{name: "Reference Owner"}})
@@ -897,20 +901,63 @@ defmodule FeudHall.CustomerSim.Hall do
     end
 
     client(authority, "open", {:open_stall, %{stall_id: sid}})
-    %{stall_id: sid, restaurant_id: @restaurant, cuisine: cuisine, recipe: starter.id, restock: policies}
+
+    %{
+      stall_id: sid,
+      restaurant_id: @restaurant,
+      cuisine: cuisine,
+      recipe: starter.id,
+      price: starter.suggested_price,
+      restock: policies
+    }
   end
 
-  @doc "The first cuisine of the catalog's sorted cuisine list that no restaurant has yet."
-  def reference_cuisine(state) do
-    taken = MapSet.new(Map.values(state.restaurants), & &1.cuisine)
+  @doc "Each cuisine's starter main, by cuisine ID."
+  def starter_mains(catalog) do
+    for {_id, %{starter: true, kind: :main} = recipe} <- catalog.recipes, into: %{}, do: {recipe.cuisine, recipe}
+  end
 
-    state.catalog.recipes
-    |> Map.values()
-    |> Enum.filter(& &1.starter)
-    |> Enum.map(& &1.cuisine)
-    |> Enum.uniq()
-    |> Enum.sort()
-    |> Enum.find(&(not MapSet.member?(taken, &1)))
+  @doc """
+  The default reference cuisine: among the cuisines no restaurant has yet, the
+  one whose starter main has the median suggested price, so the reference
+  stall stands for a typical new owner rather than a dear or cheap one. With
+  an even count the median is the lower of the two middle prices; of several
+  cuisines at that price the first by cuisine ID is taken.
+  """
+  def reference_cuisine(state) do
+    unused = unused_starters(state)
+    prices = unused |> Enum.map(fn {_cuisine, recipe} -> recipe.suggested_price end) |> Enum.sort()
+    median = Enum.at(prices, div(length(prices) - 1, 2))
+
+    unused
+    |> Enum.filter(fn {_cuisine, recipe} -> recipe.suggested_price == median end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.min()
+  end
+
+  @doc """
+  The reference cuisine: `override` when given, which must have a starter main
+  and be taken by no restaurant (otherwise the run is refused), else the
+  default of `reference_cuisine/1`.
+  """
+  def reference_cuisine(state, nil), do: reference_cuisine(state)
+
+  def reference_cuisine(state, override) do
+    cond do
+      not Map.has_key?(starter_mains(state.catalog), override) ->
+        throw({:refused, "reference-cuisine", {:unknown_cuisine, override}})
+
+      not Map.has_key?(unused_starters(state), override) ->
+        throw({:refused, "reference-cuisine", {:cuisine_taken, override}})
+
+      true ->
+        override
+    end
+  end
+
+  defp unused_starters(state) do
+    taken = MapSet.new(Map.values(state.restaurants), & &1.cuisine)
+    Map.reject(starter_mains(state.catalog), fn {cuisine, _recipe} -> MapSet.member?(taken, cuisine) end)
   end
 
   defp reference_spot(state) do
@@ -982,7 +1029,7 @@ defmodule FeudHall.CustomerSim.CLI do
   @runs %{"a" => :a, "b" => :b}
   @vias %{"init" => :init, "retune" => :retune}
   @usage "usage: mix run --no-start scripts/customer_sim.exs -- --run a|b --tuning current|chosen|PATH " <>
-           "--days N --seed S [--via init|retune] [--hours START-END] [--set KEY=VALUE ...] [--json PATH]"
+           "--days N --seed S [--via init|retune] [--hours START-END] [--cuisine ID] [--set KEY=VALUE ...] [--json PATH]"
 
   def main(argv) do
     started = System.monotonic_time(:millisecond)
@@ -993,7 +1040,8 @@ defmodule FeudHall.CustomerSim.CLI do
 
       IO.puts(
         "Run #{args.run}, tuning #{args.tuning}#{sets} (version #{tuning.version}), via #{args.via}, seed #{args.seed}, " <>
-          "1 warm-up day + #{args.days} measured, reference hours #{hours_label(args.hours)}"
+          "1 warm-up day + #{args.days} measured, reference hours #{hours_label(args.hours)}, " <>
+          "reference cuisine #{args.cuisine || "by median starter price"}"
       )
 
       opts = %{
@@ -1003,6 +1051,7 @@ defmodule FeudHall.CustomerSim.CLI do
         days: args.days,
         seed: args.seed,
         hours: args.hours,
+        cuisine: args.cuisine,
         progress: &progress(&1, args.days)
       }
 
@@ -1039,6 +1088,7 @@ defmodule FeudHall.CustomerSim.CLI do
       seed: :integer,
       via: :string,
       hours: :string,
+      cuisine: :string,
       set: :keep,
       json: :string
     ]
@@ -1053,22 +1103,43 @@ defmodule FeudHall.CustomerSim.CLI do
           via: Keyword.get(opts, :via, "init"),
           set: Keyword.get_values(opts, :set),
           json: opts[:json],
-          hours: parse_hours(Keyword.get(opts, :hours))
+          hours: parse_hours(Keyword.get(opts, :hours)),
+          cuisine: opts[:cuisine]
         }
 
         cond do
-          args.run not in ["a", "b"] -> {:error, "--run must be a or b\n" <> @usage}
-          args.via not in ["init", "retune"] -> {:error, "--via must be init or retune\n" <> @usage}
-          args.days < 0 or args.days > @max_days -> {:error, "--days must be 0..#{@max_days}\n" <> @usage}
-          args.seed < 0 -> {:error, "--seed must be non-negative\n" <> @usage}
-          args.hours == :error -> {:error, "--hours must be START-END, two hall hours in 0..23 that differ\n" <> @usage}
-          true -> {:ok, %{args | run: @runs[args.run], via: @vias[args.via]}}
+          args.run not in ["a", "b"] ->
+            {:error, "--run must be a or b\n" <> @usage}
+
+          args.via not in ["init", "retune"] ->
+            {:error, "--via must be init or retune\n" <> @usage}
+
+          args.days < 0 or args.days > @max_days ->
+            {:error, "--days must be 0..#{@max_days}\n" <> @usage}
+
+          args.seed < 0 ->
+            {:error, "--seed must be non-negative\n" <> @usage}
+
+          args.hours == :error ->
+            {:error, "--hours must be START-END, two hall hours in 0..23 that differ\n" <> @usage}
+
+          args.cuisine != nil and args.run != "a" ->
+            {:error, "--cuisine applies to run a only\n" <> @usage}
+
+          args.cuisine != nil and args.cuisine not in cuisines() ->
+            {:error, "--cuisine must be one of #{Enum.join(cuisines(), ", ")}\n" <> @usage}
+
+          true ->
+            {:ok, %{args | run: @runs[args.run], via: @vias[args.via]}}
         end
 
       {_, rest, invalid} ->
         {:error, "unrecognised arguments #{inspect(rest ++ Enum.map(invalid, &elem(&1, 0)))}\n" <> @usage}
     end
   end
+
+  # The launch catalog's cuisines that have a starter main. Whether one is already taken is known only in the run.
+  defp cuisines, do: LaunchCatalog.catalog() |> Hall.starter_mains() |> Map.keys() |> Enum.sort()
 
   defp parse_hours(nil), do: Hall.default_hours()
 
@@ -1098,13 +1169,7 @@ defmodule FeudHall.CustomerSim.CLI do
 
   defp base_tuning("current"), do: {:ok, Tuning.of(LaunchCatalog.catalog())}
 
-  defp base_tuning("chosen") do
-    {:module, Tuning} = Code.ensure_loaded(Tuning)
-
-    if function_exported?(Tuning, :chosen, 0),
-      do: {:ok, apply(Tuning, :chosen, [])},
-      else: {:error, "Tuning.chosen/0 is not defined yet (Task 4 adds it)"}
-  end
+  defp base_tuning("chosen"), do: {:ok, Tuning.chosen()}
 
   defp base_tuning(path) do
     if File.regular?(path) do
@@ -1179,9 +1244,11 @@ defmodule FeudHall.CustomerSim.CLI do
       set: args.set,
       tuning: result.tuning,
       reference_hours: Tuple.to_list(result.hours),
+      reference_cuisine_option: Map.get(args, :cuisine),
       git_commit: git_commit(),
       reference:
-        result.reference && Map.take(result.reference, [:stall_id, :restaurant_id, :cuisine, :recipe, :restock]),
+        result.reference &&
+          Map.take(result.reference, [:stall_id, :restaurant_id, :cuisine, :recipe, :price, :restock]),
       stalls: stats.stalls,
       summary: Stats.summary(stats),
       verdict: Stats.verdict(args.run, stats),
@@ -1206,7 +1273,11 @@ defmodule FeudHall.CustomerSim.CLI do
     stalls = report.stalls |> Map.keys() |> Enum.sort()
 
     if r = report.reference do
-      IO.puts("Reference stall #{r.stall_id} (#{r.restaurant_id}), cuisine #{r.cuisine}, main #{r.recipe}")
+      IO.puts(
+        "Reference stall #{r.stall_id} (#{r.restaurant_id}), cuisine #{r.cuisine} " <>
+          "(#{if report.reference_cuisine_option, do: "--cuisine", else: "median starter price among unused cuisines"}), " <>
+          "main #{r.recipe} at #{r.price}"
+      )
     end
 
     for sid <- stalls do

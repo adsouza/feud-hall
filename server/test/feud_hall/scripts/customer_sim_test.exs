@@ -191,6 +191,94 @@ defmodule FeudHall.CustomerSimTest do
     assert Stats.day_served(result.stats, 0) > 0
   end
 
+  defp starter(cuisine, price, kind \\ :main),
+    do:
+      {"#{cuisine}_starter",
+       %{id: "#{cuisine}_starter", cuisine: cuisine, starter: true, kind: kind, suggested_price: price}}
+
+  defp reference_state(prices, taken) do
+    %{
+      catalog: %{recipes: Map.new(prices, fn {cuisine, price} -> starter(cuisine, price) end)},
+      restaurants: Map.new(taken, &{"r-" <> &1, %{cuisine: &1}})
+    }
+  end
+
+  test "the default reference cuisine has the median starter price among unused cuisines" do
+    # Odd count: the middle price.
+    odd = reference_state(%{"a" => 1200, "b" => 900, "c" => 950, "taken" => 100}, ["taken"])
+    assert Hall.reference_cuisine(odd) == "c"
+
+    # Even count: the lower of the two middle prices (900, 950, 1000, 1200 -> 950).
+    even = reference_state(%{"a" => 1200, "b" => 900, "c" => 950, "d" => 1000}, [])
+    assert Hall.reference_cuisine(even) == "c"
+
+    # Several cuisines at the median price: the first by cuisine ID, wherever the middle index falls.
+    tied = reference_state(%{"z" => 800, "y" => 950, "m" => 950, "b" => 950, "a" => 1300}, [])
+    assert Hall.reference_cuisine(tied) == "b"
+
+    # A cuisine whose starter is not a main does not count.
+    drinks = put_in(odd.catalog.recipes["x_starter"], elem(starter("x", 950, :drink), 1))
+    assert Hall.reference_cuisine(drinks) == "c"
+  end
+
+  test "an override must be an unused cuisine with a starter main" do
+    state = reference_state(%{"a" => 1200, "b" => 900, "c" => 950}, ["b"])
+    assert Hall.reference_cuisine(state, nil) == Hall.reference_cuisine(state)
+    assert Hall.reference_cuisine(state, "a") == "a"
+    assert catch_throw(Hall.reference_cuisine(state, "b")) == {:refused, "reference-cuisine", {:cuisine_taken, "b"}}
+
+    assert catch_throw(Hall.reference_cuisine(state, "nope")) ==
+             {:refused, "reference-cuisine", {:unknown_cuisine, "nope"}}
+  end
+
+  test "--cuisine is parsed for run A and refused when unknown or for run B" do
+    assert {:ok, %{cuisine: nil}} = CLI.parse(~w(--run a))
+    assert {:ok, %{cuisine: "coast_salish"}} = CLI.parse(~w(--run a --cuisine coast_salish))
+    assert {:error, message} = CLI.parse(~w(--run a --cuisine atlantis))
+    assert message =~ "--cuisine"
+    assert {:error, _} = CLI.parse(~w(--run b --cuisine coast_salish))
+  end
+
+  @tag timeout: 180_000
+  test "run A's default reference sells the median-priced unused starter; --cuisine overrides it" do
+    result = run!(%{run: :a})
+    state = HallAuthority.state(result.authority).hall
+    npc_cuisines = for {_, %{owner_kind: :npc, cuisine: c}} <- state.restaurants, do: c
+
+    unused =
+      for {_, %{starter: true, kind: :main} = recipe} <- LaunchCatalog.catalog().recipes,
+          recipe.cuisine not in npc_cuisines,
+          do: {recipe.suggested_price, recipe.cuisine}
+
+    prices = unused |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+    median = Enum.at(prices, div(length(prices) - 1, 2))
+    assert rem(length(prices), 2) == 0
+    assert Enum.count(prices, &(&1 < median)) < div(length(prices), 2)
+    assert Enum.count(prices, &(&1 <= median)) >= div(length(prices), 2)
+
+    assert result.reference.price == median
+
+    assert result.reference.cuisine ==
+             unused |> Enum.filter(&(elem(&1, 0) == median)) |> Enum.map(&elem(&1, 1)) |> Enum.min()
+
+    assert state.catalog.recipes[result.reference.recipe].suggested_price == median
+
+    args = %{run: :a, tuning: :current, via: :init, days: 0, seed: @seed, set: []}
+    json = Jason.decode!(CLI.json(result, args))
+    assert json["reference"]["cuisine"] == result.reference.cuisine
+    assert json["reference"]["price"] == median
+    assert json["reference"]["recipe"] == result.reference.recipe
+
+    salmon = run!(%{run: :a, cuisine: "coast_salish"})
+    assert %{cuisine: "coast_salish", recipe: "roasted_salmon", price: 1220} = salmon.reference
+
+    [taken | _] = Enum.sort(npc_cuisines)
+    defaults = %{run: :a, tuning: Tuning.of(LaunchCatalog.catalog()), via: :init, days: 0, seed: @seed}
+
+    assert {:error, {:refused, "reference-cuisine", {:cuisine_taken, ^taken}}} =
+             Hall.run(Map.put(defaults, :cuisine, taken))
+  end
+
   @tag timeout: 180_000
   test "--hours 9-21 closes the reference at 19:00; the default keeps it open through every checked hour" do
     long = run!(%{run: :a, days: 1, hours: {9, 21}})
