@@ -482,6 +482,7 @@ test("room layout: routes stay on the floor", () => {
       [0, QUEUE_DRAW_MAX - 1].map((n) => toHall(p, ...queueSpot(n))),
     ),
   ];
+  const tables = tableSpots(room);
   fc.assert(
     fc.property(
       fc.constantFrom(...ends),
@@ -491,18 +492,21 @@ test("room layout: routes stay on the floor", () => {
         expect(route[0]).toEqual({ x: from.x, z: from.z });
         expect(route[route.length - 1]).toEqual({ x: to.x, z: to.z });
         // Sample every 0.25 along the route, leaving out the first and last metre.
+        // One expect per route: Playwright records a step for every expect call,
+        // and per-sample expects made this property take minutes in CI.
         const length = routeLength(route);
+        const problems: string[] = [];
         for (let m = 1; m < length - 1; m += 0.25) {
           const at = routeAt(route, m);
-          expect(roomAt(at.x, at.z)).toBe(room);
-          expect(placements.some((p) => stallBlocks(p, at.x, at.z))).toBe(
-            false,
-          );
-          for (const table of tableSpots(room))
-            expect(Math.hypot(table.x - at.x, table.z - at.z)).toBeGreaterThan(
-              0.62,
-            );
+          const flag = (what: string) =>
+            problems.push(`${what} at ${m} m (${at.x}, ${at.z})`);
+          if (roomAt(at.x, at.z) !== room) flag("off the room floor");
+          if (placements.some((p) => stallBlocks(p, at.x, at.z)))
+            flag("through a stall");
+          if (!tables.every((t) => Math.hypot(t.x - at.x, t.z - at.z) > 0.62))
+            flag("within 0.62 m of a table");
         }
+        expect(problems).toEqual([]);
         expect(length).toBeLessThan(4 * ROOM_SIDE);
       },
     ),
