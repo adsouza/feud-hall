@@ -4,7 +4,8 @@ import type { SpotPlacement } from "./room-layout";
 export const SHUTTER_SLATS = 9;
 export const SHUTTER_HEIGHT = 0.91;
 export const SHUTTER_FONT = '900 79px "Noto Sans JP", system-ui, sans-serif';
-/** Where the shutter's top edge hangs: the canopy line. */
+/** The closed shutter's centre height; its top edge, the canopy line, is
+ * SHUTTER_Y + SHUTTER_HEIGHT / 2 (1.835). */
 const SHUTTER_Y = 1.38;
 
 /** What a stall's looks depend on; both scenes colour a cuisine the same way. */

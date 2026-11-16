@@ -28,6 +28,7 @@ import {
   spotPlacement,
   tableSpots,
   type Point,
+  SEAT_OFFSETS,
 } from "./room-layout";
 import { createStallKit, stallAccent, type StallParts } from "./stall-model";
 
@@ -151,9 +152,16 @@ export function createHallIntro(
   stools.frustumCulled = false;
   scene.add(stools);
   // Two movers per table, each taking neighbouring seats (SEAT_OFFSETS order).
+  const seatsPerTable = SEAT_OFFSETS.length;
   const movers = tableSpots(ROOM).flatMap((_, t) => [
-    { look: personLook(1100 + 2 * t, "worker"), pair: [4 * t, 4 * t + 2] },
-    { look: personLook(1101 + 2 * t, "worker"), pair: [4 * t + 1, 4 * t + 3] },
+    {
+      look: personLook(1100 + 2 * t, "worker"),
+      pair: [seatsPerTable * t, seatsPerTable * t + 2],
+    },
+    {
+      look: personLook(1101 + 2 * t, "worker"),
+      pair: [seatsPerTable * t + 1, seatsPerTable * t + 3],
+    },
   ]);
   const cooks = CUISINES.map((_, i) => personLook(1000 + i, "worker"));
 

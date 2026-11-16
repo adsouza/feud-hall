@@ -202,6 +202,7 @@
     (typeof import("./HallIntro.svelte"))["default"] | null
   >(null);
   let introInsets = $state({ top: 0, bottom: 0 });
+  let headerElement = $state<HTMLElement>();
   let mainElement = $state<HTMLElement>();
   let navigationElement = $state<HTMLElement>();
   const hasView = $derived(view !== null);
@@ -210,10 +211,16 @@
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     if (!webglAvailable()) return;
     intro = "playing";
-    import("./HallIntro.svelte").then((module) => {
-      if (intro === "playing") HallIntro = module.default;
-      else retireIntro();
-    }, retireIntro);
+    import("./HallIntro.svelte").then(
+      (module) => {
+        if (intro === "playing") HallIntro = module.default;
+        else retireIntro();
+      },
+      (error) => {
+        console.warn("The hall intro failed to load", error);
+        retireIntro();
+      },
+    );
   }
   // Ending or failing returns the intro to idle for the rest of this page load.
   function retireIntro() {
@@ -248,7 +255,15 @@
     if (intro === "idle") return;
     placeIntro();
     window.addEventListener("resize", placeIntro);
-    return () => window.removeEventListener("resize", placeIntro);
+    // The header and navigation can change height while the intro plays
+    // (wrapping text, a notice, the language); the stage follows them.
+    const observer = new ResizeObserver(placeIntro);
+    for (const element of [headerElement, mainElement, navigationElement])
+      if (element) observer.observe(element);
+    return () => {
+      window.removeEventListener("resize", placeIntro);
+      observer.disconnect();
+    };
   });
   // The first confirmed view, or a refused protocol, ends a playing intro.
   $effect(() => {
@@ -2405,7 +2420,7 @@
   {/if}
 {/snippet}
 
-<header>
+<header bind:this={headerElement}>
   <div class="brand">
     <img class="brand-icon" src={appIcon} alt="" width="48" height="48" />
     <div><strong>Feud Hall</strong><small>{t("tagline")}</small></div>

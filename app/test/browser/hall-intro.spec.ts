@@ -207,8 +207,15 @@ test("intro: reduced motion or no WebGL keeps the text screen", async ({
   await expect(intro(page)).toHaveCount(0);
 
   // Motion allowed, but no WebGL context of any kind; 2D canvases still work.
+  // Record whether the intro's container ever appears: "never mounts" must be
+  // told apart from "mounts, then fails".
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.addInitScript(() => {
+    (window as unknown as { introSeen: boolean }).introSeen = false;
+    new MutationObserver(() => {
+      if (document.querySelector("[data-intro-stage], [data-hall-intro]"))
+        (window as unknown as { introSeen: boolean }).introSeen = true;
+    }).observe(document, { childList: true, subtree: true });
     const getContext = HTMLCanvasElement.prototype.getContext;
     const webgl = ["webgl", "webgl2", "experimental-webgl"];
     HTMLCanvasElement.prototype.getContext = function (
@@ -235,6 +242,35 @@ test("intro: reduced motion or no WebGL keeps the text screen", async ({
   await expect(page.getByText("Opening the hall…")).toBeVisible();
   await expect(stage(page)).toHaveCount(0);
   await expect(intro(page)).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { introSeen: boolean }).introSeen,
+    ),
+  ).toBe(false);
+});
+
+test("intro: losing WebGL returns to the text screen for good", async ({
+  page,
+  hall,
+}) => {
+  await openHeld(page, hall.origin);
+  await startIntro(page);
+  const lost = await page.evaluate(() => {
+    const canvas = document.querySelector("[data-hall-intro] canvas");
+    const gl = (canvas as HTMLCanvasElement | null)?.getContext("webgl2");
+    const extension = gl?.getExtension("WEBGL_lose_context");
+    extension?.loseContext();
+    return !!extension;
+  });
+  expect(lost).toBe(true);
+  await page.clock.runFor(100);
+  await expect(intro(page)).toHaveCount(0);
+  await expect(stage(page)).toHaveCount(0);
+  await expect(page.getByText("Opening the hall…")).toBeVisible();
+  await page.clock.runFor(3000);
+  await expect(intro(page)).toHaveCount(0);
+  await expect(stage(page)).toHaveCount(0);
+  await expect(page.getByText("Opening the hall…")).toBeVisible();
 });
 
 test("intro: a second slow load plays it again", async ({ page, hall }) => {
