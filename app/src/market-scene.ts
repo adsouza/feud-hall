@@ -12,7 +12,6 @@ import {
   CAMERA_FOV,
   SIGN_BOTTOM,
   SIGN_MAX_H,
-  STALL_GAP,
   TIER_RISE,
   TIER_DEPTH,
   PITCH_X,
