@@ -125,6 +125,24 @@ section h2 {
 .banner {
   border-color: var(--accent);
 }
+/* The opening intro covers the page body; its top and bottom insets are set
+   from the layout. The container never takes clicks itself, and the intro
+   stops taking them while it dissolves. */
+.intro-stage {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.intro-stage > [data-hall-intro] {
+  pointer-events: auto;
+}
+/* The waiting status stays readable as the intro's caption. */
+.banner.intro-caption {
+  position: relative;
+  z-index: 2;
+}
 .success-notice {
   position: fixed;
   inset-inline-end: 1rem;

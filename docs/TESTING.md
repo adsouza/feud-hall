@@ -700,6 +700,15 @@ stall served closed rolls its shutter down (the host's
 `data-hall-shutters-moving` count reads 1 while it moves and 0 once settled),
 and under reduced motion the shutter snaps without ever reading above 0.
 
+`app/test/browser/hall-intro.spec.ts` checks the hall opening intro on slow
+first loads, with the page's clock installed and paused before navigation and
+`/api/state` held: no intro for an answer at 1.4 s, the intro from 1.5 s
+(also after quick 503 answers), the waiting status drawn above it, the live
+page's controls taking clicks at once while it dissolves, skip to the hold,
+an update-required answer ending it, Japanese caption and hint, the text
+screen under reduced motion or without WebGL, and a second slow load playing
+it again. Run it with `--grep 'intro:'` after building the client.
+
 `tray-pickup.spec.ts` checks private served-course eligibility and deduplication,
 real ray clicks on a served tray, reaching/taking animation, reduced-motion F-key
 collection, and absence after scene remount. It verifies that collection changes
