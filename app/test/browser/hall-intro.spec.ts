@@ -153,6 +153,26 @@ test("intro: a skip jumps to the hold", async ({ page, hall }) => {
   await expect(intro(page)).toHaveAttribute("data-intro-beat", "hold");
 });
 
+test("intro: diners are coming in when the camera rises to the overview", async ({
+  page,
+  hall,
+}) => {
+  // A small window keeps the software renderer quick over 24 s of frames.
+  await page.setViewportSize({ width: 480, height: 400 });
+  await openHeld(page, hall.origin);
+  await startIntro(page);
+  const inside = async () =>
+    Number(await intro(page).getAttribute("data-intro-diners-inside"));
+  // Nobody comes in while the stalls open...
+  await page.clock.runFor(17500);
+  await expect(intro(page)).toHaveAttribute("data-intro-beat", "stools");
+  expect(await inside()).toBe(0);
+  // ...but by the rise several are already crossing the floor.
+  await page.clock.runFor(6700);
+  await expect(intro(page)).toHaveAttribute("data-intro-beat", "rise");
+  expect(await inside()).toBeGreaterThanOrEqual(3);
+});
+
 test("intro: quick 503 answers still play it", async ({ page, hall }) => {
   await installPausedClock(page);
   await page.route("**/api/state**", (route) =>

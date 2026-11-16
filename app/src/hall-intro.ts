@@ -21,6 +21,7 @@ import {
   ROOM_SIDE,
   entrance,
   roomCentre,
+  roomAt,
   routeAt,
   routeLength,
   routeWithin,
@@ -65,8 +66,13 @@ const SECOND_PUSH_START = 0.65;
 /** Movers fade in over this long at the start of the stools beat. */
 const MOVER_FADE_MS = 600;
 const QUEUE_DEPTH = 4;
-/** One diner comes in through the entrance this often during the hold. */
+/** One diner comes in through the entrance this often. */
 const ARRIVAL_MS = 1400;
+/**
+ * Diners start coming in while the stools are set out, so the first are
+ * already crossing the floor when the camera rises to the overview.
+ */
+export const DINERS_START_MS = INTRO_BEATS.stools + 2000;
 /** Metres per millisecond, as the live floor walks diners. */
 const WALK_SPEED = 0.0016;
 /** Stride phase per metre walked, as the live floor. */
@@ -299,7 +305,13 @@ export function createHallIntro(
     );
   }
 
-  function drawPeople(frame: IntroFrame, moverOpacity: number, holdMs: number) {
+  /** Draws everyone; returns how many diners are inside the room. */
+  function drawPeople(
+    frame: IntroFrame,
+    moverOpacity: number,
+    dinersMs: number,
+  ): number {
+    let inside = 0;
     people.begin();
     placements.forEach((placement, i) => {
       const [dx, dz] = STAFF_SPOTS[0]!;
@@ -312,15 +324,17 @@ export function createHallIntro(
       addFigure(mover.look, moverOpacity);
     }
     for (const diner of diners) {
-      const since = holdMs - diner.arrive;
+      const since = dinersMs - diner.arrive;
       if (since < 0) break;
       const metres = since * WALK_SPEED;
       const walking = metres < diner.length;
       const at = routeAt(diner.route, metres);
       pose(at.x, at.z, walking ? at.yaw : diner.restYaw, metres, walking);
       addFigure(diner.look, Math.min(1, metres / FADE_METRES));
+      if (roomAt(at.x, at.z) === ROOM) inside += 1;
     }
     people.end();
+    return inside;
   }
 
   const centre = roomCentre(ROOM);
@@ -402,11 +416,14 @@ export function createHallIntro(
       skippedAt === undefined
         ? T.MathUtils.clamp((ms - INTRO_BEATS.stools) / MOVER_FADE_MS, 0, 1)
         : 1;
-    drawPeople(
+    // A skip goes straight to the hold, so diners start coming in from then.
+    const inside = drawPeople(
       frame,
       moverOpacity,
-      ms - (skippedAt === undefined ? INTRO_BEATS.hold : skippedAt),
+      ms - (skippedAt === undefined ? DINERS_START_MS : skippedAt),
     );
+    if (host.dataset.introDinersInside !== String(inside))
+      host.dataset.introDinersInside = String(inside);
     renderer.render(scene, camera);
   }
 
@@ -490,6 +507,7 @@ export function createHallIntro(
       renderer.forceContextLoss();
       canvas.remove();
       delete host.dataset.introBeat;
+      delete host.dataset.introDinersInside;
     },
   };
 }
