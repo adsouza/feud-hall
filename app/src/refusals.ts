@@ -234,6 +234,18 @@ const messages = {
     "The restaurant doesn’t have enough available cash for this action.",
     "この操作に必要なレストランの手元資金が足りません。",
   ],
+  price_above_limit: [
+    "The market price rose above your limit.",
+    "市場価格が上限を超えました。",
+  ],
+  stock_exhausted: [
+    "The market ran out before your order was filled.",
+    "注文が満たされる前に市場の在庫がなくなりました。",
+  ],
+  insufficient_storage: [
+    "There isn’t enough storage space for this delivery.",
+    "この配送を受け取る保管場所が足りません。",
+  ],
   unknown_restaurant: [
     "This restaurant is unavailable.",
     "このレストランは利用できません。",

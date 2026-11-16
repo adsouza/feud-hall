@@ -39,7 +39,14 @@ type Lease = {
   end_hour: number;
   workers: Record<
     string,
-    { id: string; role: string; start_hour: number; end_hour: number }
+    {
+      id: string;
+      role: string;
+      start_hour: number;
+      end_hour: number;
+      break_until?: number | null;
+      tired?: boolean;
+    }
   >;
   helper_offers: boolean;
   unattended: boolean;
@@ -53,6 +60,14 @@ export type OwnerStall = {
   ready_at?: number | null;
   refit_cost?: Money;
   cuisine?: string;
+  /** This location's own menu and starter-stock offer, where the server sends them. */
+  menu?: Record<string, Money>;
+  starter_stock?: { budget: Money; items: { product: string; qty: number }[] };
+  /** What learning a recipe, or installing its equipment here, would cost. */
+  unlock_offers?: Record<
+    string,
+    { cost: Money; equipment: Money; technique?: string | null; known: boolean }
+  >;
   lease: Lease;
 };
 export type Slot = {
@@ -86,6 +101,39 @@ type VentureHistory = {
   unpaid?: Money;
   final_ledger?: Record<string, Money>;
 };
+export type PurchaseReason =
+  | "price_above_limit"
+  | "insufficient_cash"
+  | "insufficient_storage"
+  | "stock_exhausted";
+export type PendingPurchase = {
+  request_id: string;
+  product: string;
+  qty: number;
+  max_price_per_kunit: Money;
+  submitted_at: number;
+  automated: boolean;
+};
+export type PurchaseOutcome = {
+  request_id: string;
+  batch: number;
+  at: number;
+  product: string;
+  requested: number;
+  filled: number;
+  cost: Money;
+  short: number;
+  reason: PurchaseReason | null;
+  /** Restock automation sent it; missing from an older server. */
+  automated?: boolean;
+};
+/** A rival's filled purchases at one of the newest two clearings: nothing more is public. */
+export type MarketTrip = {
+  batch: number;
+  restaurant_id: string;
+  products: string[];
+  size: "small" | "medium" | "large";
+};
 export type Restaurant = {
   id: string;
   name: string;
@@ -102,12 +150,18 @@ export type Restaurant = {
   equipment_salvage?: { stall_id: string; technique: string; amount: Money }[];
   unlocked: string[];
   menu: Record<string, Money>;
+  /** Supplies the current menu uses (recipe lines and their substitutes); missing from an older server. */
+  menu_products?: string[];
   ledger: Record<string, Money>;
   starter_stock: { budget: Money; items: { product: string; qty: number }[] };
   reports: { day: number; delta: Record<string, Money> }[];
   available_cash: Money;
   stalls: OwnerStall[];
-  market: Record<string, { price: Money; stock: number }>;
+  market: Record<
+    string,
+    { price: Money; stock: number; crate?: number; level?: number }
+  >;
+  purchases?: { pending: PendingPurchase[]; recent: PurchaseOutcome[] };
   inventory: Record<string, number>;
 };
 export type Application = {
@@ -215,6 +269,7 @@ export type View = {
     dietary_profiles?: string[];
     recipes: Record<string, Recipe>;
     failed_ventures?: VentureHistory[];
+    market_trips?: MarketTrip[];
     lease_forecast?: {
       trading_hours: number;
       wages: Money;

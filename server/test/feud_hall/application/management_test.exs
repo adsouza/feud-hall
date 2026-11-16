@@ -3,7 +3,8 @@ defmodule FeudHall.Application.ManagementTest do
   use ExUnitProperties
 
   alias FeudHall.Application.{CommandWorkflow, Management, Recovery}
-  alias FeudHall.Domain.{Clock, Identity}
+  alias FeudHall.Application.Projections.MarketActivity
+  alias FeudHall.Domain.{Clock, Identity, Market}
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.Hall.Invariants
   alias FeudHall.Domain.Hall.Management, as: HallManagement
@@ -869,6 +870,316 @@ defmodule FeudHall.Application.ManagementTest do
       assert {:ok, replayed} = CommandWorkflow.open(store_mod, rt.store)
       assert replayed.state == rt.state
       assert replayed.control == rt.control
+    end
+  end
+
+  describe "purchases in the views" do
+    # An owner (r1, s001) and a rival owner (r2, s002), both with a restaurant.
+    defp market_world do
+      rt = boot(InMemoryEventStore, InMemoryEventStore.new())
+      {rt, owner} = register(rt, "owner-device", "Owner")
+      {rt, rival} = register(rt, "rival-device", "Rival")
+      rt = run(rt, "seed", {:system, :admin}, :seed_owner, %{principal: owner, reviewer?: true})
+      rt = run(rt, "seed-rival", {:system, :admin}, :seed_owner, %{principal: rival, reviewer?: false})
+      rt = client(rt, "owner-device", "reserve", :reserve_stall, %{stall_id: "s001"})
+      rt = client(rt, "rival-device", "reserve-rival", :reserve_stall, %{stall_id: "s002"})
+
+      rt =
+        client(rt, "owner-device", "lease", :create_restaurant, %{
+          restaurant_id: "r1",
+          stall_id: "s001",
+          name: "Kitchen",
+          cuisine: "mughlai_punjabi"
+        })
+
+      client(rt, "rival-device", "lease-rival", :create_restaurant, %{
+        restaurant_id: "r2",
+        stall_id: "s002",
+        name: "Rival",
+        cuisine: "sichuan"
+      })
+    end
+
+    defp product(rt), do: hd(rt.state.catalog.recipes["chole_with_rice"].lines).product
+
+    defp buy(rt, device, id, restaurant_id, product, qty, limit) do
+      client(rt, device, id, :submit_purchase_request, %{
+        restaurant_id: restaurant_id,
+        product: product,
+        qty: qty,
+        max_price_per_kunit: limit
+      })
+    end
+
+    defp to_clearing(rt), do: advance(rt, Clock.service_ms(rt.state.market.next_clear_at))
+
+    defp cleared_since(rt, position) do
+      assert {:ok, batches} = InMemoryEventStore.read_from(rt.store, position)
+      Enum.filter(Enum.flat_map(batches, & &1.events), &(&1.type == :market_cleared))
+    end
+
+    defp restaurant_view(rt, device) do
+      assert {:ok, %{profile: %{restaurant: restaurant}}} = Management.view(rt, device)
+      restaurant
+    end
+
+    # The owner buys two crates of the product with a generous limit; the
+    # rival asks for some below the published price.
+    defp owner_and_rival_requests do
+      rt = market_world()
+      p = product(rt)
+      crate = Market.crate_size(rt.state.catalog, p)
+      limit = 2 * Market.price(rt.state.catalog, rt.state.market, p)
+      rt = buy(rt, "owner-device", "buy", "r1", p, 2 * crate, limit)
+      rt = buy(rt, "rival-device", "rival-buy", "r2", p, 300, 1)
+      {rt, p, crate, limit}
+    end
+
+    test "the owner's view carries their pending requests and recent outcomes" do
+      {rt, p, crate, limit} = owner_and_rival_requests()
+      submitted_at = rt.state.now
+      view = restaurant_view(rt, "owner-device")
+
+      assert view.purchases == %{
+               pending: [
+                 %{
+                   request_id: "PR:buy",
+                   product: p,
+                   qty: 2 * crate,
+                   max_price_per_kunit: Integer.to_string(limit),
+                   submitted_at: submitted_at,
+                   automated: false
+                 }
+               ],
+               recent: []
+             }
+
+      for {product, offer} <- view.market do
+        assert offer.crate == Market.crate_size(rt.state.catalog, product)
+        assert offer.level == Market.level_permille(rt.state.catalog, rt.state.market, product)
+        assert offer.level in 0..1000
+      end
+
+      assert view.market[p].crate == crate
+
+      before = rt.position
+      rt = to_clearing(rt)
+      assert [%{fills: fills, batch: batch}] = cleared_since(rt, before)
+      assert [%{request_id: "PR:buy", qty: filled, cost: cost}] = Enum.filter(fills, &(&1.restaurant_id == "r1"))
+      assert filled == 2 * crate
+
+      view = restaurant_view(rt, "owner-device")
+      assert view.purchases.pending == []
+
+      assert [
+               %{
+                 request_id: "PR:buy",
+                 batch: ^batch,
+                 at: at,
+                 product: ^p,
+                 requested: requested,
+                 filled: ^filled,
+                 short: 0,
+                 cost: encoded_cost,
+                 automated: false,
+                 reason: nil
+               }
+             ] = view.purchases.recent
+
+      assert requested == 2 * crate
+      assert encoded_cost == Integer.to_string(cost)
+      assert at == rt.state.market.next_clear_at - rt.state.catalog.rules.market.clear_every_hall_ms
+      assert is_integer(view.market[p].crate) and is_integer(view.market[p].level)
+
+      # The rival's request fell short for its price limit; the reason is a string.
+      assert [%{request_id: "PR:rival-buy", filled: 0, short: 300, cost: "0", reason: "price_above_limit"}] =
+               restaurant_view(rt, "rival-device").purchases.recent
+    end
+
+    # Products of the recipes' lines and each line's substitute, from the catalog.
+    defp products_of(catalog, recipe_ids) do
+      recipe_ids
+      |> Enum.flat_map(fn id ->
+        Enum.flat_map(catalog.recipes[id].lines, fn line ->
+          [line.product | if(line.substitute, do: [line.substitute.product], else: [])]
+        end)
+      end)
+      |> Enum.uniq()
+      |> Enum.sort()
+    end
+
+    test "the owner's view names the supplies their menu uses, and only the owner sees it" do
+      rt = market_world()
+      catalog = rt.state.catalog
+
+      starters =
+        for {id, %{cuisine: "mughlai_punjabi", starter: true}} <- catalog.recipes, do: id
+
+      owner = restaurant_view(rt, "owner-device")
+      assert Enum.sort(Map.keys(owner.menu)) == Enum.sort(starters)
+      expected = products_of(catalog, starters)
+      assert expected != []
+      assert Enum.any?(starters, fn id -> Enum.any?(catalog.recipes[id].lines, & &1.substitute) end)
+      assert owner.menu_products == expected
+
+      # Taking the recipes off the menu takes their supplies off the list.
+      rt =
+        starters
+        |> Enum.with_index()
+        |> Enum.reduce(rt, fn {id, i}, rt ->
+          client(rt, "owner-device", "remove-#{i}", :remove_menu_item, %{
+            restaurant_id: "r1",
+            stall_id: "s001",
+            recipe_id: id
+          })
+        end)
+
+      assert restaurant_view(rt, "owner-device").menu == %{}
+      assert restaurant_view(rt, "owner-device").menu_products == []
+
+      # A rival sees only their own restaurant's list; nobody's is public.
+      assert {:ok, %{hall: hall, profile: profile}} = Management.view(rt, "rival-device")
+      refute Jason.encode!(hall) =~ "menu_products"
+      assert profile.restaurant.id == "r2"
+      rival_starters = for {id, %{cuisine: "sichuan", starter: true}} <- catalog.recipes, do: id
+      assert profile.restaurant.menu_products == products_of(catalog, rival_starters)
+
+      assert {:ok, guest} = Management.view(rt, nil)
+      refute Jason.encode!(guest) =~ "menu_products"
+
+      # A restaurant with no stall falls back to its own menu.
+      state = rt.state
+      state = %{state | stalls: Map.delete(state.stalls, "s002")}
+      state = %{state | management: %{state.management | leases: Map.delete(state.management.leases, "s002")}}
+      stall_less = %{rt | state: state}
+      rival = restaurant_view(stall_less, "rival-device")
+      assert rival.stalls == []
+      assert rival.menu_products == products_of(catalog, Map.keys(rival.menu))
+      assert rival.menu_products != []
+    end
+
+    test "a rival's view carries the trip and nothing private" do
+      {rt, p, _crate, _limit} = owner_and_rival_requests()
+      rt = to_clearing(rt)
+
+      assert {:ok, %{hall: hall, profile: profile}} = Management.view(rt, "rival-device")
+      batch = rt.state.market.batch - 1
+
+      # The rival filled nothing, so the owner's trip is the only one.
+      assert hall.market_trips == [%{batch: batch, restaurant_id: "r1", products: [p], size: "small"}]
+
+      encoded = Jason.encode!(hall)
+
+      for private <- ~w(qty cost max_price_per_kunit request_id short reason PR:buy) do
+        refute encoded =~ private, "the public hall view leaks #{private}"
+      end
+
+      assert Enum.map(profile.restaurant.purchases.recent, & &1.request_id) == ["PR:rival-buy"]
+      assert profile.restaurant.purchases.pending == []
+
+      assert {:ok, %{hall: guest_hall, profile: nil}} = Management.view(rt, nil)
+      assert guest_hall.market_trips == hall.market_trips
+    end
+
+    test "restock automation that requests and clears inside one advance still yields its outcome and trip" do
+      rt = market_world()
+      p = product(rt)
+      limit = 2 * Market.price(rt.state.catalog, rt.state.market, p)
+      crate = Market.crate_size(rt.state.catalog, p)
+
+      rt =
+        client(rt, "owner-device", "unattended", :set_unattended_policy, %{
+          stall_id: "s001",
+          enabled: true,
+          cash_floor: 0
+        })
+
+      rt = client(rt, "owner-device", "open", :open_stall, %{stall_id: "s001"})
+      assert rt.state.stalls["s001"].mode == :open
+
+      rt =
+        client(rt, "owner-device", "restock", :set_restock_policy, %{
+          restaurant_id: "r1",
+          product: p,
+          target: 3 * crate,
+          max_price_per_kunit: limit,
+          daily_budget: 1_000_000
+        })
+
+      # One advance across the next hour (the policy requests) and the clearing after it.
+      hour = div(rt.state.now, Clock.hour()) * Clock.hour() + Clock.hour()
+      interval = rt.state.catalog.rules.market.clear_every_hall_ms
+      before = rt.position
+      rt = advance(rt, Clock.service_ms(hour + interval))
+
+      assert {:ok, [%{events: events}]} = InMemoryEventStore.read_from(rt.store, before)
+
+      {requested_at, %{request_id: request_id, qty: qty}} =
+        events |> Enum.with_index() |> Enum.find_value(fn {e, i} -> e.type == :purchase_requested && {i, e} end)
+
+      assert qty == 3 * crate
+
+      {cleared_at, cleared} =
+        events
+        |> Enum.with_index()
+        |> Enum.find_value(fn {e, i} ->
+          (e.type == :market_cleared and Enum.any?(e.fills, &(&1.request_id == request_id))) && {i, e}
+        end)
+
+      assert requested_at < cleared_at, "the request and its clearing share the batch"
+      assert rt.state.market.requests == %{}
+
+      assert [%{request_id: ^request_id, filled: ^qty, short: 0, reason: nil, batch: batch, automated: true}] =
+               restaurant_view(rt, "owner-device").purchases.recent
+
+      assert batch == cleared.batch
+      assert {:ok, %{hall: %{market_trips: [trip]}}} = Management.view(rt, "rival-device")
+      assert %{restaurant_id: "r1", products: [^p], size: "small", batch: ^batch} = trip
+    end
+
+    test "the clearing's outcomes and trips are adopted only when its append succeeds" do
+      {rt, _p, _crate, _limit} = owner_and_rival_requests()
+      to = Clock.service_ms(rt.state.market.next_clear_at)
+
+      envelope = %{
+        actor: {:system, :scheduler},
+        command_id: "tick:#{to}",
+        command: {:advance_clock, %{to_service_ms: to}}
+      }
+
+      assert rt.market_activity == MarketActivity.new()
+
+      for fault <- [:before_commit, :unavailable, :fenced] do
+        failing = %{rt | store: InMemoryEventStore.fail_next(rt.store, fault)}
+        assert {:error, _, failed} = CommandWorkflow.execute(failing, envelope)
+        assert failed.market_activity == MarketActivity.new(), "#{fault} adopted the projection"
+        assert restaurant_view(failed, "owner-device").purchases.recent == []
+      end
+
+      uncertain = %{rt | store: InMemoryEventStore.fail_next(rt.store, :lost_reply)}
+      assert {:uncertain, _, unsure} = CommandWorkflow.execute(uncertain, envelope)
+      assert unsure.market_activity == MarketActivity.new()
+
+      assert {:accepted, _, committed} = CommandWorkflow.execute(rt, envelope)
+      assert [%{request_id: "PR:buy"}] = restaurant_view(committed, "owner-device").purchases.recent
+      assert [%{restaurant_id: "r1"}] = MarketActivity.trips(committed.market_activity)
+    end
+
+    test "after a restart the projection is empty and pending requests are still shown" do
+      {rt, p, _crate, limit} = owner_and_rival_requests()
+      rt = to_clearing(rt)
+      rt = buy(rt, "owner-device", "buy-again", "r1", p, 50, limit)
+      assert [_] = restaurant_view(rt, "owner-device").purchases.recent
+      assert {:ok, %{hall: %{market_trips: [_]}}} = Management.view(rt, nil)
+
+      assert {:ok, restarted, _} = Recovery.recover(InMemoryEventStore, rt.store, "test", scope: "hall:test")
+      # Recovery may reconcile, but the pending request is committed state.
+      assert restarted.state.market.requests == rt.state.market.requests
+
+      view = restaurant_view(restarted, "owner-device")
+      assert [%{request_id: "PR:buy-again", qty: 50}] = view.purchases.pending
+      assert view.purchases.recent == []
+      assert {:ok, %{hall: %{market_trips: []}}} = Management.view(restarted, "owner-device")
     end
   end
 end

@@ -3,9 +3,11 @@ import { expect, test } from "./hall";
 import * as T from "three";
 import {
   FIGURE,
+  CART_HANDLE_HEIGHT,
   FIGURE_MAX_SPAN,
   SEAT_HEIGHT,
   carryPoint,
+  cartHandlePoint,
   seatedTrayPoint,
   personLook,
   posePerson,
@@ -139,6 +141,7 @@ const stand: Pose = {
   stride: 0,
   walking: false,
   carrying: false,
+  pushing: false,
   seated: false,
 };
 function parts(look: Look, pose: Pose = stand, detail: Detail = "full") {
@@ -321,6 +324,105 @@ test("people: carrying holds both hands level in front, where carryPoint says", 
     expect(left.at.z).toBeGreaterThan(0.15 * look.height);
     expect(carryPoint(look, stride).y).toBeCloseTo(left.at.y, 6);
     expect(carryPoint(look, stride).forward).toBeCloseTo(left.at.z, 6);
+  }
+});
+
+const base = personLook(7, "owner");
+const pushLooks = () => [
+  personLook(1, "owner"),
+  personLook(2, "owner"),
+  personLook(3, "owner"),
+  personLook(99, "owner"),
+  personLook(4096, "owner"),
+  { ...base, height: 1.38, width: 0.9 },
+  { ...base, height: 1.62, width: 1.1 },
+];
+const pushPose = (stride: number): Pose => ({
+  ...stand,
+  pushing: true,
+  walking: true,
+  stride,
+});
+const positionsOf = (
+  list: { kind: PartKind; at: T.Vector3 }[],
+  kinds: PartKind[],
+) =>
+  list
+    .filter((p) => kinds.includes(p.kind))
+    .map((p) => [p.kind, p.at.x, p.at.y, p.at.z]);
+
+test("people: a figure pushing a cart holds the handle with both hands at handle height", () => {
+  expect(CART_HANDLE_HEIGHT).toBe(0.9);
+  for (const look of pushLooks()) {
+    const pushing = parts(look, pushPose(0.5), "full");
+    const hands = pushing.filter((p) => p.kind === "hand");
+    expect(hands).toHaveLength(2);
+    for (const hand of hands) {
+      expect(Math.abs(hand.at.y - CART_HANDLE_HEIGHT)).toBeLessThan(0.01);
+      expect(hand.at.z).toBeGreaterThan(0.15 * look.height);
+    }
+    // Arms do not swing while pushing; legs do.
+    const back = parts(look, pushPose(-0.5), "full");
+    expect(positionsOf(pushing, ["upperArm", "forearm", "hand"])).toEqual(
+      positionsOf(back, ["upperArm", "forearm", "hand"]),
+    );
+    expect(positionsOf(pushing, ["lowerLeg", "foot"])).not.toEqual(
+      positionsOf(back, ["lowerLeg", "foot"]),
+    );
+  }
+});
+
+test("people: the simple figure's single-piece arms end at the handle height", () => {
+  const end = new T.Vector3();
+  for (const look of pushLooks()) {
+    const ends: T.Vector3[] = [];
+    posePerson(look, pushPose(0.5), "simple", (kind, matrix) => {
+      // The arm hangs from its origin, scaled along Y to the reach.
+      if (kind === "upperArm")
+        ends.push(
+          end.set(0, -FIGURE.upperArmLen, 0).applyMatrix4(matrix).clone(),
+        );
+    });
+    expect(ends).toHaveLength(2);
+    for (const e of ends) {
+      expect(Math.abs(e.y - CART_HANDLE_HEIGHT)).toBeLessThan(0.01);
+      expect(e.z).toBeGreaterThan(0.15 * look.height);
+    }
+  }
+});
+
+test("people: both hands of a pushing figure meet at cartHandlePoint", () => {
+  for (const look of pushLooks()) {
+    for (const stride of [0, 0.5, -0.5, 1]) {
+      const hands = parts(look, pushPose(stride)).filter(
+        (p) => p.kind === "hand",
+      );
+      const handle = cartHandlePoint(look, stride);
+      expect(handle.y).toBeCloseTo(CART_HANDLE_HEIGHT, 6);
+      expect(handle.forward).toBeGreaterThan(0);
+      expect((hands[0].at.y + hands[1].at.y) / 2).toBeCloseTo(handle.y, 6);
+      expect((hands[0].at.z + hands[1].at.z) / 2).toBeCloseTo(
+        handle.forward,
+        6,
+      );
+    }
+    expect(cartHandlePoint(look).forward).toBeCloseTo(
+      cartHandlePoint(look, 0).forward,
+      9,
+    );
+  }
+});
+
+test("people: pushing and carrying are exclusive, pushing wins; seated still wins over both", () => {
+  const look = personLook(5, "owner");
+  for (const detail of ["full", "simple"] as const) {
+    const both = { ...pushPose(0.5), carrying: true };
+    expect(parts(look, both, detail)).toEqual(
+      parts(look, pushPose(0.5), detail),
+    );
+    expect(parts(look, { ...both, seated: true }, detail)).toEqual(
+      parts(look, { ...stand, seated: true }, detail),
+    );
   }
 });
 

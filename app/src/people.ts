@@ -224,7 +224,8 @@ export type Pose = {
   stride: number; // -1..1, sign picks the leading leg (positive: left leads)
   walking: boolean;
   carrying: boolean; // both hands hold a tray in front
-  seated: boolean; // sitting on a seat, hands on the table; ignores stride and carrying
+  pushing: boolean; // both hands on a cart's handle, arms still; beats carrying
+  seated: boolean; // sitting on a seat, hands on the table; ignores stride, carrying and pushing
 };
 type Emit = (kind: PartKind, matrix: T.Matrix4, colour: number) => void;
 
@@ -248,6 +249,11 @@ const SCALE = new T.Vector3();
 const QUAT = new T.Quaternion();
 const EULER = new T.Euler();
 const REACH = { angle: 0, length: 0 };
+// Height of a cart's handle in world units; a pushing figure's hands meet here.
+export const CART_HANDLE_HEIGHT = 0.9;
+// Pushing: the upper arm points well forward and the forearm is solved so the
+// hands reach the handle, whatever the figure's height.
+const PUSH_UPPER = -0.9;
 // The seated pose of one look: unit-figure hip height, the thigh's downward
 // tilt from level, and the forearm angle that puts the hands on the table.
 const SEATED = { hipY: 0, tilt: 0, fore: 0 };
@@ -310,6 +316,18 @@ function seatedFor(look: Look): void {
   SEATED.fore = -Math.acos(T.MathUtils.clamp(fore, 0, 1));
 }
 
+// The forearm angle that puts the hands at the cart handle, for a figure whose
+// body has dropped by `bob` (unit figure) with the upper arm at PUSH_UPPER.
+function pushFore(look: Look, bob: number): number {
+  const shoulder = F.shoulderY + bob;
+  const want = CART_HANDLE_HEIGHT / look.height;
+  const fore =
+    ((shoulder - want) / Math.cos(F.armOut) -
+      F.upperArmLen * Math.cos(PUSH_UPPER)) /
+    F.forearmLen;
+  return -Math.acos(T.MathUtils.clamp(fore, -1, 1));
+}
+
 function poseParts(look: Look, pose: Pose, detail: Detail): void {
   const full = detail === "full";
   const seated = pose.seated;
@@ -317,6 +335,9 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
   const stride =
     pose.walking && !seated ? T.MathUtils.clamp(pose.stride, -1, 1) : 0;
   const bob = seated ? SEATED.hipY - F.hipY : bobFor(stride);
+  const pushing = pose.pushing && !seated;
+  const carrying = pose.carrying && !pushing;
+  const pushForeAngle = pushing ? pushFore(look, bob) : 0;
   const cap = look.hairStyle === "cap";
 
   place(
@@ -444,13 +465,22 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
       );
     }
 
-    // Arm: counter-swings against the same-side leg, or holds the tray.
+    // Arm: counter-swings against the same-side leg, holds the tray, or holds
+    // the cart's handle.
     const upper = seated
       ? SEATED_UPPER
-      : pose.carrying
-        ? F.carryUpper
-        : F.armSwing * lead;
-    const fore = seated ? SEATED.fore : pose.carrying ? F.carryFore : upper;
+      : pushing
+        ? PUSH_UPPER
+        : carrying
+          ? F.carryUpper
+          : F.armSwing * lead;
+    const fore = seated
+      ? SEATED.fore
+      : pushing
+        ? pushForeAngle
+        : carrying
+          ? F.carryFore
+          : upper;
     const out = sx * F.armOut;
     const ax = sx * F.shoulderX;
     const ay = F.shoulderY + bob;
@@ -528,6 +558,22 @@ export function carryPoint(
     F.forearmLen * Math.sin(F.carryFore);
   return {
     y: (F.shoulderY + bobFor(s) - down * Math.cos(F.armOut)) * look.height,
+    forward: -back * look.height * look.width,
+  };
+}
+
+// Where the midpoint between the hands of a figure pushing a cart sits at this
+// stride, in the units of carryPoint: the handle's height and how far ahead of
+// the feet (the walking bob included, so the handle stays in the hands).
+export function cartHandlePoint(
+  look: Look,
+  stride = 0,
+): { y: number; forward: number } {
+  const fore = pushFore(look, bobFor(T.MathUtils.clamp(stride, -1, 1)));
+  const back =
+    F.upperArmLen * Math.sin(PUSH_UPPER) + F.forearmLen * Math.sin(fore);
+  return {
+    y: CART_HANDLE_HEIGHT,
     forward: -back * look.height * look.width,
   };
 }

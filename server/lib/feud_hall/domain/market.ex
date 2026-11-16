@@ -24,6 +24,9 @@ defmodule FeudHall.Domain.Market do
   alias FeudHall.Domain.{Inventory, Money}
   alias FeudHall.Domain.Hall.{Management, OperatingPolicy}
 
+  # Servings counted for a product no recipe line uses, when sizing its crate.
+  @unused_per_serving 100
+
   @doc """
   Whether the hall clears the market at all: its catalog's `clear_every_hall_ms` is a positive
   integer. The clock advance and the recovery checks both use this one predicate.
@@ -67,10 +70,7 @@ defmodule FeudHall.Domain.Market do
     rules = catalog.rules.market
     base = catalog.products[product].base_price_per_kunit
     stock = Map.get(market.stock, product, 0)
-
-    target_at_floor =
-      div(Map.fetch!(rules.target_stock_per_equivalent, product) * catalog.rules.demand.equivalent_floor_millis, 1000)
-
+    target_at_floor = target_at_floor(catalog, product)
     floor = max(1, div(base * rules.price_floor_permille, 1000))
     ceiling = max(floor, div(base * rules.price_ceiling_permille, 1000))
 
@@ -79,6 +79,65 @@ defmodule FeudHall.Domain.Market do
     |> max(floor)
     |> min(ceiling)
   end
+
+  @doc """
+  How full the market's shelf for `product` is, in thousandths: stock against
+  the target at the demand-equivalent floor (the stock at which `price/3`
+  equals the base price), capped at 1000. A derived display value, no rule.
+  """
+  def level_permille(catalog, market, product) do
+    case Map.get(market.stock, product, 0) do
+      0 -> 0
+      stock -> min(1000, div(stock * 1000, max(target_at_floor(catalog, product), 1)))
+    end
+  end
+
+  @doc """
+  The display crate size of every product, in one pass over the recipe
+  lines: about ten servings of the line that uses the most of it, rounded up
+  to 1, 2 or 5 times a power of ten. A line counts for its product, and for
+  its substitute at the substitute's converted quantity, rounded up. A
+  product no recipe uses counts as 100 per serving. Compute it once per view
+  or clearing and look products up in it. A derived display value, no rule.
+  """
+  def crate_sizes(catalog) do
+    largest =
+      for recipe <- Map.values(catalog.recipes), line <- recipe.lines, {product, qty} <- line_uses(line), reduce: %{} do
+        acc -> Map.update(acc, product, qty, &max(&1, qty))
+      end
+
+    catalog.products
+    |> Map.keys()
+    |> Enum.concat(Map.keys(largest))
+    |> Map.new(fn product -> {product, series_ceiling(Map.get(largest, product, @unused_per_serving) * 10, 1)} end)
+  end
+
+  @doc "The display crate size for `product`; see `crate_sizes/1`."
+  def crate_size(catalog, product),
+    do: Map.get_lazy(crate_sizes(catalog), product, fn -> series_ceiling(@unused_per_serving * 10, 1) end)
+
+  defp line_uses(%{product: product, qty: qty} = line) do
+    case Map.get(line, :substitute) do
+      %{product: sub, num: num, den: den} -> [{product, qty}, {sub, div(qty * num + den - 1, den)}]
+      _ -> [{product, qty}]
+    end
+  end
+
+  # The smallest of 1, 2, 5 x `power` (and onward by tens) that is >= n.
+  defp series_ceiling(n, power) do
+    case Enum.find([1, 2, 5], &(&1 * power >= n)) do
+      nil -> series_ceiling(n, power * 10)
+      m -> m * power
+    end
+  end
+
+  defp target_at_floor(catalog, product),
+    do:
+      div(
+        Map.fetch!(catalog.rules.market.target_stock_per_equivalent, product) *
+          catalog.rules.demand.equivalent_floor_millis,
+        1000
+      )
 
   @doc """
   Clears the pending requests against current stock. Takes `now`, the catalog,

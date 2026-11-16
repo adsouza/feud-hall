@@ -28,7 +28,12 @@ records the original single-cuisine 150-stall measurement. Tests and the
 benchmark start authorities. The management game runs on Phoenix with a
 Bun/Svelte client under `app/`. Launch halls enable Milestone 5 diner
 comparison, the 3D hall with its HTML alternative, and counter staging through
-a recorded activation. Use a dedicated database for a managed hall.
+a recorded activation. The owner's Business page holds a 3D supply market, with
+a list as its equivalent interface, that sends purchase requests through the
+existing use case; see its [design](docs/GAME_DESIGN.md#the-supply-market) and
+[architecture](docs/ARCHITECTURE.md#the-supply-market-view). Its checks are under
+[Supply market checks](docs/TESTING.md#supply-market-checks).
+Use a dedicated database for a managed hall.
 See [local setup](docs/DEPLOYMENT.md#local-management-game). Inspect
 the current tree before choosing commands. Update this guide with verified entry points as code
 lands; do not describe planned features or checks as already working. Verified
