@@ -298,6 +298,26 @@ then launch, quit, and relaunch using the existing profile without another
 session-access prompt. Renew an expired identity and requalify its requirement;
 stable development signing does not provide public notarization.
 
+#### Point a local build at the hosted hall
+
+The hosted hall is `https://feud-hall.onrender.com`. To test a local client
+against it, build a debug bundle from `app/`:
+
+```sh
+FEUD_HALL_NATIVE_ORIGIN=https://feud-hall.onrender.com CARGO_BUILD_JOBS=1 bun run desktop:build --debug --bundles app -- --locked
+open 'src-tauri/target/debug/bundle/macos/Feud Hall.app'
+```
+
+The debug bundle leaves the release bundle in `target/release` unchanged and
+still uses the local signing identity, so the hosted session is remembered in
+the Keychain under its own origin. Build from the commit the hall runs; Render
+deploys `main` after checks pass. A mismatched client receives
+`client_update_required`. Everything done in this client is permanent history
+in the live hall. The free Render instance sleeps after 15 idle minutes, so the
+first request can be slow. To confirm the target, `strings` on the bundle's
+executable must show the hosted origin; the `http://localhost:4000` fallback is
+always present as well.
+
 ### Linux packages and release artifacts
 
 The hosted native workflow packages the Debian client and repackages its
