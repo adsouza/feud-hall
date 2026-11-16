@@ -27,8 +27,15 @@ export type IntroFrame = {
 
 const EYE = 1.55;
 const ROOM = 1;
-/** The camera passes the entrance this far into the lights beat. */
-const THROUGH_DOOR_MS = 5500;
+/** The street shot holds still until here, while the facade lights up. */
+export const INTRO_STREET_HOLD_MS = 6500;
+/** The camera has walked through the entrance by here, inside the lights beat. */
+export const INTRO_DOOR_MS = 7700;
+/**
+ * From the entrance the camera joins the aisle walk by here, early in the
+ * shutters beat; the stall it looks at already follows the walk.
+ */
+const AISLE_JOIN_MS = 10000;
 /**
  * Before dawn the camera stands this far out on the street beyond
  * `entrance().outside` (about 10 m from the entrance wall), so the facade,
@@ -132,29 +139,26 @@ export function introFrame(
   const facade: Vec3 = [centre.x, FACADE_GAZE_Y, centre.z + ROOM_SIDE / 2];
   const inside: Vec3 = [door.inside.x, EYE, door.inside.z];
   const gaze: Vec3 = [centre.x, 1.8, centre.z];
-  const firstTarget = aisleTarget(0, stalls);
   const lastTarget = aisleTarget(1, stalls);
-  const aisleStart = aisleCamera(firstTarget);
   const aisleEnd = aisleCamera(lastTarget);
   const stoolsEnd: Vec3 = [centre.x, EYE, centre.z + 4];
 
   let camera: Vec3;
   let target: Vec3;
-  if (ms < INTRO_BEATS.lights) {
+  if (ms < INTRO_STREET_HOLD_MS) {
     camera = street;
     target = facade;
-  } else if (ms < THROUGH_DOOR_MS) {
-    const t = smooth(span(ms, INTRO_BEATS.lights, THROUGH_DOOR_MS));
+  } else if (ms < INTRO_DOOR_MS) {
+    const t = smooth(span(ms, INTRO_STREET_HOLD_MS, INTRO_DOOR_MS));
     camera = mix(street, inside, t);
     target = mix(facade, gaze, t);
-  } else if (ms < INTRO_BEATS.shutters) {
-    const t = smooth(span(ms, THROUGH_DOOR_MS, INTRO_BEATS.shutters));
-    camera = mix(inside, aisleStart, t);
-    target = mix(gaze, firstTarget, t);
   } else if (ms < INTRO_BEATS.stools) {
+    // aisleTarget clamps, so before the shutters beat it is the first stall.
     const p = span(ms, INTRO_BEATS.shutters, INTRO_BEATS.stools);
-    target = aisleTarget(p, stalls);
-    camera = aisleCamera(target);
+    const aisle = aisleTarget(p, stalls);
+    const join = smooth(span(ms, INTRO_DOOR_MS, AISLE_JOIN_MS));
+    camera = mix(inside, aisleCamera(aisle), join);
+    target = mix(gaze, aisle, join);
   } else if (ms < INTRO_BEATS.rise) {
     const t = smooth(span(ms, INTRO_BEATS.stools, INTRO_BEATS.rise));
     camera = mix(aisleEnd, stoolsEnd, t);

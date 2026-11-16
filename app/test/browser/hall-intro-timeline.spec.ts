@@ -1,5 +1,11 @@
 import { expect, test } from "./hall";
-import { introFrame } from "../../src/hall-intro-timeline";
+import { FACADE_FACE, FACADE_LIGHTS } from "../../src/hall-intro-facade";
+import {
+  INTRO_BEATS,
+  INTRO_DOOR_MS,
+  INTRO_STREET_HOLD_MS,
+  introFrame,
+} from "../../src/hall-intro-timeline";
 import {
   ENTRANCE_WIDTH,
   ROOM_SIDE,
@@ -97,10 +103,46 @@ test("intro timeline: the camera keeps moving in the hold", () => {
   expect(introFrame(40000, 9).camera).not.toEqual(introFrame(50000, 9).camera);
 });
 
+test("intro timeline: the street shot holds, then walks in during the lights beat", () => {
+  expect(introFrame(INTRO_STREET_HOLD_MS - 1, 9).camera).toEqual(
+    introFrame(0, 9).camera,
+  );
+  expect(INTRO_DOOR_MS).toBeGreaterThan(INTRO_STREET_HOLD_MS);
+  expect(INTRO_DOOR_MS).toBeLessThan(INTRO_BEATS.shutters);
+});
+
 test("intro timeline: the camera stays inside room 1 from the entrance to the end of the rise", () => {
-  for (let ms = 5500; ms <= 30000; ms += 100) {
+  for (let ms = INTRO_DOOR_MS; ms <= 30000; ms += 100) {
     const [x, , z] = introFrame(ms, 9).camera;
     expect(roomAt(x, z), `at ${ms} ms`).toBe(1);
+  }
+});
+
+test("intro timeline: facade windows light one after another in view", () => {
+  const c = roomCentre(1);
+  const face = c.z + FACADE_FACE;
+  expect(FACADE_LIGHTS.length).toBeGreaterThanOrEqual(4);
+  let previous = -Infinity;
+  for (const [n, light] of FACADE_LIGHTS.entries()) {
+    expect(
+      light.at - previous,
+      `gap before window ${n}`,
+    ).toBeGreaterThanOrEqual(300);
+    previous = light.at;
+    expect(light.at, `window ${n}`).toBeGreaterThanOrEqual(INTRO_BEATS.lights);
+    const { camera, target } = introFrame(light.at, 9);
+    for (const sx of [-0.5, 0.5])
+      for (const sy of [-0.5, 0.5]) {
+        const corner: Vec = [
+          c.x + light.x + sx * light.width,
+          light.y + sy * light.height,
+          face,
+        ];
+        expect(
+          inView(camera, target, corner),
+          `window ${n} corner ${sx},${sy} at ${light.at} ms`,
+        ).toBe(true);
+      }
   }
 });
 

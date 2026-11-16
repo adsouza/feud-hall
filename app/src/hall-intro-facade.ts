@@ -1,6 +1,7 @@
 // The street side of the intro's made-up room 1: a forecourt for the street
-// shot to stand on, window panes on the entrance facade that light one after
-// another, and a blank lightbox over the entrance. Intro-only; the live hall
+// shot to stand on, a row of small upper windows across the facade that light
+// one after another, glass in the big windows that brightens with the room's
+// lights, and a blank lightbox over the entrance. Intro-only; the live hall
 // never builds it.
 import * as T from "three";
 import { ENTRANCE_WIDTH, ROOM_SIDE, type Point } from "./room-layout";
@@ -12,18 +13,46 @@ const WINDOW_TOP = 3.45;
 const DOORWAY_TOP = 3.05;
 const WALL_TOP = 4.65;
 /** The entrance wall's street face, from the room centre. */
-const FACE = ROOM_SIDE / 2 + WALL_DEPTH;
+export const FACADE_FACE = ROOM_SIDE / 2 + WALL_DEPTH;
 const FORECOURT_WIDTH = 48;
 const FORECOURT_DEPTH = 26;
-/** The first facade window lights here; each next one this much later. */
-const WINDOWS_FROM_MS = 4050;
-const WINDOW_STEP_MS = 250;
 /** The entrance lightbox stutters through this pattern as it comes on. */
 const FLICKER = [1, 0, 1, 1, 0, 0, 1, 0, 1];
 const FLICKER_STEP_MS = 60;
 
+/** A small window on the facade, room-centre relative, lit from `at` ms. */
+export type FacadeLight = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  at: number;
+};
+const UPPER_WIDTH = 0.8;
+const UPPER_HEIGHT = 0.5;
+/** Each upper pane's frame is this much wider and taller than the pane. */
+const UPPER_FRAME = 0.12;
+const UPPER_FROM_MS = 4100;
+const UPPER_STEP_MS = 400;
+/**
+ * The upper row, in the order it lights: in the plaster band above the big
+ * windows, beside the entrance but clear of its lightbox, within the span the
+ * street shot sees. One lights every 400 ms while the camera holds still.
+ */
+export const FACADE_LIGHTS: readonly FacadeLight[] = [
+  4.4, -3.25, 5.55, -4.4, 3.25, -5.55,
+].map((x, k) => ({
+  x,
+  y: (WINDOW_TOP + WALL_TOP) / 2,
+  width: UPPER_WIDTH,
+  height: UPPER_HEIGHT,
+  at: UPPER_FROM_MS + k * UPPER_STEP_MS,
+}));
+
 const DARK = new T.Color("#2b2d3a");
 const LIT = new T.Color("#ffffff");
+const GLASS_DARK = new T.Color("#141a2a");
+const GLASS_LIT = new T.Color("#ffd79c");
 
 /** A lightbox with an accent band above and below: a sign with no words. */
 export function lightboxTexture(accent: T.Color) {
@@ -48,12 +77,12 @@ export function signTint(lit: boolean) {
 }
 
 /**
- * The entrance wall's windows, as hall-shell's buildWall lays out a windowed
- * wall around a central opening: nearest the entrance first, left then right.
+ * The entrance wall's big windows, as hall-shell's buildWall lays out a
+ * windowed wall around a central opening.
  */
 function facadeWindows() {
   const from = ENTRANCE_WIDTH / 2;
-  const length = ROOM_SIDE / 2 + WALL_DEPTH - from;
+  const length = FACADE_FACE - from;
   const count = Math.min(6, Math.max(1, Math.floor(length / 5)));
   const bay = length / count;
   const width = Math.min(3.8, bay * 0.72);
@@ -82,20 +111,38 @@ export function createIntroFacade(scene: T.Scene, centre: Point) {
     roughness: 0.95,
   });
   const forecourt = new T.Mesh(forecourtGeometry, paving);
-  forecourt.position.set(0, -0.1, FACE + FORECOURT_DEPTH / 2);
+  forecourt.position.set(0, -0.1, FACADE_FACE + FORECOURT_DEPTH / 2);
   group.add(forecourt);
 
-  // Within the wall's depth, facing the street: the frames and plaster in
-  // front edge them, and from inside the room they face away and are culled.
+  // Glass in the big windows, within the wall's depth and facing the street:
+  // the frames and plaster in front edge it, and from inside the room it
+  // faces away and is culled. It brightens with the room's lights.
   const paneGeometry = new T.PlaneGeometry();
-  const unlitPane = new T.MeshBasicMaterial({ color: "#141a2a" });
-  const litPane = new T.MeshBasicMaterial({ color: "#ffd79c" });
-  const panes = facadeWindows().map(({ x, width }) => {
-    const pane = new T.Mesh(paneGeometry, unlitPane);
+  const glass = new T.MeshBasicMaterial({ color: GLASS_DARK });
+  for (const { x, width } of facadeWindows()) {
+    const pane = new T.Mesh(paneGeometry, glass);
     pane.scale.set(width + 0.1, WINDOW_TOP - SILL + 0.1, 1);
-    pane.position.set(x, (SILL + WINDOW_TOP) / 2, FACE - 0.07);
+    pane.position.set(x, (SILL + WINDOW_TOP) / 2, FACADE_FACE - 0.07);
     group.add(pane);
-    return pane;
+  }
+
+  // The upper row: a dark frame on the plaster with a pane just in front.
+  const unlitPane = new T.MeshBasicMaterial({ color: GLASS_DARK });
+  const litPane = new T.MeshBasicMaterial({ color: GLASS_LIT });
+  const frame = new T.MeshBasicMaterial({ color: "#292e3d" });
+  const upper = FACADE_LIGHTS.map((light) => {
+    const surround = new T.Mesh(paneGeometry, frame);
+    surround.scale.set(
+      light.width + UPPER_FRAME,
+      light.height + UPPER_FRAME,
+      1,
+    );
+    surround.position.set(light.x, light.y, FACADE_FACE + 0.01);
+    const pane = new T.Mesh(paneGeometry, unlitPane);
+    pane.scale.set(light.width, light.height, 1);
+    pane.position.set(light.x, light.y, FACADE_FACE + 0.02);
+    group.add(surround, pane);
+    return { pane, at: light.at };
   });
 
   const signGeometry = new T.PlaneGeometry(ENTRANCE_WIDTH - 0.6, 0.8);
@@ -104,17 +151,19 @@ export function createIntroFacade(scene: T.Scene, centre: Point) {
     color: DARK,
   });
   const sign = new T.Mesh(signGeometry, signMaterial);
-  sign.position.set(0, (DOORWAY_TOP + WALL_TOP) / 2 + 0.05, FACE + 0.02);
+  sign.position.set(0, (DOORWAY_TOP + WALL_TOP) / 2 + 0.05, FACADE_FACE + 0.02);
   group.add(sign);
   let signSince: number | null = null;
 
   return {
-    /** `skipped`: a skip went straight to the hold, where all is lit. */
-    update(ms: number, signOn: boolean, skipped: boolean) {
-      panes.forEach((pane, k) => {
-        const lit = skipped || ms >= WINDOWS_FROM_MS + k * WINDOW_STEP_MS;
-        pane.material = lit ? litPane : unlitPane;
-      });
+    /**
+     * `light`: the room's light level, 0 to 1. `skipped`: a skip went
+     * straight to the hold, where everything is lit.
+     */
+    update(ms: number, light: number, signOn: boolean, skipped: boolean) {
+      glass.color.lerpColors(GLASS_DARK, GLASS_LIT, skipped ? 1 : light);
+      for (const { pane, at } of upper)
+        pane.material = skipped || ms >= at ? litPane : unlitPane;
       if (!signOn) signSince = null;
       else signSince ??= ms;
       const step =
@@ -128,7 +177,14 @@ export function createIntroFacade(scene: T.Scene, centre: Point) {
     dispose() {
       scene.remove(group);
       signMaterial.map?.dispose();
-      for (const material of [paving, unlitPane, litPane, signMaterial])
+      for (const material of [
+        paving,
+        glass,
+        unlitPane,
+        litPane,
+        frame,
+        signMaterial,
+      ])
         material.dispose();
       for (const geometry of [forecourtGeometry, paneGeometry, signGeometry])
         geometry.dispose();

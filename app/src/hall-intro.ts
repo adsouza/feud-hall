@@ -387,7 +387,7 @@ export function createHallIntro(
       for (const { sign } of stalls)
         sign.material.color.copy(signTint(frame.sign));
     }
-    facade.update(ms, frame.sign, skippedAt !== undefined);
+    facade.update(ms, frame.light, frame.sign, skippedAt !== undefined);
     placeStools(frame.stoolProgress);
     // Movers stay out of the walk from the door and fade in for their beat.
     const moverOpacity =
