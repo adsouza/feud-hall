@@ -11,6 +11,7 @@ import {
   ROOM_SIDE,
   roomAt,
   roomCentre,
+  spotPlacement,
 } from "../../src/room-layout";
 
 test("intro timeline: beats change at their boundaries", () => {
@@ -45,6 +46,39 @@ test("intro timeline: shutters rise one after another", () => {
   expect(f.shutterLevels[0]).toBe(0);
   expect(f.shutterLevels[8]).toBe(1);
   expect(introFrame(16000, 9).shutterLevels).toEqual(Array(9).fill(0));
+});
+
+test("intro timeline: each shutter starts only once the camera has arrived at its stall", () => {
+  const centre = roomCentre(1);
+  const problems: string[] = [];
+  for (let i = 0; i < 9; i++) {
+    let start = -1;
+    for (let ms = INTRO_BEATS.lights; ms <= INTRO_BEATS.stools; ms += 10) {
+      if (introFrame(ms, 9).shutterLevels[i] < 1) {
+        start = ms;
+        break;
+      }
+    }
+    if (start < 0) {
+      problems.push(`stall ${i}: never rolled before the stools beat`);
+      continue;
+    }
+    const stall = spotPlacement(1, i);
+    const { camera, target } = introFrame(start, 9);
+    // Looking at this stall...
+    const aim = Math.hypot(target[0] - stall.x, target[2] - stall.z);
+    // ...from the aisle walk's standpoint for it, not still on the way.
+    const post = [
+      centre.x + (stall.x - centre.x) * 0.45,
+      centre.z + (stall.z - centre.z) * 0.45,
+    ];
+    const away = Math.hypot(camera[0] - post[0], camera[2] - post[1]);
+    if (aim > 0.3 || away > 0.3)
+      problems.push(
+        `stall ${i} at ${start} ms: aim off by ${aim.toFixed(2)} m, camera ${away.toFixed(2)} m from its post`,
+      );
+  }
+  expect(problems).toEqual([]);
 });
 
 type Vec = [number, number, number];

@@ -32,10 +32,15 @@ export const INTRO_STREET_HOLD_MS = 6500;
 /** The camera has walked through the entrance by here, inside the lights beat. */
 export const INTRO_DOOR_MS = 7700;
 /**
- * From the entrance the camera joins the aisle walk by here, early in the
- * shutters beat; the stall it looks at already follows the walk.
+ * From the entrance the camera arrives at the first stall by here, early in
+ * the shutters beat. The aisle walk, and with it the shutters, start only then.
  */
 const AISLE_JOIN_MS = 10000;
+/**
+ * The walk reaches the last stall by here, so its shutter, which starts as
+ * the camera arrives, finishes rolling as the shutters beat ends.
+ */
+const AISLE_END_MS = INTRO_BEATS.stools - SHUTTER_ROLL_MS;
 /**
  * Before dawn the camera stands this far out on the street beyond
  * `entrance().outside` (about 10 m from the entrance wall), so the facade,
@@ -87,6 +92,13 @@ function aisleTarget(progress: number, stalls: number): Vec3 {
   const b = spotPlacement(ROOM, Math.min(i + 1, count - 1));
   const f = count === 1 ? 0 : at - i;
   return [lerp(a.x, b.x, f), 1.2, lerp(a.z, b.z, f)];
+}
+
+/** When the aisle walk arrives at stall `i` of the `aimed` stalls it visits. */
+function arrivalAt(i: number, aimed: number): number {
+  if (aimed === 1) return AISLE_JOIN_MS;
+  const share = Math.min(i, aimed - 1) / (aimed - 1);
+  return lerp(AISLE_JOIN_MS, AISLE_END_MS, share);
 }
 
 function aisleCamera(target: Vec3): Vec3 {
@@ -153,8 +165,9 @@ export function introFrame(
     camera = mix(street, inside, t);
     target = mix(facade, gaze, t);
   } else if (ms < INTRO_BEATS.stools) {
-    // aisleTarget clamps, so before the shutters beat it is the first stall.
-    const p = span(ms, INTRO_BEATS.shutters, INTRO_BEATS.stools);
+    // aisleTarget clamps: the first stall until the camera arrives, the last
+    // once the walk has reached it.
+    const p = span(ms, AISLE_JOIN_MS, AISLE_END_MS);
     const aisle = aisleTarget(p, stalls);
     const join = smooth(span(ms, INTRO_DOOR_MS, AISLE_JOIN_MS));
     camera = mix(inside, aisleCamera(aisle), join);
@@ -172,14 +185,11 @@ export function introFrame(
     target = look;
   }
 
-  // Each shutter rolls up in turn; the last one finishes as the beat ends.
-  const gap =
-    stalls > 1
-      ? (INTRO_BEATS.stools - INTRO_BEATS.shutters - SHUTTER_ROLL_MS) /
-        (stalls - 1)
-      : 0;
+  // Each shutter rolls up as the walk arrives at its stall; stalls beyond the
+  // walk's last aim roll with the last one.
+  const aimed = Math.max(1, Math.min(stalls, SPOTS));
   const shutterLevels = Array.from({ length: stalls }, (_, i) =>
-    shutterLevel({ from: 1, to: 0, start: INTRO_BEATS.shutters + i * gap }, ms),
+    shutterLevel({ from: 1, to: 0, start: arrivalAt(i, aimed) }, ms),
   );
 
   const lightT = span(ms, INTRO_BEATS.lights, INTRO_BEATS.shutters);
