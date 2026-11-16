@@ -151,6 +151,36 @@ test("intro: a skip jumps to the hold", async ({ page, hall }) => {
   await expect(intro(page)).toHaveAttribute("data-intro-beat", "outside");
   await page.keyboard.press("Space");
   await expect(intro(page)).toHaveAttribute("data-intro-beat", "hold");
+  // The hold has no staff left on the floor.
+  await expect(intro(page)).toHaveAttribute("data-intro-staff", "0");
+});
+
+test("intro: the staff set the stools, then leave before the hold", async ({
+  page,
+  hall,
+}) => {
+  // A small window keeps the software renderer quick over 30 s of frames.
+  await page.setViewportSize({ width: 480, height: 400 });
+  await openHeld(page, hall.origin);
+  await startIntro(page);
+  const staff = async () =>
+    Number(await intro(page).getAttribute("data-intro-staff"));
+  // Nobody sets stools while the camera walks the aisle...
+  await page.clock.runFor(14000);
+  await expect(intro(page)).toHaveAttribute("data-intro-beat", "shutters");
+  expect(await staff()).toBe(0);
+  // ...all sixteen are at the tables during the stools beat...
+  await page.clock.runFor(4000);
+  await expect(intro(page)).toHaveAttribute("data-intro-beat", "stools");
+  expect(await staff()).toBe(16);
+  // ...some are still walking off as the camera rises...
+  await page.clock.runFor(7000);
+  await expect(intro(page)).toHaveAttribute("data-intro-beat", "rise");
+  expect(await staff()).toBeGreaterThan(0);
+  // ...and every one has gone round the back of a stall by the hold.
+  await page.clock.runFor(6000);
+  await expect(intro(page)).toHaveAttribute("data-intro-beat", "hold");
+  expect(await staff()).toBe(0);
 });
 
 test("intro: diners are coming in when the camera rises to the overview", async ({

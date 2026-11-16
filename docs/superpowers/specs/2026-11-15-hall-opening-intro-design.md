@@ -130,7 +130,7 @@ names, prices or numbers. Night-to-day lighting.
 | 0–4 s | Outside the room's entrance before dawn, camera at walking height. Building dark, sign unlit. |
 | 4–8 s | The sign flickers on, windows light one by one; the camera walks through the entrance. |
 | 8–16 s | The camera walks along the stalls; each shutter rolls up in turn (the Part 1 animation), revealing a lit counter and a cook. |
-| 16–24 s | Staff figures carry and slide the stools into place around the tables. |
+| 16–24 s | Staff figures slide the stools into place around the tables within 4.5 s, then walk off round the backs of the stalls; the last are gone before the hold. |
 | 24–30 s | The camera rises to a high overview of the made-up room. |
 | 30 s+ (hold) | The hall slowly rotates while made-up diners wander in through the entrance and queue at stalls, until the server answers. |
 

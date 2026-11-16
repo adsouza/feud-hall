@@ -3,6 +3,7 @@ import { FACADE_FACE, FACADE_LIGHTS } from "../../src/hall-intro-facade";
 import {
   INTRO_BEATS,
   INTRO_DOOR_MS,
+  INTRO_STOOLS_SET_MS,
   INTRO_STREET_HOLD_MS,
   introFrame,
 } from "../../src/hall-intro-timeline";
@@ -33,6 +34,16 @@ test("intro timeline: dark and shut outside, lit and open in the hold", () => {
   expect(hold.light).toBe(1);
   expect(hold.shutterLevels).toEqual(Array(9).fill(0));
   expect(hold.stoolProgress).toBe(1);
+});
+
+test("intro timeline: the stools are set early, leaving the staff time to go", () => {
+  const set = INTRO_BEATS.stools + INTRO_STOOLS_SET_MS;
+  expect(INTRO_STOOLS_SET_MS).toBeLessThan(
+    INTRO_BEATS.rise - INTRO_BEATS.stools,
+  );
+  expect(introFrame(INTRO_BEATS.stools, 9).stoolProgress).toBe(0);
+  expect(introFrame(set - 100, 9).stoolProgress).toBeLessThan(1);
+  expect(introFrame(set, 9).stoolProgress).toBe(1);
 });
 
 test("intro timeline: the lights beat ends lit with the sign on", () => {

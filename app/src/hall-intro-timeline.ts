@@ -32,6 +32,11 @@ export const INTRO_STREET_HOLD_MS = 6500;
 /** The camera has walked through the entrance by here, inside the lights beat. */
 export const INTRO_DOOR_MS = 7700;
 /**
+ * The stools are all in place this long into their beat, leaving the staff
+ * time to walk off to the stalls before the hold.
+ */
+export const INTRO_STOOLS_SET_MS = 4500;
+/**
  * From the entrance the camera arrives at the first stall by here, early in
  * the shutters beat. The aisle walk, and with it the shutters, start only then.
  */
@@ -195,7 +200,9 @@ export function introFrame(
   const lightT = span(ms, INTRO_BEATS.lights, INTRO_BEATS.shutters);
   const light = lightT <= 0 ? 0 : lightT >= 1 ? 1 : flicker(lightT);
   const sign = lightT >= 0.15;
-  const stoolProgress = smooth(span(ms, INTRO_BEATS.stools, INTRO_BEATS.rise));
+  const stoolProgress = smooth(
+    span(ms, INTRO_BEATS.stools, INTRO_BEATS.stools + INTRO_STOOLS_SET_MS),
+  );
 
   return { beat, camera, target, light, sign, shutterLevels, stoolProgress };
 }

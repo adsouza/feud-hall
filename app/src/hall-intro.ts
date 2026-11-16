@@ -4,6 +4,7 @@
 import * as T from "three";
 import {
   INTRO_BEATS,
+  INTRO_STOOLS_SET_MS,
   introFrame,
   type IntroFrame,
 } from "./hall-intro-timeline";
@@ -12,7 +13,7 @@ import {
   lightboxTexture,
   signTint,
 } from "./hall-intro-facade";
-import { STAFF_SPOTS, queueSpot, toHall } from "./hall-layout";
+import { STAFF_SPOTS, queueSpot, toHall, toStall } from "./hall-layout";
 import { createHallLights } from "./hall-lights";
 import { createFurniture, createHallShell } from "./hall-shell";
 import { personLook, type Detail, type Look, type Pose } from "./people";
@@ -29,6 +30,7 @@ import {
   spotPlacement,
   tableSpots,
   type Point,
+  type SpotPlacement,
   SEAT_OFFSETS,
 } from "./room-layout";
 import { createStallKit, stallAccent, type StallParts } from "./stall-model";
@@ -65,6 +67,29 @@ const FIRST_PUSH_END = 0.35;
 const SECOND_PUSH_START = 0.65;
 /** Movers fade in over this long at the start of the stools beat. */
 const MOVER_FADE_MS = 600;
+/** With the stools set, the movers walk off from here. */
+const STAFF_LEAVE_MS = INTRO_BEATS.stools + INTRO_STOOLS_SET_MS;
+/** ...and every one has gone round the back of a stall by here. */
+const STAFF_GONE_MS = INTRO_BEATS.hold - 500;
+/** The movers' slowest pace off the floor, in metres per millisecond. */
+const STAFF_WALK = 0.002;
+/**
+ * The way round the back of a stall, in stall-local coordinates: beside a
+ * side wall, from in front of the counter to just behind the back wall.
+ */
+const ROUND_SIDE = 1.95;
+const ROUND_FRONT = 1.7;
+const ROUND_BACK = -1;
+/** How far the way round keeps from the room's walls. */
+const ROUND_WALL_CLEAR = 0.3;
+/** How far it keeps from a neighbouring booth's side wall, and its depth. */
+const BOOTH_HALF_WIDTH = 1.58;
+const ROUND_BOOTH_CLEAR = 0.3;
+const BOOTH_DEPTH = { back: -1.3, front: 1.5 };
+/** At most this many movers take the same way round. */
+const ROUND_SHARE = 2;
+/** A mover fades out over the last of the way, behind the stall. */
+const EXIT_FADE_METRES = 0.9;
 const QUEUE_DEPTH = 4;
 /** One diner comes in through the entrance this often. */
 const ARRIVAL_MS = 1400;
@@ -81,6 +106,8 @@ const GAIT = (Math.PI * 2) / 1.2;
 const FADE_METRES = 0.5;
 /** Each diner's queue is reached from this far in front of the counter. */
 const APPROACH = 3.6;
+
+type Exit = { route: Point[]; length: number; speed: number };
 
 type Diner = {
   look: Look;
@@ -248,6 +275,20 @@ export function createHallIntro(
       z: T.MathUtils.lerp(start.z, seat.z, u),
     };
   };
+  /** Behind a stool, facing the table it is pushed towards. */
+  const behind = (i: number, u: number) => {
+    const at = stoolAt(i, u);
+    const { out } = seats[i]!;
+    return {
+      x: at.x + out.x * BEHIND_STOOL,
+      z: at.z + out.z * BEHIND_STOOL,
+      yaw: Math.atan2(-out.x, -out.z),
+    };
+  };
+  const exits = staffExits(
+    movers.map(({ pair }) => behind(pair[1]!, 1)),
+    placements,
+  );
   const firstPush = (p: number) => T.MathUtils.smoothstep(p, 0, FIRST_PUSH_END);
   const secondPush = (p: number) =>
     T.MathUtils.smoothstep(p, SECOND_PUSH_START, 1);
@@ -274,15 +315,6 @@ export function createHallIntro(
   /** Behind the stool, facing the table, pushing it in; or walking between. */
   function poseMover(pair: number[], p: number) {
     const [a, b] = [pair[0]!, pair[1]!];
-    const behind = (i: number, u: number) => {
-      const at = stoolAt(i, u);
-      const { out } = seats[i]!;
-      return {
-        x: at.x + out.x * BEHIND_STOOL,
-        z: at.z + out.z * BEHIND_STOOL,
-        yaw: Math.atan2(-out.x, -out.z),
-      };
-    };
     if (p < FIRST_PUSH_END || p >= SECOND_PUSH_START) {
       const i = p < FIRST_PUSH_END ? a : b;
       const u = p < FIRST_PUSH_END ? firstPush(p) : secondPush(p);
@@ -305,12 +337,17 @@ export function createHallIntro(
     );
   }
 
-  /** Draws everyone; returns how many diners are inside the room. */
+  /**
+   * Draws everyone, with the movers only while the stools beat runs on from
+   * `ms` (not after a skip). Returns how many movers are on the floor and how
+   * many diners are inside the room.
+   */
   function drawPeople(
     frame: IntroFrame,
-    moverOpacity: number,
+    ms: number | null,
     dinersMs: number,
-  ): number {
+  ): { staff: number; inside: number } {
+    let staff = 0;
     let inside = 0;
     people.begin();
     placements.forEach((placement, i) => {
@@ -319,10 +356,25 @@ export function createHallIntro(
       pose(at.x, at.z, placement.yaw);
       addFigure(cooks[i]!);
     });
-    for (const mover of movers) {
-      poseMover(mover.pair, frame.stoolProgress);
-      addFigure(mover.look, moverOpacity);
-    }
+    // Movers stay out of the walk from the door and fade in for their beat,
+    // then walk round the back of a stall and fade out behind it.
+    if (ms !== null && ms >= INTRO_BEATS.stools)
+      movers.forEach((mover, i) => {
+        if (ms < STAFF_LEAVE_MS) {
+          poseMover(mover.pair, frame.stoolProgress);
+          const fade = (ms - INTRO_BEATS.stools) / MOVER_FADE_MS;
+          addFigure(mover.look, Math.min(1, fade));
+          staff += 1;
+          return;
+        }
+        const exit = exits[i]!;
+        const metres = (ms - STAFF_LEAVE_MS) * exit.speed;
+        if (metres >= exit.length) return;
+        const at = routeAt(exit.route, metres);
+        pose(at.x, at.z, at.yaw, metres, true);
+        addFigure(mover.look, (exit.length - metres) / EXIT_FADE_METRES);
+        staff += 1;
+      });
     for (const diner of diners) {
       const since = dinersMs - diner.arrive;
       if (since < 0) break;
@@ -334,7 +386,7 @@ export function createHallIntro(
       if (roomAt(at.x, at.z) === ROOM) inside += 1;
     }
     people.end();
-    return inside;
+    return { staff, inside };
   }
 
   const centre = roomCentre(ROOM);
@@ -411,17 +463,15 @@ export function createHallIntro(
     }
     facade.update(ms, frame.light, frame.sign, skippedAt !== undefined);
     placeStools(frame.stoolProgress);
-    // Movers stay out of the walk from the door and fade in for their beat.
-    const moverOpacity =
-      skippedAt === undefined
-        ? T.MathUtils.clamp((ms - INTRO_BEATS.stools) / MOVER_FADE_MS, 0, 1)
-        : 1;
-    // A skip goes straight to the hold, so diners start coming in from then.
-    const inside = drawPeople(
+    // A skip goes straight to the hold: the stools are set, the staff gone,
+    // and diners start coming in from then.
+    const { staff, inside } = drawPeople(
       frame,
-      moverOpacity,
+      skippedAt === undefined ? ms : null,
       ms - (skippedAt === undefined ? DINERS_START_MS : skippedAt),
     );
+    if (host.dataset.introStaff !== String(staff))
+      host.dataset.introStaff = String(staff);
     if (host.dataset.introDinersInside !== String(inside))
       host.dataset.introDinersInside = String(inside);
     renderer.render(scene, camera);
@@ -507,7 +557,71 @@ export function createHallIntro(
       renderer.forceContextLoss();
       canvas.remove();
       delete host.dataset.introBeat;
+      delete host.dataset.introStaff;
       delete host.dataset.introDinersInside;
     },
   };
+}
+
+/**
+ * Each mover's walk off the floor: to the nearest way round the back of a
+ * stall, by route length, shared by at most `ROUND_SHARE` movers. A corner
+ * stall, or a side too close to a wall or a neighbouring booth, has no way
+ * round. Movers further away walk faster, so all are gone by `STAFF_GONE_MS`.
+ */
+function staffExits(starts: Point[], placements: SpotPlacement[]): Exit[] {
+  const centre = roomCentre(ROOM);
+  const inRoom = (p: Point) =>
+    Math.abs(p.x - centre.x) < ROOM_SIDE / 2 - ROUND_WALL_CLEAR &&
+    Math.abs(p.z - centre.z) < ROOM_SIDE / 2 - ROUND_WALL_CLEAR;
+  const clearOf = (p: Point, own: number) =>
+    placements.every((other, j) => {
+      if (j === own) return true;
+      const local = toStall(other, p.x, p.z);
+      return !(
+        Math.abs(local.x) < BOOTH_HALF_WIDTH + ROUND_BOOTH_CLEAR &&
+        local.z > BOOTH_DEPTH.back &&
+        local.z < BOOTH_DEPTH.front
+      );
+    });
+  const ways = placements.flatMap((placement, i) =>
+    [-1, 1]
+      .map((side) => ({
+        front: toHall(placement, side * ROUND_SIDE, ROUND_FRONT),
+        back: toHall(placement, side * ROUND_SIDE, ROUND_BACK),
+      }))
+      .filter(({ front, back }) =>
+        [front, back].every((p) => inRoom(p) && clearOf(p, i)),
+      ),
+  );
+  if (!ways.length) throw new Error("no way round any intro stall");
+  const routes = starts.map((start) =>
+    ways.map(({ front, back }) => {
+      const route = [...routeWithin(ROOM, start, front), back];
+      return { route, length: routeLength(route) };
+    }),
+  );
+  // Shortest remaining walk first, until every mover has a way round.
+  const taken = ways.map(() => 0);
+  const chosen: (Exit | undefined)[] = starts.map(() => undefined);
+  const window = STAFF_GONE_MS - STAFF_LEAVE_MS;
+  for (let left = starts.length; left > 0; left--) {
+    let m = -1;
+    let w = -1;
+    for (let i = 0; i < starts.length; i++)
+      for (let j = 0; j < ways.length; j++)
+        if (
+          !chosen[i] &&
+          taken[j]! < ROUND_SHARE &&
+          (m < 0 || routes[i]![j]!.length < routes[m]![w]!.length)
+        ) {
+          m = i;
+          w = j;
+        }
+    if (m < 0) throw new Error("too few ways round the intro stalls");
+    const { route, length } = routes[m]![w]!;
+    taken[w] = taken[w]! + 1;
+    chosen[m] = { route, length, speed: Math.max(STAFF_WALK, length / window) };
+  }
+  return chosen as Exit[];
 }
