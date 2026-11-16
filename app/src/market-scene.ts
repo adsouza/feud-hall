@@ -29,6 +29,9 @@ import {
   vendorPose,
   cartSlots,
   CART_GROUP_CAP,
+  CART_BAR_LENGTH,
+  CART_BASKET,
+  cartFrame,
   type CameraPose,
   type MarketLayout,
   type Placed,
@@ -266,7 +269,7 @@ function crateGeometry(): T.BufferGeometry {
 }
 
 // Cart: the handle bar at (0, CART_HANDLE_HEIGHT, 0); the basket ahead, +z.
-const BASKET = { w: 0.5, d: 0.72, h: 0.2, y: 0.5, z: 0.5 };
+const BASKET = CART_BASKET;
 /** Where the owner's cart stands in a close-up: this far in front of the stalls... */
 const CLOSE_CART_Z = 0.9;
 /** ...and with its basket this far right of the focused stall's edge. */
@@ -276,19 +279,26 @@ const CAMERA_TAN = Math.tan(((CAMERA_FOV / 2) * Math.PI) / 180);
 const CLOSE_CART_CLEAR = 0.05;
 function cartGeometry(): T.BufferGeometry {
   const parts: T.BufferGeometry[] = [
-    new T.CylinderGeometry(0.016, 0.016, 0.5, 8)
+    new T.CylinderGeometry(0.016, 0.016, CART_BAR_LENGTH, 8)
       .rotateZ(Math.PI / 2)
       .translate(0, CART_HANDLE_HEIGHT, 0),
     ...openBox(BASKET.w, BASKET.d, BASKET.h, 0.014).map((g) =>
       g.translate(0, BASKET.y, BASKET.z),
     ),
   ];
-  for (const side of [-1, 1]) {
+  // Struts from the handle bar down to the basket's near rim, a little
+  // longer than the gap so each end sinks into what it joins.
+  for (const { top, bottom } of cartFrame(CART_HANDLE_HEIGHT).struts) {
+    const dy = bottom[1] - top[1];
+    const dz = bottom[2] - top[2];
+    const length = Math.hypot(dy, dz);
     parts.push(
-      new T.BoxGeometry(0.02, 0.02, 0.2)
-        .rotateX(-0.45)
-        .translate(side * 0.23, CART_HANDLE_HEIGHT - 0.045, 0.08),
+      new T.BoxGeometry(0.02, 0.02, length + 0.03)
+        .rotateX(Math.atan2(-dy, dz))
+        .translate(top[0], (top[1] + bottom[1]) / 2, (top[2] + bottom[2]) / 2),
     );
+  }
+  for (const side of [-1, 1]) {
     for (const end of [0, 1]) {
       const z = BASKET.z + (end ? 1 : -1) * (BASKET.d / 2 - 0.04);
       parts.push(

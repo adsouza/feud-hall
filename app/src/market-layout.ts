@@ -378,3 +378,41 @@ export function cartSlots(draft: number, arrived: number): CartSlot[] {
   group("arrived", arrived, CART_ALONG);
   return out;
 }
+
+/** The cart's basket: width, depth and height, its floor's height, and its centre ahead of the handle bar (+z). */
+export const CART_BASKET = { w: 0.5, d: 0.72, h: 0.2, y: 0.5, z: 0.5 } as const;
+/** Length of the cart's handle bar, centred on x = 0. */
+export const CART_BAR_LENGTH = 0.5;
+
+type Point = [number, number, number];
+/**
+ * Where a cart's frame joins, in the cart's own space: the handle bar's two
+ * ends at `handleHeight` (where a pushing figure's hands are), the basket's
+ * two near top corners, and one strut per side from the bar to the basket's
+ * near rim. The struts are computed from these points, so they stay joined if
+ * the basket or the handle height changes.
+ */
+export function cartFrame(handleHeight: number): {
+  bar: [Point, Point];
+  corners: [Point, Point];
+  struts: { top: Point; bottom: Point }[];
+} {
+  const b = CART_BASKET;
+  const rimY = b.y + b.h;
+  const nearZ = b.z - b.d / 2;
+  const strutX = Math.min(CART_BAR_LENGTH, b.w) / 2 - 0.02;
+  return {
+    bar: [
+      [-CART_BAR_LENGTH / 2, handleHeight, 0],
+      [CART_BAR_LENGTH / 2, handleHeight, 0],
+    ],
+    corners: [
+      [-b.w / 2, rimY, nearZ],
+      [b.w / 2, rimY, nearZ],
+    ],
+    struts: [-1, 1].map((side) => ({
+      top: [side * strutX, handleHeight, 0] as Point,
+      bottom: [side * strutX, rimY, nearZ] as Point,
+    })),
+  };
+}

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { CART_HANDLE_HEIGHT } from "../../src/people";
 import { expect, test } from "./hall";
 import { VENDORS, goodFor, shelves } from "../../src/market-goods";
 import {
@@ -6,7 +7,10 @@ import {
   CLOSE_UP_SHIFT,
   MIN_COLUMNS,
   PITCH_X,
+  CART_BAR_LENGTH,
+  CART_BASKET,
   CART_GROUP_CAP,
+  cartFrame,
   cartGoods,
   cartSlots,
   clickOutcome,
@@ -405,4 +409,37 @@ test("market layout: the owner's cart keeps draft and arrived crates apart, up t
     }
   expect(problems).toEqual([]);
   expect(cartSlots(-1, Number.NaN)).toEqual([]);
+});
+
+test("market layout: the cart's struts join its handle bar to its basket's rim", () => {
+  const frame = cartFrame(CART_HANDLE_HEIGHT);
+  const near = (a: number, b: number) => Math.abs(a - b) <= 0.005;
+  const problems: string[] = [];
+  // The handle bar is where the pushing figure's hands are.
+  for (const end of frame.bar)
+    if (end[1] !== CART_HANDLE_HEIGHT || end[2] !== 0)
+      problems.push("bar " + end.join());
+  const rimY = CART_BASKET.y + CART_BASKET.h;
+  const nearZ = CART_BASKET.z - CART_BASKET.d / 2;
+  for (const corner of frame.corners)
+    if (!near(corner[1], rimY) || !near(corner[2], nearZ))
+      problems.push("corner " + corner.join());
+  expect(frame.struts).toHaveLength(2);
+  for (const { top, bottom } of frame.struts) {
+    // Upper end on the bar: its height and line, within its length.
+    if (!near(top[1], CART_HANDLE_HEIGHT) || !near(top[2], 0))
+      problems.push("top off the bar " + top.join());
+    if (Math.abs(top[0]) > CART_BAR_LENGTH / 2)
+      problems.push("top beyond the bar " + top.join());
+    // Lower end on the basket's near rim, within its width.
+    if (!near(bottom[1], rimY) || !near(bottom[2], nearZ))
+      problems.push("bottom off the rim " + bottom.join());
+    if (Math.abs(bottom[0]) > CART_BASKET.w / 2)
+      problems.push("bottom beyond the rim " + bottom.join());
+  }
+  // One strut on each side.
+  expect(Math.sign(frame.struts[0].top[0])).toBe(
+    -Math.sign(frame.struts[1].top[0]),
+  );
+  expect(problems).toEqual([]);
 });
