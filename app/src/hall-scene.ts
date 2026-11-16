@@ -72,8 +72,9 @@ export type Actions = {
 export type HallVacancy = {
   stall_id: string;
   tier: string;
-  room: number;
-  position: number;
+  /** Absent from halls without the room rule; such a spot gets no bay. */
+  room?: number;
+  position?: number;
 };
 export type Appearance = {
   stalls: Stall[];
@@ -544,12 +545,12 @@ export function createHallScene(
 
   /** One bay per vacant spot; halls without the room rule have none. */
   function updateBays(next: Appearance) {
-    const vacant = new Map(
-      (next.rooms ? (next.vacancies ?? []) : []).map((vacancy) => [
-        vacancy.stall_id,
-        vacancy,
-      ]),
-    );
+    const vacant = new Map<string, { room: number; position: number }>();
+    for (const { stall_id, room, position } of next.rooms
+      ? (next.vacancies ?? [])
+      : [])
+      if (room !== undefined && position !== undefined)
+        vacant.set(stall_id, { room, position });
     for (const [id, bay] of bays) {
       const vacancy = vacant.get(id);
       if (

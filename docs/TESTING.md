@@ -64,8 +64,13 @@ those component/template cases, add a pinned Svelte-aware CI check invoked throu
 Bun, such as the component diagnostics described in the official
 [Svelte TypeScript guide](https://svelte.dev/docs/svelte/typescript). Record which
 files and error classes each check covers; do not silently drop uncovered cases
-or add ESLint/`tsc` to conceal the gap. The exact Svelte integration is an early
-frontend qualification task, not an already demonstrated capability.
+or add ESLint/`tsc` to conceal the gap. The pinned Bun checker refuses `.svelte`
+files, so `bun run check:svelte` runs the pinned `svelte-check` (which needs the
+pinned `typescript` package as a library; no `tsc` step exists). It was
+qualified on 2026-11-15 with a deliberately wrong component prop and a wrong
+template expression, each reported as an error, and it found twelve existing
+errors on first run, all since fixed. Rune warnings are reported but do not fail
+the check.
 
 Oxlint's [type-aware mode](https://oxc.rs/docs/guide/usage/linter/type-aware) is an
 optional additional check after qualification. Inspect configuration and flags so
@@ -128,7 +133,7 @@ suite or any indirect `tsc` execution.
 | Frontend formatting | `bun run format`; CI: `bun run format:check` | Locked Prettier plus Svelte plugin; explicit frontend scope, write locally and check in CI. |
 | Frontend lint | `bun run lint` resolving to locked Oxlint | Inspect selected modes/configuration and local resource use; applicable project scope in CI. |
 | TypeScript types | Native `bun check` | Local and hosted CI; check the whole configured project, not just changed files. |
-| Svelte diagnostics | `bun run check:svelte` | After coverage qualification; document the script/tool. Local use must avoid `tsc` and respect memory limits. |
+| Svelte diagnostics | `bun run check:svelte` | Pinned `svelte-check` over `tsconfig.svelte.json`: types of props, template expressions and scripts in every `.svelte` file. Hosted CI runs it in the `static` job. Locally it took about three seconds and 700 MB here; cap Node's old space as for other tools. It is not a `tsc` step. |
 | Frontend unit/property test | `bun test <test-file>` | Focused locally after command inspection; bounded suite in hosted CI. |
 | Browser tests | `bun run test:browser --grep '<scenario>'` | Focused Playwright regression against a disposable hall. See [Management and web checks](#management-and-web-checks). |
 | Backend unit/property test | `mix test <test-file>` | Focused ExUnit/StreamData or equivalent; inspect Mix aliases and setup first. |
@@ -534,8 +539,8 @@ staging across different readiness boundaries. The curated mutation
 `test/browser/run-shard.ts I/N` deals the listed test locations round-robin
 so slow hall files spread across shards (Playwright's `--shard` keeps them
 together); append `--list` to see a shard's tests. CI retains failure traces
-and hall logs. A separate Svelte template type-check
-and broader cross-browser coverage remain release qualification work.
+and hall logs. Broader cross-browser coverage remains release qualification
+work.
 
 `hall-interactions.spec.ts` checks in-hall ordering and committed meal receipts,
 helper acceptance/staging/selection, owner stock/menu/opening controls, keyboard
@@ -597,9 +602,9 @@ time it comes on screen. `data-market-hit="<product>:<x>,<y>"` gives CSS pixels 
 for the selected container once the camera has settled, so a test can click a
 real container. Not covered by any automated check: the frame rate of the market
 scene (no bench exists for it), touch input in the scene, Japanese text read
-by a fluent reader, that the scene stops drawing when scrolled away again
-(only its creation on first sight is tested), and the type of any `.svelte`
-component (`bun check` reads only `.ts` files).
+by a fluent reader, and that the scene stops drawing when scrolled away again
+(only its creation on first sight is tested). Component types are checked by
+`bun run check:svelte`, since `bun check` reads only `.ts` files.
 
 ### How to run the frame bench
 

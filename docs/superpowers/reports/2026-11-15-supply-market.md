@@ -463,10 +463,6 @@ at "filled".
 - **Japanese text read by a fluent reader.** A check confirms every key exists,
   differs from English and has the same placeholders; no one has read the
   wording.
-- **Nothing type-checks the Svelte components.** `bun check` reads only `.ts`
-  files; a wrong value passed to the panel is caught only by a browser test that
-  exercises it. The logic was kept in `.ts` modules for that reason. A
-  component check in hosted CI is a recommended follow-up.
 - **That the scene stops drawing when scrolled away again.** Its creation on
   first sight is tested; stopping is not.
 - **A clearing with many owners at once.** The tests use two or three.
@@ -528,5 +524,5 @@ returns); and the cart's handle is joined to its basket.
 
 Still not verified: both full suites (hosted CI runs them; none has run on this
 branch), a real hall, the packaged app, the scene's frame rate, phone touch in
-the scene, Japanese read by a fluent reader, and that nothing type-checks the
-Svelte components.
+the scene, and Japanese read by a fluent reader. The Svelte components are now
+type-checked in hosted CI (added after this review at the owner's request).

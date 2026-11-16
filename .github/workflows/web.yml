@@ -38,6 +38,8 @@ jobs:
       - run: bun run format:check
       - run: bun run lint
       - run: bun check
+      # Types inside .svelte files (props, templates, scripts); bun check reads .ts only.
+      - run: bun run check:svelte
       - run: bun run --bun build
 
   browser:

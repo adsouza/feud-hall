@@ -39,7 +39,14 @@ type Lease = {
   end_hour: number;
   workers: Record<
     string,
-    { id: string; role: string; start_hour: number; end_hour: number }
+    {
+      id: string;
+      role: string;
+      start_hour: number;
+      end_hour: number;
+      break_until?: number | null;
+      tired?: boolean;
+    }
   >;
   helper_offers: boolean;
   unattended: boolean;
@@ -53,6 +60,14 @@ export type OwnerStall = {
   ready_at?: number | null;
   refit_cost?: Money;
   cuisine?: string;
+  /** This location's own menu and starter-stock offer, where the server sends them. */
+  menu?: Record<string, Money>;
+  starter_stock?: { budget: Money; items: { product: string; qty: number }[] };
+  /** What learning a recipe, or installing its equipment here, would cost. */
+  unlock_offers?: Record<
+    string,
+    { cost: Money; equipment: Money; technique?: string | null; known: boolean }
+  >;
   lease: Lease;
 };
 export type Slot = {

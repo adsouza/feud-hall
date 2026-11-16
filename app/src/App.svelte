@@ -194,9 +194,6 @@
     location.reload();
   }
   let updateAvailable = $state(false);
-  // Reloading forgets an uncertain command's ID, which must be retried as is;
-  // after a refused protocol no retry can succeed, so reloading stays open.
-  const reloadBlocked = $derived(!updateRequired && (!!pending || submitting));
   let checkingClient = false;
   let lastClientCheck = Date.now();
   async function checkClient() {
@@ -218,6 +215,9 @@
   let pending = $state<Pending | null>(null);
   let acknowledgedHandover = $state<Pending | null>(null);
   let submitting = $state(false);
+  // Reloading forgets an uncertain command's ID, which must be retried as is;
+  // after a refused protocol no retry can succeed, so reloading stays open.
+  const reloadBlocked = $derived(!updateRequired && (!!pending || submitting));
   let hallMode = $state<"3d" | "list">("3d");
   let hallSelection = $state("");
   let immersiveHall = $state(false);
