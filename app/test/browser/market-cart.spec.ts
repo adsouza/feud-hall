@@ -16,6 +16,7 @@ import {
   reprice,
   requestIdFor,
   requests,
+  sendBlocked,
   setCrates,
   setLimit,
   track,
@@ -614,6 +615,60 @@ test("way: an uncertain send is unconfirmed until its command ID resolves", () =
   ]);
 });
 
+test("way: an outcome's minute starts when it is shown, not while the send is unconfirmed", () => {
+  const sent = recordSend([], {
+    commandId: "u",
+    product: "rice",
+    outcome: "uncertain",
+    stamp: 1,
+    now: 0,
+  });
+  const rejected = outcome("PR:u", "rice", 0, 50, "price_above_limit");
+  // The server rejected it; the outcome ages 90 seconds while the line is unconfirmed.
+  const waiting = runWay(sent, [
+    { recent: [rejected], viewStamp: 2, now: 1_000 },
+    { recent: [rejected], viewStamp: 3, now: 91_000 },
+  ]);
+  expect(waiting.shown.map(states)).toEqual([
+    ["PR:u=unconfirmed"],
+    ["PR:u=unconfirmed"],
+  ]);
+  // The retry resolves the command ID as accepted.
+  const resolved = recordSend(waiting.sent, {
+    commandId: "u",
+    product: "rice",
+    outcome: "accepted",
+    stamp: 4,
+    now: 92_000,
+  });
+  const after = runWay(
+    resolved,
+    [
+      { viewStamp: 5, now: 92_000 },
+      { viewStamp: 6, now: 92_000 + WAY_LINGER_MS - 1 },
+      { viewStamp: 7, now: 92_000 + WAY_LINGER_MS },
+    ],
+    waiting.memory,
+  );
+  expect(after.shown[0]).toEqual([
+    {
+      requestId: "PR:u",
+      product: "rice",
+      state: "rejected",
+      filled: 0,
+      short: 50,
+      reason: "price_above_limit",
+      cost: "5",
+      automated: false,
+    },
+  ]);
+  expect(after.shown.map(states)).toEqual([
+    ["PR:u=rejected"],
+    ["PR:u=rejected"],
+    [],
+  ]);
+});
+
 test("way: a dismissed line stays hidden for the session", () => {
   const sent = recordSend([], {
     commandId: "a",
@@ -696,4 +751,21 @@ test("way: what it remembers stays bounded", () => {
   expect(Object.keys(memory.seen).length).toBeLessThanOrEqual(
     WAY_LINGER_MS / 1000 + 1,
   );
+});
+
+test("cart: invalid limit text blocks sending only on a line that would be sent", () => {
+  let cart = addCrate(emptyCart, "a", offer());
+  cart = addCrate(cart, "b", offer());
+  const both = { a: offer(), b: offer() };
+  expect(sendBlocked(cart, {}, both)).toBe(false);
+  expect(sendBlocked(cart, { a: "250" }, both)).toBe(false);
+  expect(sendBlocked(cart, { a: "2.50" }, both)).toBe(true);
+  // "a" becomes unavailable: it is skipped by sending, so it no longer blocks
+  // "b"; its text is kept and blocks again when "a" comes back.
+  const text = { a: "2.50" };
+  expect(sendBlocked(cart, text, { b: offer() })).toBe(false);
+  expect(text).toEqual({ a: "2.50" });
+  expect(sendBlocked(cart, text, both)).toBe(true);
+  // Text for a product no longer in the cart never blocks.
+  expect(sendBlocked(setCrates(cart, "a", 0), text, both)).toBe(false);
 });

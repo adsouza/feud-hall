@@ -24,9 +24,12 @@
    most recent clearings, which supplies each restaurant bought and one of
    three cart sizes. Nothing else. See
    [What became public, and what did not](#what-became-public-and-what-did-not).
-6. **Whether the tuning values stand** ([Tuning values](#tuning-values)), and
+6. **A stall's close-up now looks a little to the right of the stall,** to make
+   room for your cart beside it, so less of the neighbouring stall on the left
+   shows. You have not seen this; the other choice is a smaller cart.
+7. **Whether the tuning values stand** ([Tuning values](#tuning-values)), and
    **whether to act on** the [Known limitations](#known-limitations).
-7. **Whether to merge.** Nothing is pushed. A whole-branch review was done and
+8. **Whether to merge.** Nothing is pushed. A whole-branch review was done and
    its seven issues fixed ([Final review](#final-review)). Neither full test
    suite has run on this branch: open a pull request so hosted CI runs both
    before merging (see [What is not verified](#what-is-not-verified)).
@@ -88,6 +91,9 @@ built from the [plan](../plans/2026-11-15-supply-market.md) on the branch
   product has no entry, and now also runs when only that file changes; a client
   test fails if any entry in it is malformed.
 - **A cart-pushing pose** for figures, used for the shoppers.
+- **Carts with their handle joined to the basket.** The handle's struts used to
+  stop short of the basket, which showed once your cart was enlarged; they now
+  run from the handle bar to the basket's rim, on every cart.
 - Both languages: every new string exists in English and Japanese.
 
 ## What became public, and what did not
@@ -277,9 +283,10 @@ The scene:
 - **Your cart is legible in the close-up.** It stands in the foreground right of
   the stall, seen from the side, spanning about 13% of the picture's width
   (about twice its earlier size at the largest stall), with draft crates and
-  arrived crates in two separate groups of at most 36 each. To make room, the
-  close-up now frames a little right of the stall, so less of the neighbouring
-  stall on the left shows. The cart is never picked by a click. Cost: tuning.
+  arrived crates in two separate groups of at most 36 each. The close-up frames
+  a little right of the stall to make room (see
+  [What to decide](#what-to-decide)). The cart is never picked by a click.
+  Cost: tuning.
 - **The scene is created when first seen and draws only while on screen,**
   rather than whenever the Business page is open, as the design says. WebGL is
   checked once up front so that without it the list says it is the market
@@ -373,6 +380,10 @@ What a player would notice:
 - **When browser storage is unavailable, the star note reappears** each time the
   market is opened, instead of once per session.
 - **A send skipped because the app is busy stops without a message.**
+- **A replaced order can read "settled".** If another of your devices replaces
+  an order and the replacement clears while this page was not checking (for
+  example a background tab the browser slowed down), the first order shows as
+  "settled, check your stock" beside the replacement's result.
 
 For whoever works on it next:
 
@@ -411,6 +422,7 @@ to see the test fail, then restoring it.
 | Arriving crates              | none                                                                                                                                                                                                                                                                 | `market.spec.ts` 16; `market-cart.spec.ts` 13; `bun check`, lint, Prettier ok                                                                                                                                                                                                                                                                                                  |
 | Documentation                | none                                                                                                                                                                                                                                                                 | links and anchors checked                                                                                                                                                                                                                                                                                                                                                      |
 | Fixes after the final review | `management_test.exs` 20; `market_activity_test.exs` 6; `command_workflow_test.exs` 40; `recovery_test.exs` 41; `visitor_play_test.exs` 11; `market_test.exs` 36; `public_view_test.exs` 1; `architecture_test.exs` 9; `market_goods_coverage_test.exs` 5; format ok | `market.spec.ts` 24 (one of them end to end); `market-cart.spec.ts` 24; `market-layout.spec.ts` 13; `market-goods.spec.ts` 8; `people-scene.spec.ts` 1; `owner-view.spec.ts` 1; `journeys.spec.ts` 6; `phone-layout.spec.ts` 3; `hall-interactions.spec.ts` 7; build, `bun check` (746 files), lint, Prettier ok; screenshots of the close-up and the whole row checked by eye |
+| Cart handle and the second look | none | `market-layout.spec.ts` 14; `market-cart.spec.ts` 26; `market.spec.ts` 24 (run after each of the two commits); build, `bun check`, lint, Prettier ok; screenshots of your cart and a rival's cart checked by eye |
 
 Checks made by breaking the code on purpose (each restored): the public trip made
 to carry a quantity (the privacy test failed); the state before the batch used
@@ -506,6 +518,13 @@ only when saving succeeds; public trips trimmed; "out of stock" meaning none;
 an independent bound in the limit test; the legend and accessible names; and
 these documents. Screenshots of the close-up and the whole-row view were checked
 by eye.
+
+After a second look at these fixes, three more small things were fixed: an
+order confirmed late (by Retry, more than a minute after the market had already
+filled or rejected it) now shows its outcome for a minute instead of vanishing;
+a mistyped limit on a line whose supply became unavailable no longer keeps
+"Send order" disabled for the other lines (the text is kept for when the supply
+returns); and the cart's handle is joined to its basket.
 
 Still not verified: both full suites (hosted CI runs them; none has run on this
 branch), a real hall, the packaged app, the scene's frame rate, phone touch in

@@ -96,6 +96,27 @@ export function limitInvalid(text: string): boolean {
   return !LIMIT_FORMAT.test(text.trim());
 }
 
+/**
+ * Whether "Send order" must wait: some line that would be sent (its offer is
+ * usable) has limit text typed that cannot be a limit. An unavailable line is
+ * skipped by sending, so its text never blocks; the text is kept for when the
+ * product comes back.
+ */
+export function sendBlocked(
+  cart: Cart,
+  limitText: Record<string, string>,
+  market: Record<string, Offer>,
+): boolean {
+  return cart.lines.some((l) => {
+    const text = limitText[l.product];
+    return (
+      market[l.product] !== undefined &&
+      text !== undefined &&
+      limitInvalid(text)
+    );
+  });
+}
+
 /** Ignored unless the limit is a positive decimal integer string. */
 export function setLimit(cart: Cart, product: string, limit: string): Cart {
   if (!LIMIT_FORMAT.test(limit)) return { lines: [...cart.lines] };
@@ -277,8 +298,11 @@ export type SessionSend = {
 
 /** What the list remembers between views. Bounded; never stored. */
 export type WayMemory = {
-  /** Outcomes seen, by request ID, with when each was first seen (ms). */
-  seen: Record<string, { outcome: Outcome; at: number }>;
+  /**
+   * Outcomes seen, by request ID, with when each was first shown (ms), or null
+   * while its line is still unconfirmed and the outcome is not shown yet.
+   */
+  seen: Record<string, { outcome: Outcome; at: number | null }>;
   /** When a session line was first shown as settled, by request ID. */
   settled: Record<string, number>;
   /** Request IDs whose line was dismissed or has had its minute, oldest first. */
@@ -407,18 +431,27 @@ export function onItsWay(input: {
     };
   }
 
-  // Outcomes: remembered from the first view that carried them, for a minute.
-  const seen: WayMemory["seen"] = { ...input.memory.seen };
-  for (const o of purchases.recent)
-    if (!seen[o.request_id] && !hidden.has(o.request_id))
-      seen[o.request_id] = { outcome: o, at: now };
-  for (const [id, entry] of Object.entries(seen))
-    if (now - entry.at >= WAY_LINGER_MS) hide(id);
-
   const pendingIds = new Set(purchases.pending.map((p) => p.request_id));
   const uncertainIds = new Set(
     input.sent.filter((s) => s.uncertain).map((s) => requestIdFor(s.commandId)),
   );
+  // Outcomes: remembered from the first view that carried them. A line's
+  // minute starts when its outcome is first shown, not while its send is
+  // still unconfirmed (a late retry must still show what happened).
+  const seen: WayMemory["seen"] = {};
+  for (const [id, entry] of Object.entries(input.memory.seen))
+    seen[id] =
+      entry.at === null && !uncertainIds.has(id)
+        ? { ...entry, at: now }
+        : entry;
+  for (const o of purchases.recent)
+    if (!seen[o.request_id] && !hidden.has(o.request_id))
+      seen[o.request_id] = {
+        outcome: o,
+        at: uncertainIds.has(o.request_id) ? null : now,
+      };
+  for (const [id, entry] of Object.entries(seen))
+    if (entry.at !== null && now - entry.at >= WAY_LINGER_MS) hide(id);
   // A view older than an accepted send can still list the request it replaced.
   const replacing = input.sent.filter(
     (s) => s.acceptedStamp !== null && viewStamp <= s.acceptedStamp,
@@ -485,7 +518,7 @@ export function onItsWay(input: {
     }
     if (uncertainIds.has(id)) continue;
     terminal.push({
-      at,
+      at: at ?? now,
       line: {
         requestId: id,
         product: o.product,

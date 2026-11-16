@@ -11,6 +11,7 @@
     lineEstimate,
     lineNotes,
     limitInvalid,
+    sendBlocked,
     onItsWay,
     recordSend,
     reprice,
@@ -152,9 +153,7 @@
     const text = draft.limitText[product];
     return text !== undefined && limitInvalid(text);
   };
-  let anyBadLimit = $derived(
-    draft.cart.lines.some((line) => badLimit(line.product)),
-  );
+  let anyBadLimit = $derived(sendBlocked(draft.cart, draft.limitText, offers));
   function removeLine(product: string) {
     changeCrates(product, 0);
   }

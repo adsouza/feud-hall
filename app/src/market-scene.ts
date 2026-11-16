@@ -273,10 +273,10 @@ const BASKET = CART_BASKET;
 /** Where the owner's cart stands in a close-up: this far in front of the stalls... */
 const CLOSE_CART_Z = 0.9;
 /** ...and with its basket this far right of the focused stall's edge. */
+const CLOSE_CART_CLEAR = 0.05;
 /** The cart from the handle bar to the far end of the basket. */
 const CART_LENGTH = BASKET.z + BASKET.d / 2;
 const CAMERA_TAN = Math.tan(((CAMERA_FOV / 2) * Math.PI) / 180);
-const CLOSE_CART_CLEAR = 0.05;
 function cartGeometry(): T.BufferGeometry {
   const parts: T.BufferGeometry[] = [
     new T.CylinderGeometry(0.016, 0.016, CART_BAR_LENGTH, 8)
