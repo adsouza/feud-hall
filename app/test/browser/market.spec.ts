@@ -252,6 +252,8 @@ test("market: add a crate, send, see it pending, then filled", async ({
   const crate = offer.crate!;
   const panel = panelOf(page);
   const host = panel.locator("[data-market-scene]");
+  // The scene is drawn only while on screen (Business page lands at the top).
+  await host.scrollIntoViewIfNeeded();
   await expect(host.locator("canvas")).toBeVisible();
   await chooseVendorOf(panel, product);
   await expect(host).toHaveAttribute(
@@ -399,6 +401,8 @@ test("market: a rival's fill appears as an unlabelled shopper", async ({
   const [product] = owner.products;
   const panel = panelOf(page);
   const host = panel.locator("[data-market-scene]");
+  // The scene is drawn only while on screen (Business page lands at the top).
+  await host.scrollIntoViewIfNeeded();
   await expect(host.locator("canvas")).toBeVisible();
   await owner.serve((view) => {
     view.hall.market_trips = [];
@@ -494,6 +498,7 @@ test("market: a scene failure switches to the list and says so", async ({
   const owner = await marketOwner(page, hall);
   const panel = panelOf(page);
   const canvas = panel.locator("[data-market-scene] canvas");
+  await panel.locator("[data-market-scene]").scrollIntoViewIfNeeded();
   await expect(canvas).toBeVisible();
   await canvas.dispatchEvent("webglcontextlost", { cancelable: true });
   await expect(panel.locator("[data-market-scene]")).toHaveCount(0);
@@ -682,9 +687,13 @@ test("market: a click on a container in the picture adds a crate", async ({
   const [product] = owner.products;
   const panel = panelOf(page);
   const host = panel.locator("[data-market-scene]");
+  // The scene is drawn only while on screen (Business page lands at the top).
+  await host.scrollIntoViewIfNeeded();
   await expect(host.locator("canvas")).toBeVisible();
   await chooseVendorOf(panel, product);
   await addButton(panel, product).focus();
+  // Focusing the row scrolls the list; the picture draws only on screen.
+  await host.scrollIntoViewIfNeeded();
   await expect(host).toHaveAttribute(
     "data-market-hit",
     new RegExp(`^${product}:\\d+,\\d+$`),
@@ -1160,4 +1169,49 @@ test("market: a line whose offer becomes unusable stays, keeps its limit, and is
     })
     .click();
   await expect(line).toHaveCount(0);
+});
+
+test("market: the scene is created only when the Supply section comes on screen", async ({
+  page,
+  hall,
+}) => {
+  await marketOwner(page, hall);
+  // A fresh load lands on the Business page at the top.
+  await page.goto(hall.origin);
+  const host = panelOf(page).locator("[data-market-scene]");
+  await expect(host).toHaveCount(1);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(host).not.toBeInViewport();
+  await page.waitForTimeout(1000);
+  await expect(host).not.toHaveAttribute("data-market-containers");
+  await expect(host.locator("canvas")).toHaveCount(0);
+  await host.scrollIntoViewIfNeeded();
+  await expect(host).toHaveAttribute("data-market-containers", /^[1-9]\d*$/);
+  await expect(host.locator("canvas")).toBeVisible();
+});
+
+test("market: the cart reports the crates it draws, up to its cap", async ({
+  page,
+  hall,
+}) => {
+  const owner = await marketOwner(page, hall);
+  const [product] = owner.products;
+  const panel = panelOf(page);
+  const host = panel.locator("[data-market-scene]");
+  // The scene is drawn only while on screen (Business page lands at the top).
+  await host.scrollIntoViewIfNeeded();
+  await expect(host.locator("canvas")).toBeVisible();
+  await chooseVendorOf(panel, product);
+  await addButton(panel, product).click();
+  const crates = cartLine(panel, product).locator("[data-cart-crates]");
+  // One line draws at most CART_CRATES_PER_LINE (12) crates.
+  for (let i = 0; i < 14; i++)
+    await cartLine(panel, product)
+      .getByRole("button", {
+        name: fill(en("oneMoreCrate"), { name: name(product) }),
+      })
+      .click();
+  await expect(crates).toHaveText("15");
+  await expect(host).toHaveAttribute("data-market-cart-total", "15");
+  await expect(host).toHaveAttribute("data-market-cart", "12");
 });

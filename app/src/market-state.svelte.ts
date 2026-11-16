@@ -93,3 +93,24 @@ export function resolveSent(delivery: Delivery) {
   else if (delivery.outcome === "refused")
     market.sent = market.sent.filter((s) => s !== line);
 }
+
+let webglProbe: boolean | undefined;
+/**
+ * Whether this browser can give the market a WebGL context, probed once per
+ * page with a throwaway canvas whose context is released at once. The scene
+ * itself is created only when it comes on screen, so without this the list
+ * would not say it is the market until the picture was scrolled to.
+ */
+export function webglAvailable(): boolean {
+  if (webglProbe !== undefined) return webglProbe;
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = (canvas.getContext("webgl2") ?? canvas.getContext("webgl")) as
+      WebGLRenderingContext | WebGL2RenderingContext | null;
+    webglProbe = gl !== null;
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+  } catch {
+    webglProbe = false;
+  }
+  return webglProbe;
+}

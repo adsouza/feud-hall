@@ -3,9 +3,12 @@ import { expect, test } from "./hall";
 import { VENDORS, goodFor, shelves } from "../../src/market-goods";
 import {
   AISLE_Z,
+  CLOSE_UP_SHIFT,
   MIN_COLUMNS,
   PITCH_X,
+  CART_GROUP_CAP,
   cartGoods,
+  cartSlots,
   clickOutcome,
   columnsFor,
   containerFill,
@@ -230,8 +233,11 @@ test("market layout: the camera poses look at what they name", () => {
   expect(overview.position[1]).toBeGreaterThan(overview.target[1]);
   for (const stall of layout.stalls) {
     const pose = vendorPose(stall);
-    expect(pose.target[0]).toBeCloseTo(stall.x, 6);
-    expect(pose.position[0]).toBeCloseTo(stall.x, 6);
+    // Looking at the stall, a little to its right where the owner's cart stands.
+    expect(CLOSE_UP_SHIFT).toBeGreaterThan(0);
+    expect(CLOSE_UP_SHIFT).toBeLessThan(stall.width / 2);
+    expect(pose.target[0]).toBeCloseTo(stall.x + CLOSE_UP_SHIFT, 6);
+    expect(pose.position[0]).toBeCloseTo(stall.x + CLOSE_UP_SHIFT, 6);
     // Closer than the overview, and a wider stall needs a farther camera.
     const distance = Math.hypot(
       pose.position[1] - pose.target[1],
@@ -374,4 +380,29 @@ test("market layout: shoppers standing at a stall stand in front of it, apart", 
     (s) => s.vendor === "fishmonger",
   ) as (typeof layout.stalls)[number];
   expect(standingSpot(fish, 1).z).toBe(standingSpot(fish, 0).z);
+});
+
+test("market layout: the owner's cart keeps draft and arrived crates apart, up to the caps", () => {
+  const problems: string[] = [];
+  for (let draft = 0; draft <= CART_GROUP_CAP + 5; draft++)
+    for (let arrived = 0; arrived <= CART_GROUP_CAP + 5; arrived++) {
+      const slots = cartSlots(draft, arrived);
+      const drafts = slots.filter((s) => s.group === "draft");
+      const lids = slots.filter((s) => s.group === "arrived");
+      if (drafts.length !== Math.min(draft, CART_GROUP_CAP))
+        problems.push(`draft ${draft}/${arrived}`);
+      if (lids.length !== Math.min(arrived, CART_GROUP_CAP))
+        problems.push(`arrived ${draft}/${arrived}`);
+      const cells = new Set(
+        slots.map((s) => `${s.along},${s.across},${s.layer}`),
+      );
+      if (cells.size !== slots.length)
+        problems.push(`shared ${draft}/${arrived}`);
+      // Side by side: every draft crate is nearer the handle than every arrived one.
+      const nearest = Math.min(...lids.map((s) => s.along));
+      if (drafts.some((s) => s.along >= nearest))
+        problems.push(`mixed ${draft}/${arrived}`);
+    }
+  expect(problems).toEqual([]);
+  expect(cartSlots(-1, Number.NaN)).toEqual([]);
 });

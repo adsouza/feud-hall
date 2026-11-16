@@ -28,6 +28,8 @@ import {
   STAND_SPACING,
   tripRoute,
   vendorPose,
+  cartSlots,
+  CART_GROUP_CAP,
   type CameraPose,
   type MarketLayout,
   type Placed,
@@ -86,6 +88,8 @@ export type MarketScene = {
 export const MAX_SHOPPERS = 8;
 /** Crates of one line drawn on the owner's cart. */
 export const CART_CRATES_PER_LINE = 12;
+/** Share of the picture's width the owner's cart spans in a close-up. */
+const CLOSE_CART_SPAN = 0.13;
 /** Below this level (of 1000) a container's tag is marked low. */
 export const LOW_LEVEL = 300;
 /** Goods drawn in a full container. */
@@ -264,6 +268,13 @@ function crateGeometry(): T.BufferGeometry {
 
 // Cart: the handle bar at (0, CART_HANDLE_HEIGHT, 0); the basket ahead, +z.
 const BASKET = { w: 0.5, d: 0.72, h: 0.2, y: 0.5, z: 0.5 };
+/** Where the owner's cart stands in a close-up: this far in front of the stalls... */
+const CLOSE_CART_Z = 0.9;
+/** ...and with its basket this far right of the focused stall's edge. */
+/** The cart from the handle bar to the far end of the basket. */
+const CART_LENGTH = BASKET.z + BASKET.d / 2;
+const CAMERA_TAN = Math.tan(((CAMERA_FOV / 2) * Math.PI) / 180);
+const CLOSE_CART_CLEAR = 0.05;
 function cartGeometry(): T.BufferGeometry {
   const parts: T.BufferGeometry[] = [
     new T.CylinderGeometry(0.016, 0.016, 0.5, 8)
@@ -508,8 +519,8 @@ export function createMarketScene(
 
   // The owner's cart and the rivals' carts share one batch; slot 0 is the owner's.
   const carts = instanced(cartGeo, solid, MAX_SHOPPERS + 1);
-  const ownerCrates = instanced(unitBox, solid, 120);
-  const arrivedLids = instanced(unitBox, solid, 120);
+  const ownerCrates = instanced(unitBox, solid, 2 * CART_GROUP_CAP);
+  const arrivedLids = instanced(unitBox, solid, CART_GROUP_CAP);
   const rivalPieces = new Map(
     SHAPES.map(
       (shape) =>
@@ -525,6 +536,9 @@ export function createMarketScene(
   );
   for (const mesh of [carts, ownerCrates, arrivedLids, ...rivalPieces.values()])
     mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
+  // Carts are never picked: a click passes through them to what is behind.
+  for (const mesh of [carts, ownerCrates, arrivedLids, ...rivalPieces.values()])
+    mesh.raycast = () => {};
   scene.add(carts, ownerCrates, arrivedLids, ...rivalPieces.values());
 
   const faces = createFaceTexture();
@@ -1054,81 +1068,101 @@ export function createMarketScene(
       flush(mesh);
   }
 
-  // Where the owner's cart's handle is: in the gap right of the focused
-  // stall, its basket towards the stalls; in the aisle for the whole row.
+  // Where the owner's cart's handle is, and how large it is drawn. In a
+  // close-up: in the foreground right of the focused stall (the close-up
+  // leaves room there), scaled so it spans CLOSE_CART_SPAN of the picture's
+  // width whatever the stall's size: about twice its size when it stood in
+  // the gap beside the largest stall. For the whole row: in the aisle at its
+  // own size.
   function ownerCartSpot(b: Built | null, vendor: VendorId | null) {
     const stall = b?.layout.stalls.find((s) => s.vendor === vendor);
-    if (stall) return { x: stall.x + stall.width / 2 + STALL_GAP / 2, z: 0.25 };
-    return { x: 0, z: 1.6 };
+    if (!stall) return { x: 0.45, z: 1.6, scale: 1 };
+    const pose = vendorPose(stall, camera.aspect);
+    const eye = new T.Vector3(...pose.position);
+    const right = stall.x + stall.width / 2;
+    const z = CLOSE_CART_Z;
+    const scaleAt = (x: number) => {
+      const distance = eye.distanceTo(new T.Vector3(x, BASKET.y, z));
+      const across = 2 * distance * CAMERA_TAN * Math.max(camera.aspect, 0.1);
+      return (CLOSE_CART_SPAN * across) / CART_LENGTH;
+    };
+    // The basket reaches left of the handle; keep it clear of the stall.
+    const reach = (scale: number) =>
+      right + CLOSE_CART_CLEAR + scale * (BASKET.z + BASKET.d / 2);
+    const x = reach(scaleAt(reach(scaleAt(right + 1))));
+    return { x, z, scale: scaleAt(x) };
   }
 
   function fillOwnerCart(next: MarketAppearance) {
-    ownerCrates.count = 0;
     const spot = ownerCartSpot(built, next.focusedVendor);
-    // Parked with its basket towards the stalls (yaw pi: forward is -z).
-    const yaw = Math.PI;
+    const s = spot.scale;
+    // Seen from the side: the handle on the right, the basket to its left
+    // (yaw -pi/2: the cart's forward +z points to -x, its +x to +z).
     carts.count = Math.max(carts.count, 1);
     dummy.position.set(spot.x, 0, spot.z);
-    dummy.rotation.set(0, yaw, 0);
-    dummy.scale.set(1, 1, 1);
+    dummy.rotation.set(0, -Math.PI / 2, 0);
+    dummy.scale.set(s, s, s);
     dummy.updateMatrix();
     carts.setMatrixAt(0, dummy.matrix);
     carts.setColorAt(0, SCRATCH.setHex(OWNER_CART));
-    const size = 0.095;
-    const pitchX = (BASKET.w - 0.05) / 4;
-    const pitchZ = (BASKET.d - 0.05) / 6;
-    let slot = 0;
-    arrivedLids.count = 0;
-    // Arrived crates first, at the bottom, so new draft crates never hide them.
-    const lines = [
-      ...(next.arrived ?? []).map((line) => ({ ...line, arrived: true })),
-      ...next.cart.map((line) => ({ ...line, arrived: false })),
-    ];
-    for (const line of lines) {
-      const crates = Math.min(
-        CART_CRATES_PER_LINE,
-        Math.max(0, Math.floor(line.crates)),
+    const along = (BASKET.d - 0.04) / 6;
+    const across = (BASKET.w - 0.06) / 3;
+    const size = Math.min(along, across) * 0.86;
+    // One colour per crate, line by line, in each group.
+    const colours = (lines: { product: string; crates: number }[]) =>
+      lines.flatMap((line) =>
+        Array<number>(
+          Math.min(
+            CART_CRATES_PER_LINE,
+            Math.max(0, Math.floor(line.crates) || 0),
+          ),
+        ).fill(pieceColour(goodFor(line.product))),
       );
-      const colour = pieceColour(goodFor(line.product));
-      for (
-        let k = 0;
-        k < crates && slot < ownerCrates.instanceMatrix.count;
-        k++
-      ) {
-        const layer = Math.floor(slot / 24);
-        const col = slot % 4;
-        const row = Math.floor((slot % 24) / 4);
-        // Basket-local, then turned to the cart's heading.
-        const lx = (col - 1.5) * pitchX;
-        const lz = BASKET.z - BASKET.d / 2 + 0.025 + (row + 0.5) * pitchZ;
-        const index = place(
-          ownerCrates,
-          spot.x - lx,
-          BASKET.y + 0.02 + size / 2 + layer * size,
-          spot.z - lz,
-          size,
-          size,
-          size,
+    const draft = colours(next.cart);
+    const arrived = colours(next.arrived ?? []);
+    const counter = { draft: 0, arrived: 0 };
+    ownerCrates.count = 0;
+    arrivedLids.count = 0;
+    for (const slot of cartSlots(draft.length, arrived.length)) {
+      const colour =
+        slot.group === "draft"
+          ? draft[counter.draft++]
+          : arrived[counter.arrived++];
+      // Basket-local: lz along the basket from its handle end, lx across.
+      const lz = BASKET.z - BASKET.d / 2 + 0.02 + (slot.along + 0.5) * along;
+      const lx = (slot.across - 1) * across;
+      // On a raised floor, so the bottom layer shows above the rim.
+      const ly = BASKET.y + BASKET.h - size * 0.35 + slot.layer * size;
+      const wx = spot.x - s * lz;
+      const wz = spot.z + s * lx;
+      const index = place(
+        ownerCrates,
+        wx,
+        s * ly,
+        wz,
+        s * size,
+        s * size,
+        s * size,
+      );
+      ownerCrates.setColorAt(index, SCRATCH.setHex(colour));
+      if (slot.group === "arrived") {
+        const lid = place(
+          arrivedLids,
+          wx,
+          s * (ly + size / 2 + 0.012),
+          wz,
+          s * size * 1.12,
+          s * 0.024,
+          s * size * 1.12,
         );
-        ownerCrates.setColorAt(index, SCRATCH.setHex(colour));
-        if (line.arrived) {
-          const lid = place(
-            arrivedLids,
-            spot.x - lx,
-            BASKET.y + 0.02 + size + layer * size + 0.012,
-            spot.z - lz,
-            size * 1.15,
-            0.024,
-            size * 1.15,
-          );
-          arrivedLids.setColorAt(lid, SCRATCH.setHex(ARRIVED_LID));
-        }
-        slot++;
+        arrivedLids.setColorAt(lid, SCRATCH.setHex(ARRIVED_LID));
       }
     }
     flush(ownerCrates);
     flush(arrivedLids);
+    drawnCart = { draft: counter.draft, arrived: counter.arrived };
   }
+  let drawnCart = { draft: 0, arrived: 0 };
 
   // ---------------------------------------------------------------------
   // Shoppers.
@@ -1545,6 +1579,8 @@ export function createMarketScene(
     renderer.setSize(host.clientWidth, host.clientHeight, false);
     camera.aspect = host.clientWidth / host.clientHeight;
     camera.updateProjectionMatrix();
+    // The close-up cart's size follows the camera's framing.
+    if (appearance) fillOwnerCart(appearance);
     if (appearance) aim(!easing);
     draw();
   });
@@ -1559,6 +1595,8 @@ export function createMarketScene(
   host.setAttribute("data-market-shoppers", "0");
   host.setAttribute("data-market-cart", "0");
   host.setAttribute("data-market-arrived", "0");
+  host.setAttribute("data-market-cart-total", "0");
+  host.setAttribute("data-market-arrived-total", "0");
   host.setAttribute("data-market-vendor", "");
 
   return {
@@ -1587,27 +1625,19 @@ export function createMarketScene(
         "data-market-containers",
         String(built.layout.containers.length),
       );
+      // What is drawn on the owner's cart, and what was asked for.
+      const total = (lines: { crates: number }[]) =>
+        lines.reduce(
+          (sum, line) =>
+            sum + (Number.isFinite(line.crates) ? Math.max(0, line.crates) : 0),
+          0,
+        );
+      host.setAttribute("data-market-cart", String(drawnCart.draft));
+      host.setAttribute("data-market-arrived", String(arrivedLids.count));
+      host.setAttribute("data-market-cart-total", String(total(next.cart)));
       host.setAttribute(
-        "data-market-cart",
-        String(
-          next.cart.reduce(
-            (sum, line) =>
-              sum +
-              (Number.isFinite(line.crates) ? Math.max(0, line.crates) : 0),
-            0,
-          ),
-        ),
-      );
-      host.setAttribute(
-        "data-market-arrived",
-        String(
-          (next.arrived ?? []).reduce(
-            (sum, line) =>
-              sum +
-              (Number.isFinite(line.crates) ? Math.max(0, line.crates) : 0),
-            0,
-          ),
-        ),
+        "data-market-arrived-total",
+        String(total(next.arrived ?? [])),
       );
       host.setAttribute("data-market-vendor", next.focusedVendor ?? "");
       // A product named by the pointer stops being named when its stall is
@@ -1676,6 +1706,8 @@ export function createMarketScene(
         "data-market-shoppers",
         "data-market-cart",
         "data-market-arrived",
+        "data-market-cart-total",
+        "data-market-arrived-total",
         "data-market-vendor",
         "data-market-hit",
       ])

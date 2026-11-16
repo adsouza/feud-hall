@@ -25,6 +25,7 @@
     forRestaurant,
     market as draft,
     views,
+    webglAvailable,
     type Delivery,
   } from "./market-state.svelte";
   import type {
@@ -284,7 +285,7 @@
   // The scene, when WebGL and the width allow; the list is always there.
   // ---------------------------------------------------------------------
   let panelWidth = $state(0);
-  let webgl = $state(true);
+  let webgl = $state(webglAvailable());
   let failed = $state(false);
   let motion = $state(true);
   let host = $state<HTMLDivElement>();
@@ -303,29 +304,46 @@
     fail: () => (failed = true),
   };
 
+  // The scene is created the first time its host comes on screen and draws
+  // only while it is on screen (and the Supply section is shown).
+  let onScreen = $state(false);
   $effect(() => {
     const element = host;
     if (!element) return;
     let live = true;
+    let started = false;
     let created: MarketScene | null = null;
-    void import("./market-scene")
-      .then(({ createMarketScene }) => {
-        if (!live) return;
-        try {
-          created = createMarketScene(element, actions);
-          lastKey = "";
-          scene = created;
-        } catch {
-          webgl = false;
-        }
-      })
-      .catch(() => {
-        if (live) webgl = false;
-      });
+    const start = () => {
+      if (started) return;
+      started = true;
+      void import("./market-scene")
+        .then(({ createMarketScene }) => {
+          if (!live) return;
+          try {
+            created = createMarketScene(element, actions);
+            lastKey = "";
+            scene = created;
+          } catch {
+            webgl = false;
+          }
+        })
+        .catch(() => {
+          if (live) webgl = false;
+        });
+    };
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (!entry) return;
+      onScreen = entry.isIntersecting;
+      if (onScreen) start();
+    });
+    observer.observe(element);
     return () => {
       live = false;
+      observer.disconnect();
       created?.dispose();
       scene = null;
+      onScreen = false;
       hoverProduct = "";
       rival = "";
     };
@@ -374,7 +392,7 @@
     scene.update(next);
   });
   $effect(() => {
-    scene?.setVisible(visible);
+    scene?.setVisible(visible && onScreen);
   });
 
   // ---------------------------------------------------------------------

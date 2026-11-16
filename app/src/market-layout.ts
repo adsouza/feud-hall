@@ -19,6 +19,8 @@ export const STALL_MARGIN = 0.3;
 export const STALL_GAP = 1.5;
 /** Fewest columns a stall's shelves have. */
 export const MIN_COLUMNS = 3;
+/** How far right of a stall's centre its close-up looks, making room for the owner's cart. */
+export const CLOSE_UP_SHIFT = (2 * STALL_GAP) / 3;
 /** Where shoppers walk: just in front of the stalls, so a close-up shows them. */
 export const AISLE_Z = 1.2;
 /** How far beyond the row's ends a shopper enters and leaves. */
@@ -183,9 +185,15 @@ export function vendorPose(
   stall: Pick<Stall, "x" | "width" | "height" | "depth">,
   aspect = 16 / 9,
 ): CameraPose {
-  // Down to the aisle in front, and wide enough for the cart parked beside.
+  // Down to the aisle in front, and wide enough for the cart parked beside:
+  // the frame sits CLOSE_UP_SHIFT right of the stall's centre, leaving the
+  // room at the right where the owner's cart stands.
   return frame(
-    [stall.x, (stall.height + 1.4) / 2 - 0.35, -stall.depth / 2 + 0.3],
+    [
+      stall.x + CLOSE_UP_SHIFT,
+      (stall.height + 1.4) / 2 - 0.35,
+      -stall.depth / 2 + 0.3,
+    ],
     stall.width + 2 * STALL_GAP,
     apparentHeight(stall) + 0.7,
     aspect,
@@ -330,4 +338,43 @@ export function standingSpot(
     x: stall.x - span / 2 + (k % fit) * STAND_SPACING,
     z: AISLE_Z + ROW_OFFSETS[row % ROW_OFFSETS.length],
   };
+}
+
+/** Crates of each group (draft, arrived) drawn on the owner's cart at most. */
+export const CART_GROUP_CAP = 36;
+/** Crates per layer of one group: three along the basket, three across. */
+const CART_ALONG = 3;
+const CART_ACROSS = 3;
+
+export type CartSlot = {
+  group: "draft" | "arrived";
+  /** Along the basket from the handle: 0..2 hold draft crates, 3..5 arrived ones. */
+  along: number;
+  across: number; // 0..2
+  layer: number;
+};
+
+/**
+ * Where the owner's cart draws its crates: draft crates in the half nearer
+ * the handle, arrived crates in the far half, each group stacked in its own
+ * half so that neither ever hides the other. Each group shows at most
+ * CART_GROUP_CAP crates.
+ */
+export function cartSlots(draft: number, arrived: number): CartSlot[] {
+  const out: CartSlot[] = [];
+  const group = (kind: CartSlot["group"], count: number, offset: number) => {
+    const n = Math.min(CART_GROUP_CAP, Math.max(0, Math.floor(count) || 0));
+    for (let k = 0; k < n; k++) {
+      const inLayer = k % (CART_ALONG * CART_ACROSS);
+      out.push({
+        group: kind,
+        along: offset + (inLayer % CART_ALONG),
+        across: Math.floor(inLayer / CART_ALONG),
+        layer: Math.floor(k / (CART_ALONG * CART_ACROSS)),
+      });
+    }
+  };
+  group("draft", draft, 0);
+  group("arrived", arrived, CART_ALONG);
+  return out;
 }
