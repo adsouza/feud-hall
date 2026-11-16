@@ -5,10 +5,10 @@
 1. **Whether to accept the product looks.** Every one of the 274 products was
    given a vendor and a shape by judgement, and about 25 were close calls. See
    [Product looks that were judgement calls](#product-looks-that-were-judgement-calls).
-2. **Whether the missing arrival animation matters.** The design said crates
-   arrive on the owner's cart when an order fills. They do not: a filled order
-   is reported in the "On its way" list. See
-   [What was not built](#what-was-not-built).
+2. **Whether the arrived-crates mark reads well.** Filled crates now arrive on
+   the owner's cart, closed with a green lid. At the close-up camera distance
+   the cart is small, so the draft and arrived crates are both only a few
+   pixels. See [What was built](#what-was-built).
 3. **Whether the tuning values stand.** Crate size, the three cart sizes, six
    clearings kept, the "low" level, the 10% price limit and the 60 seconds a
    settled line stays are proposed defaults, not measured. See
@@ -36,6 +36,11 @@ the branch `supply-market`. The rules now live in the
   "Send order", which sends one purchase request per line through the same path
   the text form uses. Sent lines sit under "On its way" until the clearing
   reports what happened to them.
+- **Filled crates arrive on the owner's cart.** While a filled or short line is
+  listed, its crates (filled units divided by the crate size, rounded up) stand
+  on the cart under the draft, closed with a green lid, and leave with the line;
+  the legend explains the lid. This was added after the documentation task,
+  because the plan had left out this part of the design.
 - **Stars, markers and a legend.** Supplies the owner's menu uses are starred.
   Low stock has a red tag, empty has a grey tag, and frozen, value and preserved
   substitutes look different. A one-time note explains the stars and fades; a
@@ -283,8 +288,8 @@ Changing one is a one-line edit in `market-goods.json`.
 
 Each is one line. None blocks use.
 
-- **Crates do not arrive on the cart when an order fills.** The design said they
-  would; a fill is shown in "On its way" instead.
+- **The cart is small in the close-up,** so arrived and draft crates are only a
+  few pixels each; the green lids tell them apart when looked at closely.
 - **The whole-row view leaves a lot of empty ground** above and below the row.
 - **The app's "Updated" toast briefly overlaps the cart's right edge** after a
   send (existing behaviour).
@@ -400,8 +405,6 @@ Proposed defaults, easy to change, validated by no measurement:
 
 ## What was not built
 
-- **Crates arriving on the owner's cart** when a fill commits (see the first
-  decision above and [Known limitations](#known-limitations)).
 - **A frame-rate bench**, as the spec asked for none.
 
 ## Final review

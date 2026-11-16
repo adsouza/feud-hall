@@ -211,3 +211,24 @@ export function track(
   }
   return out;
 }
+
+/**
+ * Crates to draw as arrived on the owner's cart: one entry per filled or short
+ * line, ceil(filled / crate) at the product's current crate size. Lines in
+ * any other state, and products without a usable crate size, add nothing.
+ */
+export function arrivedCrates(
+  lines: { product: string; state: string; filled: number }[],
+  market: Record<string, { crate?: number }>,
+): { product: string; crates: number }[] {
+  const out: { product: string; crates: number }[] = [];
+  for (const line of lines) {
+    if (line.state !== "filled" && line.state !== "short") continue;
+    const crate = market[line.product]?.crate;
+    if (typeof crate !== "number" || !Number.isInteger(crate) || crate <= 0)
+      continue;
+    if (!Number.isFinite(line.filled) || line.filled <= 0) continue;
+    out.push({ product: line.product, crates: Math.ceil(line.filled / crate) });
+  }
+  return out;
+}

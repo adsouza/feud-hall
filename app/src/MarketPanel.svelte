@@ -6,6 +6,7 @@
   import { goodFor, shelves, type VendorId } from "./market-goods";
   import {
     addCrate,
+    arrivedCrates,
     lineEstimate,
     lineNotes,
     reprice,
@@ -239,6 +240,17 @@
       };
     });
   });
+  // Crates the server filled, on the cart while their line is listed.
+  let arrived = $derived(
+    arrivedCrates(
+      [...tracked].reverse().map((item) => ({
+        product: item.sent.product,
+        state: item.state,
+        filled: item.filled,
+      })),
+      restaurant.market,
+    ),
+  );
   let now = $state(Date.now());
   // A line leaves the list a minute after it stops being pending.
   $effect(() => {
@@ -350,6 +362,7 @@
       product: line.product,
       crates: line.crates,
     })),
+    arrived,
     focusedVendor: draft.vendor,
     selected: draft.selected,
     trips,
@@ -369,6 +382,7 @@
       next.market,
       next.starred,
       next.cart,
+      next.arrived,
       next.focusedVendor,
       next.selected,
       next.trips,
@@ -561,6 +575,10 @@
           <li>
             <span class="market-star" aria-hidden="true">★</span>
             {t("starredSupply")}
+          </li>
+          <li>
+            <span class="swatch swatch-arrived" aria-hidden="true"></span>
+            {t("legendArrived")}
           </li>
           <li>
             <span class="swatch swatch-low" aria-hidden="true"></span>
@@ -860,6 +878,11 @@
     border-radius: 0.2rem;
     border: 2px solid #4a3626;
     background: #fff8e8;
+  }
+  .swatch-arrived {
+    background: #b07a3c;
+    border-color: #4a3626;
+    border-top: 4px solid #2fbf5f;
   }
   .swatch-low {
     border-color: #e2412b;

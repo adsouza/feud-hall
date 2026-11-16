@@ -571,13 +571,14 @@ qualifies hardware rendering or frame rate.
 | Spec | What it pins |
 | --- | --- |
 | `market-goods.spec.ts` | `goodFor`, `hasGood` and `shelves` (fallback to a plain carton at the pantry, a substitute directly after its primary, sorted output) and that every vendor label exists in English and Japanese. |
-| `market-cart.spec.ts` | The cart model: exact decimal-string limits (the 10% default rounded up, including a 30-digit price), requests with exactly four keys, `requestIdFor`, `track`, and a property with one assertion per run. |
+| `market-cart.spec.ts` | The cart model: exact decimal-string limits (the 10% default rounded up, including a 30-digit price), requests with exactly four keys, `requestIdFor`, `track`, `arrivedCrates`, and a property with one assertion per run. |
 | `market-layout.spec.ts` | Stall layout and trip routes, the click rule (a container adds only from a focused vendor; a shopper never blocks a click), and `stageTrips` (a seen clearing is never staged again). |
 | `people.spec.ts` | Includes the cart-pushing pose: hands at handle height for any look, still arms, and precedence over carrying and sitting. |
-| `market.spec.ts` | The panel on the Business page against the built client: add, send, pending, filled or short; a price limit exceeded; a rival's fill as an unlabelled shopper; list-only without WebGL and after a scene failure; the star note; drafts surviving refresh and leaving the section; an uncertain send resolved by its command ID; a replacing request; a canvas click at `data-market-hit`; the hall's Stock link; every string in Japanese; malformed server data. |
+| `market.spec.ts` | The panel on the Business page against the built client: add, send, pending, filled or short, with the filled crates arriving on the cart and leaving with their line; a price limit exceeded; a rival's fill as an unlabelled shopper; list-only without WebGL and after a scene failure; the star note; drafts surviving refresh and leaving the section; an uncertain send resolved by its command ID; a replacing request; a canvas click at `data-market-hit`; the hall's Stock link; every string in Japanese; malformed server data. |
 
 The scene exposes `data-market-containers`, `data-market-shoppers`,
-`data-market-cart`, `data-market-vendor` and `data-market-hit` on its host for
+`data-market-cart` (the draft), `data-market-arrived` (crates of committed
+fills on the cart), `data-market-vendor` and `data-market-hit` on its host for
 tests. `data-market-hit="<product>:<x>,<y>"` gives CSS pixels inside the canvas
 for the selected container once the camera has settled, so a test can click a
 real container. Not covered by any automated check: the frame rate of the market

@@ -563,6 +563,8 @@ The public hall view gains `market_trips`: for each of the kept clearings, per r
 
 **Uncertain sends.** When the response to a send is lost, the line stays "Sent, not yet confirmed" under its command ID, and sending stops with the remaining lines kept in the cart, because the app holds one uncertain command at a time. The only resend is the app's existing Retry, which reuses the same command ID and payload. `deliver` calls `resolveSent` after every delivery, including a retry made while the Supply section is not mounted: accepted, the line is tracked normally against `purchases`; refused, it leaves "On its way" and the app's banner shows the refusal. The panel never sends again under a new ID. When the server reports no `purchases` (an older server) an accepted line says only that it was sent.
 
+**Arrived crates.** The panel passes the scene `arrived`, built by `arrivedCrates` in `market-cart.ts` from the listed "On its way" lines that are filled or short: `ceil(filled / crate)` at the product's current crate size, nothing for a product without one, and nothing for any other state. The scene draws them on the owner's cart first, under the draft, each with a lid in one fixed colour, capped per line and overall like the draft. They leave with their line. The host reports `data-market-arrived` (the uncapped total) beside `data-market-cart` (the draft total). Only committed fills put a crate there.
+
 **Proposed defaults.** The tuning values are in [the supply market](GAME_DESIGN.md#the-supply-market): `LOW_LEVEL` 300, a 60-second stay for a settled line, at most eight rivals, a 720 px panel for the picture, and in the cart a 10% default limit and 99 crates per line.
 
 ### Transport and credential boundaries

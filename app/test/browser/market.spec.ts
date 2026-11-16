@@ -296,9 +296,13 @@ test("market: add a crate, send, see it pending, then filled", async ({
   await expect(way).toContainText(
     fill(en("orderFilled"), { units: 2 * crate, cost: "$12.34" }),
   );
-  // It leaves a minute after it stopped being pending.
+  // The filled crates arrive on the cart, apart from the (empty) draft.
+  await expect(host).toHaveAttribute("data-market-arrived", "2");
+  await expect(host).toHaveAttribute("data-market-cart", "0");
+  // It leaves a minute after it stopped being pending, and so do its crates.
   await page.clock.fastForward(61_000);
   await expect(way).toHaveCount(0);
+  await expect(host).toHaveAttribute("data-market-arrived", "0");
   expect(owner.commands).toHaveLength(1);
 });
 
@@ -308,12 +312,16 @@ test("market: a short fill says how much arrived and why", async ({
 }) => {
   const owner = await marketOwner(page, hall);
   const [product] = owner.products;
+  const crate = owner.restaurant.market[product].crate!;
+  const host = panelOf(page).locator("[data-market-scene]");
   const sent = await sendTwoCrates(page, owner, product);
+  // One crate and one unit of the next arrived; the rest did not.
+  const filled = crate + 1;
   await owner.serve(
     cleared(sent, {
-      requested: 2000,
-      filled: 500,
-      short: 1500,
+      requested: 2 * crate,
+      filled,
+      short: 2 * crate - filled,
       cost: "300",
       reason: "stock_exhausted",
     }),
@@ -322,10 +330,14 @@ test("market: a short fill says how much arrived and why", async ({
   await expect(way).toHaveAttribute("data-way-state", "short");
   await expect(way).toContainText(
     fill(en("orderShort"), {
-      arrived: 500,
-      missing: 1500,
+      arrived: filled,
+      missing: 2 * crate - filled,
       reason: refusalMessage("en", "stock_exhausted"),
     }),
+  );
+  await expect(host).toHaveAttribute(
+    "data-market-arrived",
+    String(Math.ceil(filled / crate)),
   );
 });
 
@@ -371,6 +383,10 @@ test("market: a price above the limit is noted before sending and comes back rej
     fill(en("orderRejected"), {
       reason: refusalMessage("en", "price_above_limit"),
     }),
+  );
+  await expect(panel.locator("[data-market-scene]")).toHaveAttribute(
+    "data-market-arrived",
+    "0",
   );
 });
 
@@ -503,6 +519,7 @@ test("market: the star note shows once, fades, and the legend stays", async ({
   const legend = panel.locator(".market-legend");
   for (const key of [
     "starredSupply",
+    "legendArrived",
     "legendLow",
     "legendEmpty",
     "legendFrozen",
@@ -772,6 +789,7 @@ test("market: every market string exists in Japanese", async ({
     "openMarket",
     "rivalShopping",
     "legend",
+    "legendArrived",
     "legendLow",
     "legendEmpty",
     "legendFrozen",

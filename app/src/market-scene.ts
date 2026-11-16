@@ -50,7 +50,9 @@ export type MarketAppearance = {
     { price: string; stock: number; crate?: number; level?: number }
   >;
   starred: string[]; // products the owner's menu uses
-  cart: { product: string; crates: number }[];
+  cart: { product: string; crates: number }[]; // the draft
+  /** Crates the server filled for the owner, drawn closed on the cart. */
+  arrived: { product: string; crates: number }[];
   focusedVendor: VendorId | null; // null: the row
   selected: string; // product highlighted from the list, or ""
   trips: {
@@ -156,6 +158,8 @@ const CRATE_COLOURS: Record<VariantId, number> = {
   shelf: 0xcfae80,
 };
 const OWNER_CART = 0xff9e57;
+/** The lid on a crate that arrived, so it is not taken for the draft. */
+const ARRIVED_LID = 0x2fbf5f;
 const RIVAL_CART = 0x8b96a3;
 
 const SCRATCH = new T.Color();
@@ -504,6 +508,7 @@ export function createMarketScene(
   // The owner's cart and the rivals' carts share one batch; slot 0 is the owner's.
   const carts = instanced(cartGeo, solid, MAX_SHOPPERS + 1);
   const ownerCrates = instanced(unitBox, solid, 120);
+  const arrivedLids = instanced(unitBox, solid, 120);
   const rivalPieces = new Map(
     SHAPES.map(
       (shape) =>
@@ -517,9 +522,9 @@ export function createMarketScene(
         ] as const,
     ),
   );
-  for (const mesh of [carts, ownerCrates, ...rivalPieces.values()])
+  for (const mesh of [carts, ownerCrates, arrivedLids, ...rivalPieces.values()])
     mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
-  scene.add(carts, ownerCrates, ...rivalPieces.values());
+  scene.add(carts, ownerCrates, arrivedLids, ...rivalPieces.values());
 
   const faces = createFaceTexture();
   const people = createPeople(MAX_SHOPPERS, faces, 1);
@@ -1071,7 +1076,13 @@ export function createMarketScene(
     const pitchX = (BASKET.w - 0.05) / 4;
     const pitchZ = (BASKET.d - 0.05) / 6;
     let slot = 0;
-    for (const line of next.cart) {
+    arrivedLids.count = 0;
+    // Arrived crates first, at the bottom, so new draft crates never hide them.
+    const lines = [
+      ...(next.arrived ?? []).map((line) => ({ ...line, arrived: true })),
+      ...next.cart.map((line) => ({ ...line, arrived: false })),
+    ];
+    for (const line of lines) {
       const crates = Math.min(
         CART_CRATES_PER_LINE,
         Math.max(0, Math.floor(line.crates)),
@@ -1098,10 +1109,23 @@ export function createMarketScene(
           size,
         );
         ownerCrates.setColorAt(index, SCRATCH.setHex(colour));
+        if (line.arrived) {
+          const lid = place(
+            arrivedLids,
+            spot.x - lx,
+            BASKET.y + 0.02 + size + layer * size + 0.012,
+            spot.z - lz,
+            size * 1.15,
+            0.024,
+            size * 1.15,
+          );
+          arrivedLids.setColorAt(lid, SCRATCH.setHex(ARRIVED_LID));
+        }
         slot++;
       }
     }
     flush(ownerCrates);
+    flush(arrivedLids);
   }
 
   // ---------------------------------------------------------------------
@@ -1532,6 +1556,7 @@ export function createMarketScene(
   host.setAttribute("data-market-containers", "0");
   host.setAttribute("data-market-shoppers", "0");
   host.setAttribute("data-market-cart", "0");
+  host.setAttribute("data-market-arrived", "0");
   host.setAttribute("data-market-vendor", "");
 
   return {
@@ -1564,6 +1589,17 @@ export function createMarketScene(
         "data-market-cart",
         String(
           next.cart.reduce(
+            (sum, line) =>
+              sum +
+              (Number.isFinite(line.crates) ? Math.max(0, line.crates) : 0),
+            0,
+          ),
+        ),
+      );
+      host.setAttribute(
+        "data-market-arrived",
+        String(
+          (next.arrived ?? []).reduce(
             (sum, line) =>
               sum +
               (Number.isFinite(line.crates) ? Math.max(0, line.crates) : 0),
@@ -1605,7 +1641,12 @@ export function createMarketScene(
       built = null;
       people.dispose();
       faces?.dispose();
-      for (const mesh of [carts, ownerCrates, ...rivalPieces.values()])
+      for (const mesh of [
+        carts,
+        ownerCrates,
+        arrivedLids,
+        ...rivalPieces.values(),
+      ])
         mesh.dispose();
       for (const geometry of [
         unitBox,
@@ -1632,6 +1673,7 @@ export function createMarketScene(
         "data-market-containers",
         "data-market-shoppers",
         "data-market-cart",
+        "data-market-arrived",
         "data-market-vendor",
         "data-market-hit",
       ])

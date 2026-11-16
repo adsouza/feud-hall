@@ -3,6 +3,7 @@ import { expect, test } from "./hall";
 import {
   MAX_CRATES,
   addCrate,
+  arrivedCrates,
   defaultLimit,
   emptyCart,
   lineEstimate,
@@ -283,4 +284,35 @@ test("cart: arithmetic never passes through a float", () => {
     }),
   );
   expect(bad).toEqual([]);
+});
+
+test("cart: arrived crates are ceil(filled / crate) for filled and short lines only", () => {
+  const market = {
+    a: { crate: 500 },
+    b: { crate: 200 },
+    c: {},
+    d: { crate: 0 },
+  };
+  expect(
+    arrivedCrates(
+      [
+        { product: "a", state: "filled", filled: 1000 },
+        { product: "b", state: "short", filled: 201 },
+        { product: "a", state: "short", filled: 1 },
+        { product: "a", state: "rejected", filled: 0 },
+        { product: "a", state: "pending", filled: 0 },
+        { product: "a", state: "settled", filled: 0 },
+        { product: "a", state: "sent", filled: 0 },
+        { product: "a", state: "unconfirmed", filled: 0 },
+        { product: "c", state: "filled", filled: 500 },
+        { product: "d", state: "filled", filled: 500 },
+        { product: "gone", state: "filled", filled: 500 },
+      ],
+      market,
+    ),
+  ).toEqual([
+    { product: "a", crates: 2 },
+    { product: "b", crates: 2 },
+    { product: "a", crates: 1 },
+  ]);
 });
