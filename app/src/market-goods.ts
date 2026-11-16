@@ -105,21 +105,38 @@ export function goodFor(productId: string): Good {
 export function shelves(
   productIds: string[],
 ): { vendor: VendorId; products: string[] }[] {
+  return shelvesOf(productIds, goodFor);
+}
+
+/**
+ * `shelves` over any lookup. Every given ID appears exactly once. A
+ * substitute follows its primary only when that primary is on offer at the
+ * same vendor and is not itself a substitute; otherwise it stands as a
+ * primary.
+ */
+export function shelvesOf(
+  productIds: string[],
+  lookup: (id: string) => Pick<Good, "vendor" | "beside">,
+): { vendor: VendorId; products: string[] }[] {
   const given = new Set(productIds);
   const byVendor = new Map<VendorId, string[]>();
   for (const id of [...given].sort()) {
-    const { vendor } = goodFor(id);
+    const { vendor } = lookup(id);
     byVendor.set(vendor, [...(byVendor.get(vendor) ?? []), id]);
   }
+  const primaryOf = (id: string): string | undefined => {
+    const { vendor, beside } = lookup(id);
+    if (beside === undefined || beside === id || !given.has(beside))
+      return undefined;
+    const primary = lookup(beside);
+    return primary.vendor === vendor && primary.beside === undefined
+      ? beside
+      : undefined;
+  };
   const result: { vendor: VendorId; products: string[] }[] = [];
   for (const vendor of VENDORS) {
     const ids = byVendor.get(vendor);
     if (!ids) continue;
-    // A substitute whose primary is not on offer stands as a primary itself.
-    const primaryOf = (id: string): string | undefined => {
-      const beside = goodFor(id).beside;
-      return beside !== undefined && given.has(beside) ? beside : undefined;
-    };
     const products: string[] = [];
     for (const id of ids) {
       if (primaryOf(id) !== undefined) continue;

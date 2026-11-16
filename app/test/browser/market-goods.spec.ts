@@ -1,11 +1,14 @@
 import { readFileSync } from "node:fs";
+import fc from "fast-check";
 import { expect, test } from "./hall";
 import {
   VENDORS,
   goodFor,
   hasGood,
   shelves,
+  shelvesOf,
   type Good,
+  type VendorId,
 } from "../../src/market-goods";
 
 const read = (path: string) =>
@@ -107,4 +110,57 @@ test("goods: every vendor has an English and a Japanese name", () => {
   }
   expect(names["en:dairy"]).toBe("Dairy and eggs");
   expect(names["ja:greengrocer"]).toBe("青果店");
+});
+
+test("goods: every entry in the file is valid (a misspelt vendor or shape would fall back silently)", () => {
+  const invalid = ids.filter((id) => !hasGood(id));
+  expect(invalid).toEqual([]);
+});
+
+test("goods: shelves list every given product exactly once, whatever the entries say", () => {
+  const problems: string[] = [];
+  const entry = fc.record({
+    vendor: fc.constantFrom(...VENDORS),
+    // Points at another product (any vendor, possibly a substitute itself,
+    // possibly not on offer, possibly itself), or at nothing.
+    beside: fc.option(fc.integer({ min: 0, max: 11 }), { nil: undefined }),
+  });
+  fc.assert(
+    fc.property(
+      fc.array(entry, { minLength: 1, maxLength: 12 }),
+      fc.array(fc.boolean(), { minLength: 12, maxLength: 12 }),
+      (entries, offered) => {
+        const table = new Map<string, { vendor: VendorId; beside?: string }>(
+          entries.map((e, i) => [
+            `p${i}`,
+            e.beside === undefined
+              ? { vendor: e.vendor }
+              : { vendor: e.vendor, beside: `p${e.beside}` },
+          ]),
+        );
+        const given = [...table.keys()].filter((_, i) => offered[i] ?? true);
+        const lookup = (id: string) =>
+          table.get(id) ?? { vendor: "pantry" as const };
+        const listed = shelvesOf(given, lookup).flatMap((s) => s.products);
+        const sorted = (list: string[]) => [...list].sort().join();
+        if (sorted(listed) !== sorted(given))
+          problems.push(JSON.stringify({ table: [...table], given, listed }));
+      },
+    ),
+    { numRuns: 500, seed: 20261115 },
+  );
+  expect(problems.slice(0, 3)).toEqual([]);
+});
+
+test("goods: a substitute whose primary is elsewhere or is a substitute stands as a primary", () => {
+  const table: Record<string, { vendor: VendorId; beside?: string }> = {
+    a: { vendor: "grains" },
+    b: { vendor: "grains", beside: "a" },
+    c: { vendor: "grains", beside: "b" }, // primary is itself a substitute
+    d: { vendor: "spices", beside: "a" }, // primary at another vendor
+  };
+  expect(shelvesOf(Object.keys(table), (id) => table[id]!)).toEqual([
+    { vendor: "grains", products: ["a", "b", "c"] },
+    { vendor: "spices", products: ["d"] },
+  ]);
 });
