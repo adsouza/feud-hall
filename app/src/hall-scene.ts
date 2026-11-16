@@ -37,6 +37,12 @@ import {
   type Pose,
 } from "./people";
 import { ROOM_BUDGET, createDinerFloor, type FloorFigure } from "./diner-floor";
+import {
+  rollTo,
+  rolling,
+  shutterLevel,
+  type ShutterRoll,
+} from "./shutter-roll";
 import { createFaceTexture, createPeople } from "./people-mesh";
 
 type Point = [number, number, number];
@@ -113,6 +119,7 @@ type Counter = {
   hit: T.Mesh;
   edge: T.Mesh;
   shutters: T.Mesh;
+  roll?: ShutterRoll;
   sign: T.Mesh<T.PlaneGeometry, T.MeshBasicMaterial>;
   tablet: T.Mesh<T.PlaneGeometry, T.MeshBasicMaterial>;
   reopening: T.Group;
@@ -986,6 +993,7 @@ export function createHallScene(
   let hasHallView = false;
   let lastFrame = 0;
   let drawnPeople = -1;
+  let drawnShutters = -1;
   const heldArrows = new Set<string>();
   let shiftHeld = false;
 
@@ -998,11 +1006,21 @@ export function createHallScene(
     carriedTrays.count = 0;
     people.begin();
     const time = appearance.motion ? now / 1000 : 0;
+    let shuttersMoving = 0;
     for (const [id, model] of stalls) {
       const level = shown.get(model.placement.room);
       if (!level) {
         model.detailed = false;
         continue;
+      }
+      if (model.roll) {
+        // The shutter hangs from the canopy: its bottom edge rolls down.
+        const lowered = shutterLevel(model.roll, now);
+        model.shutters.visible = lowered > 0;
+        model.shutters.scale.y = Math.max(lowered, 1e-3);
+        model.shutters.position.y = 1.38 + (SHUTTER_HEIGHT * (1 - lowered)) / 2;
+        model.reopening.visible = lowered >= 1 && !model.open;
+        if (rolling(model.roll, now)) shuttersMoving++;
       }
       const nearby =
         camera.position.distanceToSquared(model.root.position) < 28 ** 2;
@@ -1078,6 +1096,10 @@ export function createHallScene(
       drawnPeople = people.count;
       host.setAttribute("data-hall-people", String(drawnPeople));
     }
+    if (shuttersMoving !== drawnShutters) {
+      drawnShutters = shuttersMoving;
+      host.setAttribute("data-hall-shutters-moving", String(drawnShutters));
+    }
     if (floorWalking !== drawnWalking) {
       drawnWalking = floorWalking;
       host.setAttribute("data-hall-walking", String(drawnWalking));
@@ -1117,11 +1139,17 @@ export function createHallScene(
         stall.activity &&
         (stall.activity.waiting > 0 || stall.activity.staging),
     );
+    const now = performance.now();
     const activeMotion =
       pickupHands.active ||
       heldArrows.size > 0 ||
+      // One more frame after the last roll ends draws the settled shutter.
+      drawnShutters > 0 ||
+      appearance.stalls.some((stall) =>
+        rolling(stalls.get(stall.stall_id)?.roll, now),
+      ) ||
       (appearance.motion &&
-        (floor.moving(performance.now()) || (appearance.detail && active)));
+        (floor.moving(now) || (appearance.detail && active)));
     const idleMotion =
       !activeMotion &&
       appearance.motion &&
@@ -1881,8 +1909,13 @@ export function createHallScene(
             : idleTablet.material;
         model.activity = stall.activity;
         model.open = stall["open?"];
-        model.shutters.visible = !model.open;
-        model.reopening.visible = !model.open;
+        // A counter seen for the first time, or any counter under reduced
+        // motion, rests at its committed state; otherwise the shutter rolls.
+        model.roll = rollTo(
+          next.motion ? model.roll : undefined,
+          !model.open,
+          now,
+        );
         if (!model.open) {
           paintPlacard(
             model,

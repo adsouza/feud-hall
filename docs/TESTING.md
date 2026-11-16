@@ -695,6 +695,11 @@ eye level facing an open stall in the real scene, and the overview kept on
 return with nothing selected. Its browser probe inspects the actual WebGL view matrix for arrow/Shift entry,
 eye height, level heading, continued movement and restoration after navigation.
 
+`app/test/browser/hall-shutters.spec.ts` checks the live hall's stall shutters: a
+stall served closed rolls its shutter down (the host's
+`data-hall-shutters-moving` count reads 1 while it moves and 0 once settled),
+and under reduced motion the shutter snaps without ever reading above 0.
+
 `tray-pickup.spec.ts` checks private served-course eligibility and deduplication,
 real ray clicks on a served tray, reaching/taking animation, reduced-motion F-key
 collection, and absence after scene remount. It verifies that collection changes
