@@ -1,3 +1,10 @@
+<script module lang="ts">
+  // How long the first load may go unanswered before the opening intro plays.
+  export const INTRO_DELAY_MS = 1500;
+  // Space between the waiting caption and the intro below it, in pixels.
+  const INTRO_CAPTION_GAP = 12;
+</script>
+
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import { isTauri } from "@tauri-apps/api/core";
@@ -197,6 +204,96 @@
   function reloadClient() {
     location.reload();
   }
+  // A slow first load plays the hall opening intro below the navigation, with
+  // the waiting status as its caption. It is decorative: the first view is
+  // applied at once and the intro dissolves over it.
+  let intro = $state<"idle" | "playing" | "ending">("idle");
+  let HallIntro = $state<
+    (typeof import("./HallIntro.svelte"))["default"] | null
+  >(null);
+  let introInsets = $state({ top: 0, bottom: 0 });
+  let headerElement = $state<HTMLElement>();
+  let mainElement = $state<HTMLElement>();
+  let navigationElement = $state<HTMLElement>();
+  let introCaptionElement = $state<HTMLElement>();
+  const hasView = $derived(view !== null);
+  function startIntro() {
+    if (view || updateRequired || document.hidden) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!webglAvailable()) return;
+    intro = "playing";
+    import("./HallIntro.svelte").then(
+      (module) => {
+        if (intro === "playing") HallIntro = module.default;
+        else retireIntro();
+      },
+      (error) => {
+        console.warn("The hall intro failed to load", error);
+        retireIntro();
+      },
+    );
+  }
+  // Ending or failing returns the intro to idle for the rest of this page load.
+  function retireIntro() {
+    intro = "idle";
+    HallIntro = null;
+  }
+  // The intro's renderer needs WebGL 2; the probe releases its context at once.
+  function webglAvailable() {
+    try {
+      const gl = document.createElement("canvas").getContext("webgl2");
+      gl?.getExtension("WEBGL_lose_context")?.loseContext();
+      return !!gl;
+    } catch {
+      return false;
+    }
+  }
+  // Fills the window from below the waiting caption (or the top of the page
+  // body) down to the navigation when that is fixed at the bottom (phones),
+  // or to the window's bottom.
+  function placeIntro() {
+    if (!mainElement || !navigationElement) return;
+    const top = Math.max(
+      0,
+      introCaptionElement
+        ? introCaptionElement.getBoundingClientRect().bottom + INTRO_CAPTION_GAP
+        : mainElement.getBoundingClientRect().top,
+    );
+    const navigationTop = navigationElement.getBoundingClientRect().top;
+    introInsets = {
+      top,
+      bottom:
+        navigationTop > top
+          ? Math.max(0, window.innerHeight - navigationTop)
+          : 0,
+    };
+  }
+  $effect(() => {
+    if (intro === "idle") return;
+    placeIntro();
+    window.addEventListener("resize", placeIntro);
+    // The header and navigation can change height while the intro plays
+    // (wrapping text, a notice, the language); the stage follows them.
+    const observer = new ResizeObserver(placeIntro);
+    for (const element of [
+      headerElement,
+      mainElement,
+      navigationElement,
+      introCaptionElement,
+    ])
+      if (element) observer.observe(element);
+    return () => {
+      window.removeEventListener("resize", placeIntro);
+      observer.disconnect();
+    };
+  });
+  // The first confirmed view, or a refused protocol, ends a playing intro.
+  $effect(() => {
+    if (!hasView && !updateRequired) return;
+    untrack(() => {
+      if (intro === "playing") intro = "ending";
+    });
+  });
   let updateAvailable = $state(false);
   let checkingClient = false;
   let lastClientCheck = Date.now();
@@ -1028,6 +1125,7 @@
     media.addEventListener("change", reflow);
     window.addEventListener("popstate", pop);
     void refresh();
+    const introTimer = window.setTimeout(startIntro, INTRO_DELAY_MS);
     const timer = window.setInterval(() => {
       if (!document.hidden && Date.now() >= nextPoll) void refresh();
       if (!document.hidden && Date.now() - lastClientCheck >= CLIENT_CHECK_MS)
@@ -1083,6 +1181,7 @@
       media.removeEventListener("change", reflow);
       window.removeEventListener("popstate", pop);
       history.scrollRestoration = scrollRestoration;
+      window.clearTimeout(introTimer);
       window.clearInterval(timer);
       window.clearInterval(presence);
       document.removeEventListener("visibilitychange", resume);
@@ -2403,7 +2502,7 @@
   {/if}
 {/snippet}
 
-<header>
+<header bind:this={headerElement}>
   <div class="brand">
     <img class="brand-icon" src={appIcon} alt="" width="48" height="48" />
     <div><strong>Feud Hall</strong><small>{t("tagline")}</small></div>
@@ -2427,6 +2526,7 @@
 </header>
 
 <nav
+  bind:this={navigationElement}
   class="primary-navigation"
   aria-label={t("mainNavigation")}
   style:--nav-items={navigation.length}
@@ -2458,8 +2558,30 @@
 <span class="sr-only" role="status"
   >{inWorldNotices && updateAvailable && connected ? t("newVersion") : ""}</span
 >
-<main>
-  {#if !connected && !inWorldNotices}<p class="banner" role="status">
+<main bind:this={mainElement}>
+  {#if intro !== "idle"}
+    <div
+      class="intro-stage"
+      data-intro-stage
+      style:top="{introInsets.top}px"
+      style:bottom="{introInsets.bottom}px"
+    >
+      {#if HallIntro}
+        <HallIntro
+          ending={intro === "ending"}
+          {t}
+          onEnded={retireIntro}
+          onFail={retireIntro}
+        />
+      {/if}
+    </div>
+  {/if}
+  {#if (!connected || (!view && intro !== "idle")) && !inWorldNotices}<p
+      class="banner"
+      class:intro-caption={intro !== "idle"}
+      bind:this={introCaptionElement}
+      role="status"
+    >
       {t(connectionProblem)}
       {#if updateRequired && !nativeClient}<button
           type="button"

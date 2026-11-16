@@ -32,7 +32,49 @@ type Edge = {
 /** An opening along a wall, centred on the wall's middle. */
 type Opening = { width: number; fill: "street" | "door" | "open" };
 
-export function createHallShell(scene: T.Scene, redraw: () => void) {
+/** The tables and seats the hall's instanced meshes draw. */
+export function createFurniture() {
+  const tableGeometry: T.BufferGeometry = new T.CylinderGeometry(
+    0.62,
+    0.62,
+    0.07,
+    18,
+  );
+  const seatGeometry: T.BufferGeometry = new T.CylinderGeometry(
+    0.24,
+    0.2,
+    0.46,
+    10,
+  );
+  const tableTop: T.Material = new T.MeshStandardMaterial({
+    color: "#b48a63",
+    roughness: 0.62,
+  });
+  const seat: T.Material = new T.MeshStandardMaterial({
+    color: "#7c3f3a",
+    roughness: 0.8,
+  });
+  return {
+    tableGeometry,
+    seatGeometry,
+    tableTop,
+    seat,
+    dispose() {
+      for (const resource of [tableGeometry, seatGeometry, tableTop, seat])
+        resource.dispose();
+    },
+  };
+}
+
+/**
+ * The rooms' walls, floors, ceilings, tables and seats. A caller that moves
+ * its own stools passes `seats: false`; the shell then draws no seats.
+ */
+export function createHallShell(
+  scene: T.Scene,
+  redraw: () => void,
+  { seats: drawSeats = true }: { seats?: boolean } = {},
+) {
   const rooms = new T.Group();
   const ceilings: T.Group[] = [];
   const edges: Edge[] = [];
@@ -83,14 +125,8 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
     color: "#3b3e4a",
     roughness: 0.95,
   });
-  const tableTop = new T.MeshStandardMaterial({
-    color: "#b48a63",
-    roughness: 0.62,
-  });
-  const seat = new T.MeshStandardMaterial({
-    color: "#7c3f3a",
-    roughness: 0.8,
-  });
+  const furniture = createFurniture();
+  const { tableGeometry, seatGeometry, tableTop, seat } = furniture;
   const diffuser = new T.MeshBasicMaterial({ color: "#ffe3b1" });
   const outdoor = new T.MeshBasicMaterial({ color: "#bac4bd" });
   const views = [0, 0.17, 0.34].map((start) => {
@@ -116,9 +152,7 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
   image.src = street;
 
   // Tables, their legs and their seats, shared by every shown room.
-  const tableGeometry = new T.CylinderGeometry(0.62, 0.62, 0.07, 18);
   const legGeometry = new T.CylinderGeometry(0.07, 0.11, 0.72, 8);
-  const seatGeometry = new T.CylinderGeometry(0.24, 0.2, 0.46, 10);
   const tables = new T.InstancedMesh(tableGeometry, tableTop, TABLE_LIMIT);
   const legs = new T.InstancedMesh(legGeometry, frame, TABLE_LIMIT);
   const seats = new T.InstancedMesh(
@@ -131,6 +165,7 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
     mesh.frustumCulled = false;
     scene.add(mesh);
   }
+  seats.visible = drawSeats;
 
   const transform = new T.Object3D();
   function groupBoxes(parent: T.Group) {
@@ -477,6 +512,7 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
         scene.remove(mesh);
         mesh.dispose();
       }
+      furniture.dispose();
       outdoor.map?.dispose();
       for (const material of [
         plaster,
@@ -489,20 +525,11 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
         tile,
         foundation,
         pavement,
-        tableTop,
-        seat,
         diffuser,
         outdoor,
       ])
         material.dispose();
-      for (const geometry of [
-        box,
-        tableGeometry,
-        legGeometry,
-        seatGeometry,
-        ...views,
-      ])
-        geometry.dispose();
+      for (const geometry of [box, legGeometry, ...views]) geometry.dispose();
     },
   };
 }
