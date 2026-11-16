@@ -7,23 +7,25 @@
   import {
     addCrate,
     arrivedCrates,
+    dismissWay,
     lineEstimate,
     lineNotes,
+    limitInvalid,
+    onItsWay,
+    recordSend,
     reprice,
-    requestIdFor,
     requests,
     setCrates,
     setLimit,
-    track,
     type LineNote,
     type Offer,
-    type Tracked,
+    type WayLine,
   } from "./market-cart";
   import {
     forRestaurant,
     market as draft,
+    views,
     type Delivery,
-    type SentLine,
   } from "./market-state.svelte";
   import type {
     MarketActions,
@@ -62,10 +64,8 @@
   const PRICE = /^[0-9]+$/;
   const STAR_NOTE_KEY = "feudhall.market.starNote";
   const STAR_NOTE_MS = 8000;
-  const LEAVE_MS = 60_000;
   const LOW_LEVEL = 300;
   const SCENE_MIN_WIDTH = 720;
-  const MAX_SENT = 40;
 
   $effect.pre(() => forRestaurant(restaurant.id));
 
@@ -116,7 +116,8 @@
   );
   let pendingRequests = $derived(restaurant.purchases?.pending ?? []);
 
-  // Unedited limits follow the price; lines whose product left the market go.
+  // Unedited limits follow the price; a line whose offer became unusable
+  // stays, shown as unavailable, until the owner removes it.
   $effect(() => {
     const current = offers;
     untrack(() => {
@@ -145,6 +146,17 @@
     draft.cart = setLimit(draft.cart, product, text.trim());
     delete draft.refused[product];
   }
+  /** Typed limit text that cannot be sent; it stays in the field until fixed. */
+  const badLimit = (product: string) => {
+    const text = draft.limitText[product];
+    return text !== undefined && limitInvalid(text);
+  };
+  let anyBadLimit = $derived(
+    draft.cart.lines.some((line) => badLimit(line.product)),
+  );
+  function removeLine(product: string) {
+    changeCrates(product, 0);
+  }
   function chooseVendor(vendor: VendorId | null) {
     draft.vendor = vendor;
     if (
@@ -167,14 +179,15 @@
   // ---------------------------------------------------------------------
   let sending = $state(false);
   async function sendOrder() {
-    if (sending || disabled) return;
+    if (sending || disabled || anyBadLimit) return;
     sending = true;
     try {
       for (const product of draft.cart.lines.map((line) => line.product)) {
         const line = draft.cart.lines.find((l) => l.product === product);
         if (!line) continue;
+        // An unavailable line stays in the cart and is not sent.
         const [payload] = requests({ lines: [line] }, offers, restaurant.id);
-        if (!payload) continue;
+        if (!payload || badLimit(product)) continue;
         const result = await submit("submit_purchase_request", payload);
         if (result.outcome === "skipped") break;
         if (result.outcome === "refused") {
@@ -187,15 +200,13 @@
         delete draft.refused[product];
         delete draft.limitText[product];
         if (result.commandId)
-          draft.sent = [
-            ...draft.sent,
-            {
-              commandId: result.commandId,
-              product,
-              uncertain: result.outcome === "uncertain",
-              leftAt: null,
-            },
-          ].slice(-MAX_SENT);
+          draft.sent = recordSend(draft.sent, {
+            commandId: result.commandId,
+            product,
+            outcome: result.outcome === "uncertain" ? "uncertain" : "accepted",
+            stamp: result.viewStamp,
+            now: Date.now(),
+          });
         // The app holds one uncertain command at a time.
         if (result.outcome === "uncertain") break;
       }
@@ -205,74 +216,39 @@
   }
 
   // ---------------------------------------------------------------------
-  // On its way.
+  // On its way: the server's pending requests and recent outcomes, and this
+  // session's sends it does not list yet (see onItsWay in market-cart.ts).
   // ---------------------------------------------------------------------
-  type Shown = {
-    sent: SentLine;
-    state: Tracked["state"] | "unconfirmed" | "sent";
-    filled: number;
-    short: number;
-    reason: string | null;
-    cost: string | null;
-  };
-  let tracked = $derived.by((): Shown[] => {
-    const purchases = restaurant.purchases;
-    return [...draft.sent].reverse().map((sent): Shown => {
-      const none = { sent, filled: 0, short: 0, reason: null, cost: null };
-      if (sent.uncertain) return { ...none, state: "unconfirmed" };
-      // An older server sends no purchases, so no outcome can be known: say
-      // only that it was sent; like a settled line it leaves after a minute.
-      if (!purchases) return { ...none, state: "sent" };
-      const requestId = requestIdFor(sent.commandId);
-      const [line] = track(
-        [{ requestId, product: sent.product }],
-        purchases.pending,
-        purchases.recent,
-      );
-      const outcome = purchases.recent.find((r) => r.request_id === requestId);
-      return {
-        sent,
-        state: line.state,
-        filled: line.filled,
-        short: line.short,
-        reason: line.reason,
-        cost: outcome?.cost ?? null,
-      };
+  let now = $state(Date.now());
+  let way = $derived(
+    onItsWay({
+      purchases: restaurant.purchases ?? null,
+      sent: draft.sent,
+      viewStamp: views.shown,
+      memory: draft.way,
+      now,
+    }),
+  );
+  // What the list remembers moves on with each view and each second.
+  $effect(() => {
+    const next = way;
+    untrack(() => {
+      if (JSON.stringify(next.memory) !== JSON.stringify(draft.way))
+        draft.way = next.memory;
+      if (JSON.stringify(next.sent) !== JSON.stringify(draft.sent))
+        draft.sent = next.sent;
     });
   });
   // Crates the server filled, on the cart while their line is listed.
   let arrived = $derived(
-    arrivedCrates(
-      [...tracked].reverse().map((item) => ({
-        product: item.sent.product,
-        state: item.state,
-        filled: item.filled,
-      })),
-      restaurant.market,
-    ),
+    arrivedCrates([...way.lines].reverse(), restaurant.market),
   );
-  let now = $state(Date.now());
-  // A line leaves the list a minute after it stops being pending.
-  $effect(() => {
-    const list = tracked;
-    const at = now;
-    untrack(() => {
-      for (const item of list) {
-        const waiting =
-          item.state === "pending" || item.state === "unconfirmed";
-        if (waiting) item.sent.leftAt = null;
-        else if (item.sent.leftAt === null) item.sent.leftAt = at;
-      }
-      const kept = draft.sent.filter(
-        (s) => s.leftAt === null || at - s.leftAt < LEAVE_MS,
-      );
-      if (kept.length !== draft.sent.length) draft.sent = kept;
-    });
-  });
-  function dismiss(commandId: string) {
-    draft.sent = draft.sent.filter((s) => s.commandId !== commandId);
+  function dismiss(requestId: string) {
+    const next = dismissWay(draft.way, draft.sent, requestId);
+    draft.way = next.memory;
+    draft.sent = next.sent;
   }
-  function statusText(item: Shown) {
+  function statusText(item: WayLine) {
     const reason = item.reason ? reasonText(item.reason) : "";
     switch (item.state) {
       case "unconfirmed":
@@ -483,7 +459,8 @@
         <p class="market-rival" class:quiet={!rival} aria-live="polite">
           {rival ? fill("rivalShopping", { name: rival }) : ""}
         </p>
-      {:else}
+      {:else if panelWidth > 0 || failed || !webgl}
+        <!-- Only once the panel is measured: no flash of the list-only note. -->
         <p class="market-mode" data-market-list-only>
           {t(failed ? "marketSceneFailed" : "marketListOnly")}
         </p>
@@ -541,7 +518,7 @@
                       percent: Math.round(level / 10),
                     })}
                   ></meter>
-                  {#if level <= 0}
+                  {#if entry.stock === 0}
                     <span class="market-flag market-empty"
                       >{t("outOfStock")}</span
                     >
@@ -559,7 +536,7 @@
                 type="button"
                 class="market-add"
                 disabled={!offers[id]}
-                aria-label={`${t("addCrate")}: ${title(id)}`}
+                aria-label={fill("addCrateOf", { name: title(id) })}
                 aria-describedby={starred.has(id)
                   ? `market-star-${id}`
                   : undefined}
@@ -576,10 +553,12 @@
             <span class="market-star" aria-hidden="true">★</span>
             {t("starredSupply")}
           </li>
-          <li>
-            <span class="swatch swatch-arrived" aria-hidden="true"></span>
-            {t("legendArrived")}
-          </li>
+          {#if showScene}
+            <li>
+              <span class="swatch swatch-arrived" aria-hidden="true"></span>
+              {t("legendArrived")}
+            </li>
+          {/if}
           <li>
             <span class="swatch swatch-low" aria-hidden="true"></span>
             {t("legendLow")}
@@ -613,9 +592,23 @@
             {#each draft.cart.lines as line (line.product)}
               {@const offer = offers[line.product]}
               {@const name = title(line.product)}
-              <li data-cart-line={line.product}>
+              <li
+                data-cart-line={line.product}
+                data-cart-unavailable={offer ? undefined : ""}
+              >
                 <strong>{name}</strong>
-                {#if offer}
+                {#if !offer}
+                  <p class="market-line-note" data-cart-note="unavailable">
+                    {t("cartLineUnavailable")}
+                  </p>
+                  <button
+                    type="button"
+                    class="market-small"
+                    aria-label={fill("removeLineOf", { name })}
+                    onclick={() => removeLine(line.product)}
+                    >{t("removeLine")}</button
+                  >
+                {:else}
                   <div class="market-line">
                     <span class="market-stepper">
                       <button
@@ -643,17 +636,35 @@
                       ></span
                     >
                   </div>
+                  {@const invalid = badLimit(line.product)}
                   <label class="market-limit"
                     >{t("priceLimit")}<input
                       inputmode="numeric"
                       autocomplete="off"
-                      aria-label={`${t("priceLimit")}: ${name}`}
+                      aria-label={fill("priceLimitOf", { name })}
+                      aria-invalid={invalid}
+                      aria-describedby={invalid
+                        ? `market-limit-error-${line.product}`
+                        : undefined}
                       value={draft.limitText[line.product] ?? line.limit}
                       oninput={(event) =>
                         editLimit(line.product, event.currentTarget.value)}
-                      onblur={() => delete draft.limitText[line.product]}
+                      onblur={() => {
+                        // Valid text is the line's limit now; invalid text stays to be fixed.
+                        if (!badLimit(line.product))
+                          delete draft.limitText[line.product];
+                      }}
                     /></label
                   >
+                  {#if invalid}
+                    <p
+                      class="market-refused"
+                      id={`market-limit-error-${line.product}`}
+                      data-cart-limit-invalid
+                    >
+                      {t("limitInvalid")}
+                    </p>
+                  {/if}
                   <p class="market-estimate">
                     {t("estimate")}
                     <strong>{cash(lineEstimate(line, offer))}</strong>
@@ -676,7 +687,10 @@
         <div class="market-cart-actions">
           <button
             type="button"
-            disabled={disabled || sending || draft.cart.lines.length === 0}
+            disabled={disabled ||
+              sending ||
+              anyBadLimit ||
+              draft.cart.lines.length === 0}
             onclick={sendOrder}>{t("sendOrder")}</button
           >
           <button
@@ -689,18 +703,28 @@
       <div class="market-way">
         <h4>{t("onItsWay")}</h4>
         <ul aria-label={t("onItsWay")} aria-live="polite">
-          {#each tracked as item (item.sent.commandId)}
-            <li data-way-state={item.state}>
+          {#each way.lines as item (item.requestId)}
+            <li
+              data-way-state={item.state}
+              data-way-request={item.requestId}
+              data-way-automated={item.automated ? "" : undefined}
+            >
               <span
-                ><strong>{title(item.sent.product)}</strong>
+                ><strong
+                  >{title(item.product)}{#if item.automated}
+                    <span class="market-variant">{t("marketAutomatic")}</span
+                    >{/if}</strong
+                >
                 {statusText(item)}</span
               >
               {#if item.state !== "unconfirmed"}
                 <button
                   type="button"
                   class="market-small"
-                  aria-label={`${t("marketDismiss")}: ${title(item.sent.product)}`}
-                  onclick={() => dismiss(item.sent.commandId)}>×</button
+                  aria-label={fill("dismissLineOf", {
+                    name: title(item.product),
+                  })}
+                  onclick={() => dismiss(item.requestId)}>×</button
                 >
               {/if}
             </li>

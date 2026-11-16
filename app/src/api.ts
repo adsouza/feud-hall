@@ -109,10 +109,12 @@ export type PurchaseOutcome = {
   cost: Money;
   short: number;
   reason: PurchaseReason | null;
+  /** Restock automation sent it; missing from an older server. */
+  automated?: boolean;
 };
+/** A rival's filled purchases at one of the newest two clearings: nothing more is public. */
 export type MarketTrip = {
   batch: number;
-  at: number;
   restaurant_id: string;
   products: string[];
   size: "small" | "medium" | "large";

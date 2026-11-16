@@ -8,9 +8,11 @@ import {
   cartGoods,
   clickOutcome,
   columnsFor,
+  containerFill,
   fillFor,
   hoveredProduct,
   marketLayout,
+  outOfStock,
   overviewPose,
   stageTrips,
   standingSpot,
@@ -204,6 +206,19 @@ test("market layout: fill and cart goods", () => {
   expect([cartGoods("small"), cartGoods("medium"), cartGoods("large")]).toEqual(
     [2, 5, 9],
   );
+});
+
+test("market layout: out of stock means no stock; a small stock is drawn at the minimum fill", () => {
+  expect(outOfStock(0)).toBe(true);
+  expect(outOfStock(1)).toBe(false);
+  expect(outOfStock(undefined)).toBe(false);
+  expect(containerFill(0, 0)).toBe(0);
+  expect(containerFill(0, 700)).toBe(0);
+  // A positive stock whose level rounds to 0 is low, not empty.
+  expect(containerFill(3, 0)).toBeCloseTo(0.12);
+  expect(containerFill(3, 0)).toBeGreaterThan(0);
+  expect(containerFill(600, 500)).toBeCloseTo(0.5);
+  expect(containerFill(undefined, 1000)).toBe(1);
 });
 
 test("market layout: the camera poses look at what they name", () => {

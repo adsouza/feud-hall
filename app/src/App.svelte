@@ -8,7 +8,13 @@
   import DinerCompare from "./DinerCompare.svelte";
   import HallScene from "./HallScene.svelte";
   import MarketPanel from "./MarketPanel.svelte";
-  import { resolveSent, type Delivery } from "./market-state.svelte";
+  import {
+    resolveSent,
+    viewRequested,
+    viewShown,
+    views,
+    type Delivery,
+  } from "./market-state.svelte";
   import type { CameraState, HallTarget } from "./hall-scene";
   import { splitTabletMessage } from "./tablet-text";
   import { CLIENT_CHECK_MS, newerClientServed } from "./client-version";
@@ -1212,6 +1218,7 @@
     let stale = false;
     let recovered = false;
     try {
+      const stamp = viewRequested();
       const current = await getView(checkoutScope);
       if (!view || current.hall.position >= view.hall.position) {
         if (current.profile?.account.id !== profile?.account.id) {
@@ -1240,6 +1247,7 @@
           diet = "";
         }
         view = current;
+        viewShown(stamp);
         if (!selectedLanding) {
           selectedLanding = true;
           if (current.profile?.account["owner?"]) {
@@ -1284,7 +1292,12 @@
     payload: Record<string, unknown> = {},
   ): Promise<Delivery> {
     if (disabled || composing)
-      return { outcome: "skipped", commandId: null, reason: null };
+      return {
+        outcome: "skipped",
+        commandId: null,
+        reason: null,
+        viewStamp: views.requested,
+      };
     return deliver(command(kind, payload));
   }
 
@@ -1305,9 +1318,12 @@
       outcome: "uncertain",
       commandId: action.command_id,
       reason: null,
+      viewStamp: views.requested,
     };
     try {
       const result = await send(action);
+      // Views requested from here on reflect this command if it committed.
+      delivery.viewStamp = views.requested;
       if (
         result.error === "unknown_outcome" ||
         result.error === "unavailable"

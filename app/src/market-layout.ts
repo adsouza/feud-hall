@@ -217,6 +217,23 @@ export function fillFor(level: number): number {
   return Math.min(1, Math.max(0.12, level / 1000));
 }
 
+/**
+ * Out of stock means the market holds none of it: a positive stock whose
+ * level rounds to 0 is merely low.
+ */
+export function outOfStock(stock: number | undefined): boolean {
+  return stock === 0;
+}
+
+/** How full to draw a container: empty only when out of stock; any positive stock shows at least the minimum fill. */
+export function containerFill(
+  stock: number | undefined,
+  level: number,
+): number {
+  if (outOfStock(stock)) return 0;
+  return fillFor(Math.max(level, 1));
+}
+
 /** How many goods a cart shows for a size bucket: small 2, medium 5, large 9. */
 export function cartGoods(size: "small" | "medium" | "large"): number {
   return size === "large" ? 9 : size === "medium" ? 5 : 2;

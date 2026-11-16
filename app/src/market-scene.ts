@@ -18,7 +18,8 @@ import {
   PITCH_X,
   cartGoods,
   clickOutcome,
-  fillFor,
+  containerFill,
+  outOfStock,
   hoveredProduct,
   marketLayout,
   overviewPose,
@@ -903,7 +904,7 @@ export function createMarketScene(
           : "";
       const variant = b.goods[i].variant;
       const low = level < LOW_LEVEL;
-      const empty = level <= 0;
+      const empty = outOfStock(entry?.stock);
       const key = `${price}\u0000${crate}\u0000${variant}\u0000${low}\u0000${empty}`;
       if (!force && b.cellKeys[i] === key) return;
       b.cellKeys[i] = key;
@@ -996,8 +997,9 @@ export function createMarketScene(
     for (const mesh of b.pieceMeshes.values()) mesh.count = 0;
     b.layout.containers.forEach((c, i) => {
       const good = b.goods[i];
-      const level = levelOf(next.market[c.product]?.level);
-      const fill = fillFor(level);
+      const entry = next.market[c.product];
+      const level = levelOf(entry?.level);
+      const fill = containerFill(entry?.stock, level);
       const centre = crateCentre(c);
       const colour = pieceColour(good);
       let surface = c.y + FLOOR_Y;

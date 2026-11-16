@@ -1,7 +1,14 @@
 // The market's drafts for this session: kept outside the panel so they
 // survive leaving the Supply section and live view updates. Nothing here is
-// stored across a reload.
-import { emptyCart, type Cart } from "./market-cart";
+// stored across a reload: "On its way" is rebuilt from the server's view.
+import {
+  emptyCart,
+  emptyWayMemory,
+  recordSend,
+  type Cart,
+  type SessionSend,
+  type WayMemory,
+} from "./market-cart";
 import type { VendorId } from "./market-goods";
 
 /** What became of one delivery through the app's submitting path. */
@@ -9,17 +16,23 @@ export type Delivery = {
   outcome: "accepted" | "refused" | "uncertain" | "skipped";
   commandId: string | null;
   reason: string | null;
+  /** The newest view request issued when the result was known (see `views`). */
+  viewStamp: number;
 };
 
-/** A purchase request this device sent. */
-export type SentLine = {
-  commandId: string;
-  product: string;
-  /** The send's outcome is unknown; it is resolved by this command ID only. */
-  uncertain: boolean;
-  /** When it stopped being pending (Date.now()), or null. */
-  leftAt: number | null;
-};
+/**
+ * Stamps on the app's view requests: `requested` counts requests issued,
+ * `shown` is the request that produced the view on screen. A view whose
+ * stamp is above a command's acceptance stamp was requested after the
+ * command committed, so it reflects it.
+ */
+export const views = $state({ requested: 0, shown: 0 });
+export function viewRequested(): number {
+  return ++views.requested;
+}
+export function viewShown(stamp: number) {
+  if (stamp > views.shown) views.shown = stamp;
+}
 
 export const market = $state<{
   restaurant: string;
@@ -30,7 +43,10 @@ export const market = $state<{
   limitText: Record<string, string>;
   /** The server's reason a line's last send was refused, by product. */
   refused: Record<string, string>;
-  sent: SentLine[];
+  /** Purchase requests this session sent, oldest first. */
+  sent: SessionSend[];
+  /** What "On its way" remembers between views. */
+  way: WayMemory;
 }>({
   restaurant: "",
   cart: emptyCart,
@@ -39,6 +55,7 @@ export const market = $state<{
   limitText: {},
   refused: {},
   sent: [],
+  way: emptyWayMemory,
 });
 
 /** Starts over when another restaurant's view arrives (a new owner on this device). */
@@ -51,6 +68,7 @@ export function forRestaurant(id: string) {
   market.limitText = {};
   market.refused = {};
   market.sent = [];
+  market.way = emptyWayMemory;
 }
 
 /**
@@ -64,7 +82,14 @@ export function resolveSent(delivery: Delivery) {
     (s) => s.uncertain && s.commandId === delivery.commandId,
   );
   if (!line) return;
-  if (delivery.outcome === "accepted") line.uncertain = false;
+  if (delivery.outcome === "accepted")
+    market.sent = recordSend(market.sent, {
+      commandId: line.commandId,
+      product: line.product,
+      outcome: "accepted",
+      stamp: delivery.viewStamp,
+      now: Date.now(),
+    });
   else if (delivery.outcome === "refused")
     market.sent = market.sent.filter((s) => s !== line);
 }

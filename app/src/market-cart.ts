@@ -28,6 +28,8 @@ export type Outcome = {
   cost: string;
   short: number;
   reason: string | null;
+  /** Restock automation sent it; missing from an older server. */
+  automated?: boolean;
 };
 
 export const MAX_CRATES = 99;
@@ -89,6 +91,11 @@ export function setCrates(cart: Cart, product: string, crates: number): Cart {
   };
 }
 
+/** Whether typed limit text cannot be a limit (not a positive decimal integer once trimmed). */
+export function limitInvalid(text: string): boolean {
+  return !LIMIT_FORMAT.test(text.trim());
+}
+
 /** Ignored unless the limit is a positive decimal integer string. */
 export function setLimit(cart: Cart, product: string, limit: string): Cart {
   if (!LIMIT_FORMAT.test(limit)) return { lines: [...cart.lines] };
@@ -99,17 +106,20 @@ export function setLimit(cart: Cart, product: string, limit: string): Cart {
   };
 }
 
-/** Keeps unedited limits at the default for the current price; drops lines whose product left the market. */
+/**
+ * Keeps unedited limits at the default for the current price. A line whose
+ * offer is unusable or gone stays as it is (shown unavailable, skipped when
+ * sending); only the owner removes it.
+ */
 export function reprice(cart: Cart, market: Record<string, Offer>): Cart {
-  const lines: CartLine[] = [];
-  for (const l of cart.lines) {
-    const offer = market[l.product];
-    if (!offer) continue;
-    lines.push(
-      l.limitEdited ? { ...l } : { ...l, limit: defaultLimit(offer.price) },
-    );
-  }
-  return { lines };
+  return {
+    lines: cart.lines.map((l) => {
+      const offer = market[l.product];
+      return !offer || l.limitEdited
+        ? { ...l }
+        : { ...l, limit: defaultLimit(offer.price) };
+    }),
+  };
 }
 
 /** The payloads "Send order" submits, one per line, in cart order. */
@@ -166,6 +176,14 @@ export function lineNotes(
   return notes;
 }
 
+/** What an outcome says: all of it arrived, some of it, or none. */
+export function outcomeState(o: {
+  filled: number;
+  short: number;
+}): "filled" | "short" | "rejected" {
+  return o.filled === 0 ? "rejected" : o.short === 0 ? "filled" : "short";
+}
+
 export type Tracked = {
   product: string;
   state: "pending" | "filled" | "short" | "rejected" | "settled";
@@ -199,11 +217,9 @@ export function track(
       out.push({ ...base, state: "settled" });
       continue;
     }
-    const state =
-      o.filled === 0 ? "rejected" : o.short === 0 ? "filled" : "short";
     out.push({
       ...base,
-      state,
+      state: outcomeState(o),
       filled: o.filled,
       short: o.short,
       reason: o.reason,
@@ -231,4 +247,262 @@ export function arrivedCrates(
     out.push({ product: line.product, crates: Math.ceil(line.filled / crate) });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// "On its way": the server's own pending requests and recent outcomes, plus
+// what this session sent that the server does not list yet.
+// ---------------------------------------------------------------------------
+
+/** A line leaves this long after its outcome (or "settled") was first shown. */
+export const WAY_LINGER_MS = 60_000;
+/** Bounds on what the list remembers for the session. */
+export const MAX_SESSION_SENDS = 40;
+export const MAX_HIDDEN = 200;
+
+/** A purchase request this session sent through the market. */
+export type SessionSend = {
+  commandId: string;
+  product: string;
+  /** The send's outcome is unknown; it is resolved by this command ID only. */
+  uncertain: boolean;
+  /**
+   * The newest view request issued when the acceptance was known, or null
+   * while uncertain. Only a view requested after it reflects the request.
+   */
+  acceptedStamp: number | null;
+  /** When the acceptance was known (ms), or null while uncertain. */
+  acceptedAt: number | null;
+};
+
+/** What the list remembers between views. Bounded; never stored. */
+export type WayMemory = {
+  /** Outcomes seen, by request ID, with when each was first seen (ms). */
+  seen: Record<string, { outcome: Outcome; at: number }>;
+  /** When a session line was first shown as settled, by request ID. */
+  settled: Record<string, number>;
+  /** Request IDs whose line was dismissed or has had its minute, oldest first. */
+  hidden: string[];
+};
+export const emptyWayMemory: WayMemory = { seen: {}, settled: {}, hidden: [] };
+
+export type WayLine = {
+  requestId: string;
+  product: string;
+  state:
+    | "unconfirmed"
+    | "sent"
+    | "pending"
+    | "filled"
+    | "short"
+    | "rejected"
+    | "settled";
+  filled: number;
+  short: number;
+  reason: string | null;
+  cost: string | null;
+  automated: boolean;
+};
+
+type PendingEntry = Pending & { automated?: boolean };
+
+/**
+ * Records a send's result. Uncertain: the line waits under its command ID.
+ * Accepted: the line is confirmed as of `stamp`, and this session's earlier
+ * accepted lines for the product go (the server replaced that request).
+ */
+export function recordSend(
+  sent: SessionSend[],
+  send: {
+    commandId: string;
+    product: string;
+    outcome: "accepted" | "uncertain";
+    stamp: number;
+    now: number;
+  },
+): SessionSend[] {
+  const accepted = send.outcome === "accepted";
+  const line: SessionSend = {
+    commandId: send.commandId,
+    product: send.product,
+    uncertain: !accepted,
+    acceptedStamp: accepted ? send.stamp : null,
+    acceptedAt: accepted ? send.now : null,
+  };
+  const others = sent.filter(
+    (s) =>
+      s.commandId !== send.commandId &&
+      !(accepted && !s.uncertain && s.product === send.product),
+  );
+  return [...others, line].slice(-MAX_SESSION_SENDS);
+}
+
+/** Hides a line for the rest of the session. */
+export function dismissWay(
+  memory: WayMemory,
+  sent: SessionSend[],
+  requestId: string,
+): { memory: WayMemory; sent: SessionSend[] } {
+  return {
+    memory: {
+      ...memory,
+      hidden: [
+        ...memory.hidden.filter((id) => id !== requestId),
+        requestId,
+      ].slice(-MAX_HIDDEN),
+    },
+    sent: sent.filter((s) => requestIdFor(s.commandId) !== requestId),
+  };
+}
+
+/**
+ * The "On its way" list, newest first: this session's unconfirmed and
+ * just-sent lines, then the server's pending requests, then outcomes and
+ * settled lines. `purchases` is null from an older server, which reports no
+ * outcomes: only this session's sends are listed, as "sent", for a minute.
+ * `viewStamp` is the view request that produced `purchases`. Returns the
+ * next memory and session list; calling again with them changes nothing.
+ */
+export function onItsWay(input: {
+  purchases: { pending: PendingEntry[]; recent: Outcome[] } | null;
+  sent: SessionSend[];
+  viewStamp: number;
+  memory: WayMemory;
+  now: number;
+}): { lines: WayLine[]; memory: WayMemory; sent: SessionSend[] } {
+  const { purchases, viewStamp, now } = input;
+  const hidden = new Set(input.memory.hidden);
+  const hiddenList = [...input.memory.hidden];
+  const hide = (id: string) => {
+    if (hidden.has(id)) return;
+    hidden.add(id);
+    hiddenList.push(id);
+  };
+  const blank = { filled: 0, short: 0, reason: null, cost: null };
+  const sessionLine = (
+    s: SessionSend,
+    state: "unconfirmed" | "sent" | "settled",
+  ): WayLine => ({
+    ...blank,
+    requestId: requestIdFor(s.commandId),
+    product: s.product,
+    state,
+    automated: false,
+  });
+
+  if (!purchases) {
+    const kept = input.sent.filter(
+      (s) =>
+        s.uncertain ||
+        (s.acceptedAt !== null &&
+          now - s.acceptedAt < WAY_LINGER_MS &&
+          !hidden.has(requestIdFor(s.commandId))),
+    );
+    return {
+      lines: [...kept]
+        .reverse()
+        .map((s) => sessionLine(s, s.uncertain ? "unconfirmed" : "sent")),
+      memory: input.memory,
+      sent: kept,
+    };
+  }
+
+  // Outcomes: remembered from the first view that carried them, for a minute.
+  const seen: WayMemory["seen"] = { ...input.memory.seen };
+  for (const o of purchases.recent)
+    if (!seen[o.request_id] && !hidden.has(o.request_id))
+      seen[o.request_id] = { outcome: o, at: now };
+  for (const [id, entry] of Object.entries(seen))
+    if (now - entry.at >= WAY_LINGER_MS) hide(id);
+
+  const pendingIds = new Set(purchases.pending.map((p) => p.request_id));
+  const uncertainIds = new Set(
+    input.sent.filter((s) => s.uncertain).map((s) => requestIdFor(s.commandId)),
+  );
+  // A view older than an accepted send can still list the request it replaced.
+  const replacing = input.sent.filter(
+    (s) => s.acceptedStamp !== null && viewStamp <= s.acceptedStamp,
+  );
+
+  const settledAt: WayMemory["settled"] = {};
+  const waiting: WayLine[] = [];
+  const terminal: { line: WayLine; at: number }[] = [];
+  const kept: SessionSend[] = [];
+  for (const s of input.sent) {
+    const id = requestIdFor(s.commandId);
+    if (s.uncertain) {
+      kept.push(s);
+      waiting.push(sessionLine(s, "unconfirmed"));
+    } else if (hidden.has(id)) {
+      continue;
+    } else if (pendingIds.has(id) || seen[id]) {
+      kept.push(s); // The server's own line shows it.
+    } else if (s.acceptedStamp === null || viewStamp <= s.acceptedStamp) {
+      kept.push(s);
+      waiting.push(sessionLine(s, "sent"));
+    } else if (purchases.pending.some((p) => p.product === s.product)) {
+      // Another request for the product is waiting: this one was replaced
+      // (from here before the send was recorded, the text form, another
+      // device or restock automation). It never settled.
+      continue;
+    } else {
+      // A view newer than the acceptance has neither a pending entry nor an
+      // outcome, and nothing replaced it.
+      const at = input.memory.settled[id] ?? now;
+      if (now - at >= WAY_LINGER_MS) {
+        hide(id);
+        continue;
+      }
+      settledAt[id] = at;
+      kept.push(s);
+      terminal.push({ line: sessionLine(s, "settled"), at });
+    }
+  }
+
+  const pending: WayLine[] = purchases.pending
+    .filter(
+      (p) =>
+        !hidden.has(p.request_id) &&
+        !uncertainIds.has(p.request_id) &&
+        !replacing.some(
+          (s) =>
+            s.product === p.product &&
+            requestIdFor(s.commandId) !== p.request_id,
+        ),
+    )
+    .map((p) => ({
+      ...blank,
+      requestId: p.request_id,
+      product: p.product,
+      state: "pending",
+      automated: p.automated === true,
+    }));
+
+  for (const [id, { outcome: o, at }] of Object.entries(seen)) {
+    if (hidden.has(id)) {
+      delete seen[id];
+      continue;
+    }
+    if (uncertainIds.has(id)) continue;
+    terminal.push({
+      at,
+      line: {
+        requestId: id,
+        product: o.product,
+        state: outcomeState(o),
+        filled: o.filled,
+        short: o.short,
+        reason: o.reason,
+        cost: o.cost,
+        automated: o.automated === true,
+      },
+    });
+  }
+  terminal.sort((a, b) => b.at - a.at);
+
+  return {
+    lines: [...waiting.reverse(), ...pending, ...terminal.map((t) => t.line)],
+    memory: { seen, settled: settledAt, hidden: hiddenList.slice(-MAX_HIDDEN) },
+    sent: kept,
+  };
 }

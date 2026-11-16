@@ -476,6 +476,15 @@ const en = {
   legendFrozen: "Pale blue crate: frozen",
   legendValue: "Plain sack: value",
   legendShelf: "Box: preserved (canned, dried or chilled)",
+  addCrateOf: "Add a crate of {name}",
+  priceLimitOf: "Price limit per 1,000 (cents) for {name}",
+  dismissLineOf: "Dismiss the line for {name}",
+  removeLineOf: "Remove {name} from the cart",
+  removeLine: "Remove",
+  cartLineUnavailable:
+    "Not available in the market right now. It will not be sent.",
+  limitInvalid: "Enter a whole number of cents, such as 250.",
+  marketAutomatic: "automatic",
 } as const;
 export type Key = keyof typeof en;
 
@@ -949,6 +958,14 @@ const ja: Record<Key, string> = {
   legendFrozen: "淡い青の箱：冷凍",
   legendValue: "無地の袋：徳用",
   legendShelf: "箱入り：保存品（缶詰・乾物・冷蔵品など）",
+  addCrateOf: "{name}を1箱追加",
+  priceLimitOf: "{name}の1,000あたりの上限価格（セント）",
+  dismissLineOf: "{name}の行を閉じる",
+  removeLineOf: "{name}をカートから外す",
+  removeLine: "外す",
+  cartLineUnavailable: "現在、市場で購入できません。送信されません。",
+  limitInvalid: "250のように、セント単位の整数で入力してください。",
+  marketAutomatic: "自動",
 };
 
 const recipeNames: Record<string, [string, string]> = {

@@ -178,7 +178,7 @@ async function chooseVendorOf(panel: Locator, product: string) {
 }
 const addButton = (panel: Locator, product: string) =>
   panel.getByRole("button", {
-    name: `${en("addCrate")}: ${name(product)}`,
+    name: fill(en("addCrateOf"), { name: name(product) }),
     exact: true,
   });
 const cartLine = (panel: Locator, product: string) =>
@@ -187,7 +187,7 @@ const wayList = (panel: Locator) =>
   panel.getByRole("list", { name: en("onItsWay"), exact: true });
 const limitField = (panel: Locator, product: string) =>
   panel.getByRole("textbox", {
-    name: `${en("priceLimit")}: ${name(product)}`,
+    name: fill(en("priceLimitOf"), { name: name(product) }),
     exact: true,
   });
 
@@ -416,14 +416,12 @@ test("market: a rival's fill appears as an unlabelled shopper", async ({
     view.hall.market_trips = [
       {
         batch: 9001,
-        at: view.hall.now,
         restaurant_id: "rival-r",
         products: [product],
         size: "large",
       },
       {
         batch: 9001,
-        at: view.hall.now,
         restaurant_id: owner.restaurant.id,
         products: [product],
         size: "small",
@@ -477,6 +475,11 @@ test("market: the list works with the scene unavailable", async ({
   await expect(panel.getByText(en("marketListOnly"))).toBeVisible();
   await expect(panel.locator("canvas")).toHaveCount(0);
   await expect(panel.locator("[data-market-scene]")).toHaveCount(0);
+  // No cart picture, so no green-lid entry in the legend.
+  await expect(panel.locator(".market-legend")).toContainText(en("legendLow"));
+  await expect(panel.locator(".market-legend")).not.toContainText(
+    en("legendArrived"),
+  );
   const sent = await sendTwoCrates(page, owner, product);
   const way = wayList(panel).getByRole("listitem");
   await expect(way).toHaveAttribute("data-way-state", "pending");
@@ -795,6 +798,14 @@ test("market: every market string exists in Japanese", async ({
     "legendFrozen",
     "legendValue",
     "legendShelf",
+    "addCrateOf",
+    "priceLimitOf",
+    "dismissLineOf",
+    "removeLineOf",
+    "removeLine",
+    "cartLineUnavailable",
+    "limitInvalid",
+    "marketAutomatic",
   ];
   const placeholders = (text: string) =>
     [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
@@ -833,7 +844,9 @@ test("market: every market string exists in Japanese", async ({
     .click();
   await panel
     .getByRole("button", {
-      name: `${label("ja", "addCrate")}: ${contentLabel("ja", product)}`,
+      name: fill(label("ja", "addCrateOf"), {
+        name: contentLabel("ja", product),
+      }),
       exact: true,
     })
     .click();
@@ -869,8 +882,14 @@ test("market: a malformed price or a missing crate cannot be added, and nothing 
   const row = panel.locator(`[data-market-product="${broken}"]`);
   await expect(row).toContainText(en("priceUnavailable"));
   await expect(addButton(panel, broken)).toBeDisabled();
-  // The line whose price became unusable leaves the cart.
-  await expect(cartLine(panel, broken)).toHaveCount(0);
+  // The line whose price became unusable stays in the cart, shown as unavailable.
+  await expect(cartLine(panel, broken)).toHaveAttribute(
+    "data-cart-unavailable",
+    "",
+  );
+  await expect(cartLine(panel, broken)).toContainText(
+    en("cartLineUnavailable"),
+  );
   await chooseVendorOf(panel, older);
   const olderRow = panel.locator(`[data-market-product="${older}"]`);
   await expect(olderRow).toContainText(name(older));
@@ -888,6 +907,9 @@ test("market: a malformed price or a missing crate cannot be added, and nothing 
     .getByRole("button", { name: en("sendOrder"), exact: true })
     .click();
   await expect.poll(() => owner.commands.length).toBe(1);
+  // The unavailable line was skipped and is still in the cart.
+  expect(owner.commands[0].payload.product).toBe(usable);
+  await expect(cartLine(panel, broken)).toBeVisible();
   const way = wayList(panel).getByRole("listitem");
   await expect(way).toHaveCount(1);
   await expect(way).toHaveAttribute("data-way-state", "sent");
@@ -896,4 +918,246 @@ test("market: a malformed price or a missing crate cannot be added, and nothing 
   await page.clock.fastForward(61_000);
   await expect(way).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+test("market: after a reload a pending request is still on its way", async ({
+  page,
+  hall,
+}) => {
+  const owner = await marketOwner(page, hall);
+  const [product] = owner.products;
+  const sent = await sendTwoCrates(page, owner, product);
+  const way = wayList(panelOf(page)).getByRole("listitem");
+  await expect(way).toHaveAttribute("data-way-state", "pending");
+  await page.reload();
+  const after = wayList(panelOf(page)).getByRole("listitem");
+  await expect(after).toHaveCount(1);
+  await expect(after).toHaveAttribute("data-way-state", "pending");
+  await expect(after).toHaveAttribute(
+    "data-way-request",
+    "PR:" + sent.command_id,
+  );
+  await expect(after).toContainText(name(product));
+  // Its outcome is shown when it clears, though this page never sent it.
+  await owner.serve(
+    cleared(sent, { filled: 0, short: 10, reason: "insufficient_cash" }),
+  );
+  await expect(after).toHaveAttribute("data-way-state", "rejected");
+});
+
+test("market: a price rejection and an automatic order sent elsewhere are shown", async ({
+  page,
+  hall,
+}) => {
+  const owner = await marketOwner(page, hall);
+  const [product, other] = owner.products;
+  await owner.serve((view) => {
+    const purchases = view.profile!.restaurant!.purchases!;
+    purchases.pending = [
+      {
+        request_id: "PR:restock",
+        product: other,
+        qty: 500,
+        max_price_per_kunit: owner.restaurant.market[other].price,
+        submitted_at: view.hall.now,
+        automated: true,
+      },
+    ];
+    purchases.recent = [
+      {
+        request_id: "PR:other-device",
+        batch: 3,
+        at: view.hall.now,
+        product,
+        requested: 400,
+        filled: 0,
+        cost: "0",
+        short: 400,
+        reason: "price_above_limit",
+        automated: false,
+      },
+    ];
+  });
+  const way = wayList(panelOf(page));
+  const rejected = way.locator('[data-way-request="PR:other-device"]');
+  await expect(rejected).toHaveAttribute("data-way-state", "rejected");
+  await expect(rejected).toContainText(
+    fill(en("orderRejected"), {
+      reason: refusalMessage("en", "price_above_limit"),
+    }),
+  );
+  await expect(rejected).not.toHaveAttribute("data-way-automated");
+  const automatic = way.locator('[data-way-request="PR:restock"]');
+  await expect(automatic).toHaveAttribute("data-way-state", "pending");
+  await expect(automatic).toHaveAttribute("data-way-automated", "");
+  await expect(automatic).toContainText(en("marketAutomatic"));
+  expect(owner.commands).toHaveLength(0);
+});
+
+test("market: an order from the text form appears under On its way", async ({
+  page,
+  hall,
+}) => {
+  const owner = await marketOwner(page, hall);
+  const [product] = owner.products;
+  const form = page
+    .locator('[data-business-section="supply"] form')
+    .filter({ has: page.getByRole("combobox", { name: "Product" }) });
+  await form
+    .getByRole("combobox", { name: "Product", exact: true })
+    .selectOption(product);
+  await form.getByRole("spinbutton", { name: "Quantity" }).fill("120");
+  await form
+    .getByRole("textbox", { name: "Maximum price per 1,000 units (cents)" })
+    .fill("99999");
+  await form
+    .getByRole("button", { name: "Request purchase", exact: true })
+    .click();
+  await expect.poll(() => owner.commands.length).toBe(1);
+  const line = wayList(panelOf(page)).getByRole("listitem");
+  await expect(line).toHaveCount(1);
+  await expect(line).toHaveAttribute("data-way-state", "pending");
+  await expect(line).toHaveAttribute(
+    "data-way-request",
+    "PR:" + owner.commands[0].command_id,
+  );
+});
+
+test("market: two sends of one product show one line and never 'settled'", async ({
+  page,
+  hall,
+}) => {
+  const owner = await marketOwner(page, hall);
+  const [product] = owner.products;
+  const panel = panelOf(page);
+  // Record every state the list shows, between polls too.
+  await page.evaluate(() => {
+    const seen: string[] = [];
+    (window as unknown as { wayStates: string[] }).wayStates = seen;
+    const record = () => {
+      const items = document.querySelectorAll(
+        "[data-market-panel] .market-way li",
+      );
+      seen.push(
+        [...items]
+          .map((li) => {
+            const data = (li as HTMLElement).dataset;
+            return `${data.wayRequest}=${data.wayState}`;
+          })
+          .join(","),
+      );
+    };
+    new MutationObserver(record).observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-way-state", "data-way-request"],
+    });
+  });
+  const first = await sendTwoCrates(page, owner, product);
+  const way = wayList(panel).getByRole("listitem");
+  await expect(way).toHaveAttribute("data-way-state", "pending");
+  const second = await sendTwoCrates(page, owner, product);
+  expect(second.command_id).not.toBe(first.command_id);
+  await expect(way).toHaveCount(1);
+  await expect(way).toHaveAttribute(
+    "data-way-request",
+    "PR:" + second.command_id,
+  );
+  await expect(way).toHaveAttribute("data-way-state", "pending");
+  // A few more polls: still one line.
+  await owner.serve(() => {});
+  await expect(way).toHaveCount(1);
+  const states = await page.evaluate(
+    () => (window as unknown as { wayStates: string[] }).wayStates,
+  );
+  expect(states.filter((s) => s.includes(","))).toEqual([]);
+  expect(states.filter((s) => s.includes("settled"))).toEqual([]);
+  expect(states.length).toBeGreaterThan(0);
+});
+
+test("market: a mistyped price limit is kept, marked, and blocks sending", async ({
+  page,
+  hall,
+}) => {
+  const owner = await marketOwner(page, hall);
+  const [product] = owner.products;
+  const panel = panelOf(page);
+  await chooseVendorOf(panel, product);
+  await addButton(panel, product).click();
+  const field = limitField(panel, product);
+  await field.fill("2.50");
+  const send = panel.getByRole("button", {
+    name: en("sendOrder"),
+    exact: true,
+  });
+  // Clicking Send blurs the field first: the text stays, nothing is sent.
+  await field.blur();
+  await send.click({ force: true });
+  await expect(field).toHaveValue("2.50");
+  await expect(field).toHaveAttribute("aria-invalid", "true");
+  await expect(
+    cartLine(panel, product).locator("[data-cart-limit-invalid]"),
+  ).toHaveText(en("limitInvalid"));
+  await expect(send).toBeDisabled();
+  await page.waitForTimeout(500);
+  expect(owner.commands).toHaveLength(0);
+  await field.fill("250");
+  await expect(field).toHaveAttribute("aria-invalid", "false");
+  await expect(
+    cartLine(panel, product).locator("[data-cart-limit-invalid]"),
+  ).toHaveCount(0);
+  await send.click();
+  await expect.poll(() => owner.commands.length).toBe(1);
+  expect(owner.commands[0].payload.max_price_per_kunit).toBe("250");
+});
+
+test("market: a line whose offer becomes unusable stays, keeps its limit, and is skipped", async ({
+  page,
+  hall,
+}) => {
+  const owner = await marketOwner(page, hall);
+  const [product, other] = owner.products;
+  const panel = panelOf(page);
+  await chooseVendorOf(panel, product);
+  await addButton(panel, product).click();
+  await limitField(panel, product).fill("4321");
+  await chooseVendorOf(panel, other);
+  await addButton(panel, other).click();
+  const price = owner.restaurant.market[product].price;
+  // The product is gone from one view.
+  await owner.serve((view) => {
+    delete view.profile!.restaurant!.market[product];
+  });
+  const line = cartLine(panel, product);
+  await expect(line).toHaveAttribute("data-cart-unavailable", "");
+  await expect(line).toContainText(en("cartLineUnavailable"));
+  // Send skips it: only the other line goes, and it stays in the cart.
+  await panel
+    .getByRole("button", { name: en("sendOrder"), exact: true })
+    .click();
+  await expect.poll(() => owner.commands.length).toBe(1);
+  expect(owner.commands[0].payload.product).toBe(other);
+  await expect(cartLine(panel, other)).toHaveCount(0);
+  await expect(line).toBeVisible();
+  // Back in the market: usable again with the edited limit.
+  await owner.serve((view) => {
+    view.profile!.restaurant!.market[product] = {
+      ...owner.restaurant.market[product],
+      price,
+    };
+  });
+  await expect(line).not.toHaveAttribute("data-cart-unavailable");
+  await expect(limitField(panel, product)).toHaveValue("4321");
+  // Only the owner removes it.
+  await owner.serve((view) => {
+    view.profile!.restaurant!.market[product].price = "bad";
+  });
+  await line
+    .getByRole("button", {
+      name: fill(en("removeLineOf"), { name: name(product) }),
+      exact: true,
+    })
+    .click();
+  await expect(line).toHaveCount(0);
 });
