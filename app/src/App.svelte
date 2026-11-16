@@ -175,9 +175,13 @@
   // A web tab reloads to fetch the client the hall now serves; the desktop
   // app bundles its client and needs a new package instead.
   const nativeClient = isTauri();
+  // Before the first confirmed view there is no last state to show; a hall
+  // waking from idle holds requests for about half a minute.
   const connectionProblem = $derived<Key>(
     !updateRequired
-      ? "offline"
+      ? view
+        ? "offline"
+        : "starting"
       : nativeClient
         ? "updateRequired"
         : "reloadRequired",

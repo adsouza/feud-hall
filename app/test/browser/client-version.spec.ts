@@ -24,6 +24,34 @@ test("web requests send the client protocol and a refused protocol asks for a re
   ).toHaveCount(0);
 });
 
+test("an unanswered first load waits for the hall instead of claiming a lost connection", async ({
+  page,
+  hall,
+}) => {
+  const starting = "Waiting for the hall to respond.";
+  const lost = "Connection lost. Showing the last confirmed state.";
+  await page.route("**/api/state**", (route) => route.abort("timedout"));
+  await page.goto(hall.origin);
+  await expect(page.getByText("Opening the hall…")).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: starting }),
+  ).toBeVisible();
+  await expect(page.getByText(lost)).toHaveCount(0);
+
+  await page.unroute("**/api/state**");
+  await becomeVisible(page);
+  await expect(page.getByText("Opening the hall…")).toHaveCount(0);
+  await expect(page.getByText(starting)).toHaveCount(0);
+
+  // Once a view is confirmed, a failure keeps showing that last state.
+  await page.route("**/api/state**", (route) => route.abort("timedout"));
+  await becomeVisible(page);
+  await expect(
+    page.getByRole("status").filter({ hasText: lost }),
+  ).toBeVisible();
+  await expect(page.getByText(starting)).toHaveCount(0);
+});
+
 const newVersion = "A new version of Feud Hall is available.";
 
 // Counts the tab's fetches of the page at "/", sent and answered.

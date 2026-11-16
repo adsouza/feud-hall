@@ -247,6 +247,8 @@ const en = {
   cleaning: "Cleaning · service resumes at 05:00",
   online: "Hall open",
   offline: "Connection lost. Showing the last confirmed state.",
+  starting:
+    "Waiting for the hall to respond. An idle hall can take up to a minute to start.",
   updateRequired:
     "This desktop app and hall use different versions. Update the app or check with the hall operator.",
   reloadRequired: "This page is out of date. Reload to continue.",
@@ -664,6 +666,8 @@ const ja: Record<Key, string> = {
   cleaning: "清掃中 · 営業再開は05:00",
   online: "営業中",
   offline: "接続が切れました。最後に確認した状態を表示しています。",
+  starting:
+    "ホールの応答を待っています。休止中のホールは起動に1分ほどかかることがあります。",
   updateRequired:
     "デスクトップアプリとホールのバージョンが異なります。アプリを更新するか、ホールの運営者に確認してください。",
   reloadRequired:
