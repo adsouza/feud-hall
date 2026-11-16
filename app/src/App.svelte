@@ -1,6 +1,8 @@
 <script module lang="ts">
   // How long the first load may go unanswered before the opening intro plays.
   export const INTRO_DELAY_MS = 1500;
+  // Space between the waiting caption and the intro below it, in pixels.
+  const INTRO_CAPTION_GAP = 12;
 </script>
 
 <script lang="ts">
@@ -205,6 +207,7 @@
   let headerElement = $state<HTMLElement>();
   let mainElement = $state<HTMLElement>();
   let navigationElement = $state<HTMLElement>();
+  let introCaptionElement = $state<HTMLElement>();
   const hasView = $derived(view !== null);
   function startIntro() {
     if (view || updateRequired || document.hidden) return;
@@ -237,11 +240,17 @@
       return false;
     }
   }
-  // Fills the window from the top of the page body down to the navigation
-  // when that is fixed at the bottom (phones), or to the window's bottom.
+  // Fills the window from below the waiting caption (or the top of the page
+  // body) down to the navigation when that is fixed at the bottom (phones),
+  // or to the window's bottom.
   function placeIntro() {
     if (!mainElement || !navigationElement) return;
-    const top = Math.max(0, mainElement.getBoundingClientRect().top);
+    const top = Math.max(
+      0,
+      introCaptionElement
+        ? introCaptionElement.getBoundingClientRect().bottom + INTRO_CAPTION_GAP
+        : mainElement.getBoundingClientRect().top,
+    );
     const navigationTop = navigationElement.getBoundingClientRect().top;
     introInsets = {
       top,
@@ -258,7 +267,12 @@
     // The header and navigation can change height while the intro plays
     // (wrapping text, a notice, the language); the stage follows them.
     const observer = new ResizeObserver(placeIntro);
-    for (const element of [headerElement, mainElement, navigationElement])
+    for (const element of [
+      headerElement,
+      mainElement,
+      navigationElement,
+      introCaptionElement,
+    ])
       if (element) observer.observe(element);
     return () => {
       window.removeEventListener("resize", placeIntro);
@@ -2497,6 +2511,7 @@
   {#if (!connected || (!view && intro !== "idle")) && !inWorldNotices}<p
       class="banner"
       class:intro-caption={intro !== "idle"}
+      bind:this={introCaptionElement}
       role="status"
     >
       {t(connectionProblem)}

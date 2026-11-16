@@ -108,6 +108,12 @@ test("intro: the waiting status stays visible during it", async ({
     return !!hit && element.contains(hit);
   });
   expect(onTop).toBe(true);
+  // Above the intro on the page, so it covers none of the picture.
+  const statusBottom = (await status.boundingBox())!;
+  const introBox = (await page.locator("[data-hall-intro]").boundingBox())!;
+  expect(introBox.y).toBeGreaterThanOrEqual(
+    statusBottom.y + statusBottom.height,
+  );
 });
 
 test("intro: the answer shows the page at once and dissolves it", async ({
