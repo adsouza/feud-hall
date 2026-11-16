@@ -343,12 +343,24 @@ places that must agree: `version` in `app/src-tauri/tauri.conf.json`,
 checks they agree with `packaging/check_version.py`, so a partial bump fails
 in its pull request.
 
-1. Bump all four version sources in a pull request, adding a dated
-   `<release>` entry at the top of the metainfo list, and merge it. Run
-   `python3 packaging/check_version.py v<version>` from the repository root
-   to confirm locally.
-2. Tag the merged commit on `main` and push the tag:
-   `git tag -a v<version> -m "Feud Hall v<version>"` then
+1. On an up-to-date `main` with a clean working tree, run
+   `python3 packaging/bump_version.py <version>` from the repository root.
+   It edits all four files in place, preserving their formatting, and adds a
+   `<release>` entry dated today (or `--date YYYY-MM-DD`) at the top of the
+   metainfo list, marked `type="development"` for a pre-release. It then
+   runs `check_version.py` against the new tag, commits `Release v<version>`
+   on `main`, creates the annotated tag `v<version>`, and pushes `main` and
+   the tag with one `git push --atomic`, so either both reach GitHub or
+   neither does. Any unpushed commits already on `main` go with them.
+2. The script refuses before editing anything unless the sources already
+   agree, the new version is newer by SemVer precedence, `main` is checked
+   out with a clean working tree, local `main` is not behind or diverged from
+   `origin/main`, and `v<version>` exists neither locally nor on `origin`.
+   If the push fails, the commit and tag stay local and the script prints
+   the commands to retry the push or undo both. To bump through a pull
+   request instead, add `--files-only`: it edits the files and stops. After
+   merging, tag the merge commit on `main` with
+   `git tag -a v<version> -m "Feud Hall v<version>"` and
    `git push origin v<version>`.
 3. The tag run builds the clients for `https://feud-hall.onrender.com`, fails
    at once if the tag does not match the version sources, and repeats the
