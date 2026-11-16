@@ -3,8 +3,8 @@ defmodule FeudHall.Application.Management do
   Authenticated management commands and scoped read models.
 
   About wholesale purchases, the public hall view carries only `market_trips`:
-  for recent clearings, per restaurant, the product IDs that filled and a cart
-  size bucket. Quantities, costs, price limits, pending requests, unfilled
+  for the newest two clearings, per restaurant, the clearing's batch number,
+  the product IDs that filled and a cart size bucket. Quantities, costs, price limits, pending requests, unfilled
   amounts and reasons appear only in the owning restaurant's private view
   (`restaurant.purchases`). That view also names the supplies its menu uses
   (`restaurant.menu_products`: the products of each menu recipe's lines and
@@ -401,6 +401,7 @@ defmodule FeudHall.Application.Management do
 
   defp restaurant_view(state, restaurant, market, market_activity) do
     id = restaurant.id
+    crates = Market.crate_sizes(state.catalog)
 
     market =
       Map.new(market, fn {product, offer} ->
@@ -408,7 +409,7 @@ defmodule FeudHall.Application.Management do
          %{
            price: cents(offer.price),
            stock: offer.stock,
-           crate: Market.crate_size(state.catalog, product),
+           crate: Map.fetch!(crates, product),
            level: Market.level_permille(state.catalog, state.market, product)
          }}
       end)

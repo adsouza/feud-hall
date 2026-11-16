@@ -93,6 +93,7 @@ defmodule FeudHall.Application.MarketActivityTest do
                filled: 3_000,
                cost: fill.("PR:a").cost,
                short: 0,
+               automated: false,
                reason: nil
              }
            ]
@@ -150,8 +151,8 @@ defmodule FeudHall.Application.MarketActivityTest do
     trips = MarketActivity.trips(activity)
 
     for trip <- trips do
-      assert trip |> Map.keys() |> Enum.sort() == [:at, :batch, :products, :restaurant_id, :size]
-      assert %{batch: 2, at: 480_000} = trip
+      assert trip |> Map.keys() |> Enum.sort() == [:batch, :products, :restaurant_id, :size]
+      assert %{batch: 2} = trip
     end
 
     by_restaurant = Map.new(trips, &{&1.restaurant_id, {&1.products, &1.size}})
@@ -168,7 +169,7 @@ defmodule FeudHall.Application.MarketActivityTest do
     assert length(trips) == 6
   end
 
-  test "only the last six clearings with outcomes are kept, newest first" do
+  test "only the last six clearings with outcomes are kept, newest first; trips come from the newest two" do
     activity =
       Enum.reduce(0..8, MarketActivity.new(), fn batch, activity ->
         # Batch 5 settles nothing: it does not count toward the six.
@@ -179,8 +180,7 @@ defmodule FeudHall.Application.MarketActivityTest do
 
     assert Enum.map(MarketActivity.outcomes(activity, "a"), & &1.batch) == [8, 7, 6, 4, 3, 2]
     assert Enum.map(MarketActivity.outcomes(activity, "a"), & &1.request_id) == ~w(PR:8 PR:7 PR:6 PR:4 PR:3 PR:2)
-    assert Enum.map(MarketActivity.trips(activity), & &1.batch) == [8, 7, 6, 4, 3, 2]
-    assert Enum.map(MarketActivity.trips(activity), & &1.at) == Enum.map([8, 7, 6, 4, 3, 2], &((&1 + 1) * 240_000))
+    assert Enum.map(MarketActivity.trips(activity), & &1.batch) == [8, 7]
   end
 
   test "a clearing that settles requests but fills nothing keeps outcomes and adds no trip" do

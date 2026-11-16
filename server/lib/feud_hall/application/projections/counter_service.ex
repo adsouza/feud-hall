@@ -7,22 +7,9 @@ defmodule FeudHall.Application.Projections.CounterService do
   Recovery starts a fresh baseline. Markers contain batch positions and event
   offsets, without customer or order identifiers.
 
-  `fold/4` walks a batch on its own; `observe/5` and `retain/2` let a caller
-  fold several projections in one evolving pass (see `CommandWorkflow`).
+  `observe/5` and `retain/2` fold it in the one evolving pass that
+  `CommandWorkflow` makes over a batch.
   """
-
-  alias FeudHall.Domain.Hall
-
-  def fold(events, hall, markers, position) do
-    {hall, markers} =
-      events
-      |> Enum.with_index()
-      |> Enum.reduce({hall, markers}, fn {event, offset}, {state, current} ->
-        {Hall.evolve(state, event), observe(current, state, event, position, offset)}
-      end)
-
-    {hall, retain(hall, markers)}
-  end
 
   @doc "Folds one event at `offset` in the batch at `position`; `state` is the hall just before it."
   def observe(markers, state, event, position, offset) do

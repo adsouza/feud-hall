@@ -12,18 +12,22 @@ defmodule FeudHall.Application.Projections.MarketActivity do
   clock-advance batch, so the state before the batch is not enough.
 
   Only clearings that settled at least one request are kept, the newest
-  six first. Recovery starts empty: the projection is not rebuilt from the
+  six first: the owner's outcomes come from all six, the public trips from
+  the newest two only (a client stages only clearings newer than the last it
+  saw). Recovery starts empty: the projection is not rebuilt from the
   log after a restart. That is acceptable because nothing here is
   authoritative: filled purchases are visible as stock and cash, and pending
   requests are read from committed state, not from this projection.
 
-  A trip names only the restaurant, the product IDs that filled and a size
-  bucket; quantities, costs, limits and reasons stay in the owner's outcomes.
+  A trip names only the clearing's batch number, the restaurant, the product
+  IDs that filled and a size bucket; quantities, costs, limits, reasons and
+  times stay in the owner's outcomes.
   """
 
   alias FeudHall.Domain.Market
 
   @keep 6
+  @public 2
 
   @type outcome :: %{
           request_id: String.t(),
@@ -34,12 +38,12 @@ defmodule FeudHall.Application.Projections.MarketActivity do
           filled: non_neg_integer(),
           cost: non_neg_integer(),
           short: non_neg_integer(),
+          automated: boolean(),
           reason: nil | :price_above_limit | :insufficient_cash | :insufficient_storage | :stock_exhausted
         }
 
   @type trip :: %{
           batch: non_neg_integer(),
-          at: integer(),
           restaurant_id: String.t(),
           products: [String.t()],
           size: :small | :medium | :large
@@ -57,7 +61,7 @@ defmodule FeudHall.Application.Projections.MarketActivity do
       when map_size(requests) > 0 do
     at = state.market.next_clear_at
     outcomes = outcomes_of(requests, event, at)
-    clearing = %{outcomes: outcomes, trips: trips_of(state.catalog, event, at)}
+    clearing = %{outcomes: outcomes, trips: trips_of(state.catalog, event)}
     %{activity | clearings: Enum.take([clearing | activity.clearings], @keep)}
   end
 
@@ -71,9 +75,12 @@ defmodule FeudHall.Application.Projections.MarketActivity do
         do: outcome
   end
 
-  @doc "Every restaurant's trips over the kept clearings, newest first (by restaurant within a clearing)."
+  @doc """
+  Every restaurant's trips over the newest two kept clearings, newest first
+  (by restaurant within a clearing). This is what the public view carries.
+  """
   @spec trips(map()) :: [trip()]
-  def trips(activity), do: Enum.flat_map(activity.clearings, & &1.trips)
+  def trips(activity), do: activity.clearings |> Enum.take(@public) |> Enum.flat_map(& &1.trips)
 
   defp outcomes_of(requests, event, at) do
     fills = Map.new(event.fills, &{&1.request_id, &1})
@@ -101,12 +108,15 @@ defmodule FeudHall.Application.Projections.MarketActivity do
          filled: filled,
          cost: if(fill, do: fill.cost, else: 0),
          short: r.qty - filled,
+         automated: Map.get(r, :automated, false),
          reason: reason
        }}
     end)
   end
 
-  defp trips_of(catalog, event, at) do
+  defp trips_of(catalog, event) do
+    crate_sizes = Market.crate_sizes(catalog)
+
     event.fills
     |> Enum.group_by(& &1.restaurant_id)
     |> Enum.sort_by(&elem(&1, 0))
@@ -115,17 +125,16 @@ defmodule FeudHall.Application.Projections.MarketActivity do
 
       %{
         batch: event.batch,
-        at: at,
         restaurant_id: restaurant_id,
         products: units |> Map.keys() |> Enum.sort(),
-        size: size(crates(catalog, units))
+        size: size(crates(crate_sizes, units))
       }
     end)
   end
 
   # Units filled over each product's crate size, summed exactly, then rounded up.
-  defp crates(catalog, units) do
-    sized = Enum.map(units, fn {product, qty} -> {qty, Market.crate_size(catalog, product)} end)
+  defp crates(crate_sizes, units) do
+    sized = Enum.map(units, fn {product, qty} -> {qty, Map.fetch!(crate_sizes, product)} end)
     den = Enum.reduce(sized, 1, fn {_, crate}, acc -> lcm(acc, crate) end)
     num = Enum.reduce(sized, 0, fn {qty, crate}, acc -> acc + qty * div(den, crate) end)
     div(num + den - 1, den)

@@ -24,6 +24,9 @@ defmodule FeudHall.Domain.Market do
   alias FeudHall.Domain.{Inventory, Money}
   alias FeudHall.Domain.Hall.{Management, OperatingPolicy}
 
+  # Servings counted for a product no recipe line uses, when sizing its crate.
+  @unused_per_serving 100
+
   @doc """
   Whether the hall clears the market at all: its catalog's `clear_every_hall_ms` is a positive
   integer. The clock advance and the recovery checks both use this one predicate.
@@ -90,32 +93,35 @@ defmodule FeudHall.Domain.Market do
   end
 
   @doc """
-  The display crate size for `product`: about ten servings of the recipe line
-  that uses the most of it, rounded up to 1, 2 or 5 times a power of ten. A
-  line counts when its product is this one, or when its substitute is (at the
-  substitute's converted quantity, rounded up). A product no recipe uses
-  counts as 100 per serving. A derived display value, no rule.
+  The display crate size of every product, in one pass over the recipe
+  lines: about ten servings of the line that uses the most of it, rounded up
+  to 1, 2 or 5 times a power of ten. A line counts for its product, and for
+  its substitute at the substitute's converted quantity, rounded up. A
+  product no recipe uses counts as 100 per serving. Compute it once per view
+  or clearing and look products up in it. A derived display value, no rule.
   """
-  def crate_size(catalog, product) do
+  def crate_sizes(catalog) do
     largest =
-      for(
-        recipe <- Map.values(catalog.recipes),
-        line <- recipe.lines,
-        qty = line_use(line, product),
-        qty != nil,
-        do: qty
-      )
-      |> Enum.max(fn -> 100 end)
+      for recipe <- Map.values(catalog.recipes), line <- recipe.lines, {product, qty} <- line_uses(line), reduce: %{} do
+        acc -> Map.update(acc, product, qty, &max(&1, qty))
+      end
 
-    series_ceiling(largest * 10, 1)
+    catalog.products
+    |> Map.keys()
+    |> Enum.concat(Map.keys(largest))
+    |> Map.new(fn product -> {product, series_ceiling(Map.get(largest, product, @unused_per_serving) * 10, 1)} end)
   end
 
-  defp line_use(%{product: product, qty: qty}, product), do: qty
+  @doc "The display crate size for `product`; see `crate_sizes/1`."
+  def crate_size(catalog, product),
+    do: Map.get_lazy(crate_sizes(catalog), product, fn -> series_ceiling(@unused_per_serving * 10, 1) end)
 
-  defp line_use(%{qty: qty, substitute: %{product: product, num: num, den: den}}, product),
-    do: div(qty * num + den - 1, den)
-
-  defp line_use(_line, _product), do: nil
+  defp line_uses(%{product: product, qty: qty} = line) do
+    case Map.get(line, :substitute) do
+      %{product: sub, num: num, den: den} -> [{product, qty}, {sub, div(qty * num + den - 1, den)}]
+      _ -> [{product, qty}]
+    end
+  end
 
   # The smallest of 1, 2, 5 x `power` (and onward by tens) that is >= n.
   defp series_ceiling(n, power) do

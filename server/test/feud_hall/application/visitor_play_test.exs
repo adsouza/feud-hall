@@ -3,6 +3,7 @@ defmodule FeudHall.Application.VisitorPlayTest do
   use ExUnitProperties
 
   alias FeudHall.Application.{CommandWorkflow, DinerBrowse, Management, Recovery}
+  alias FeudHall.Application.Projections.CounterService
   alias FeudHall.Domain.{Clock, Dietary, Identity, Market, Offers}
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.Hall.{CounterPlay, Invariants}
@@ -353,7 +354,14 @@ defmodule FeudHall.Application.VisitorPlayTest do
     events = FeudHall.Domain.Hall.Settlement.cancel_tray(next.state, next.state.trays["T:cancelled"], :cleaning)
 
     {candidate, markers} =
-      FeudHall.Application.Projections.CounterService.fold(events, next.state, next.counter_services, next.position + 1)
+      events
+      |> Enum.with_index()
+      |> Enum.reduce({next.state, next.counter_services}, fn {event, offset}, {state, markers} ->
+        {FeudHall.Domain.Hall.evolve(state, event),
+         CounterService.observe(markers, state, event, next.position + 1, offset)}
+      end)
+
+    markers = CounterService.retain(candidate, markers)
 
     assert candidate == FeudHall.Domain.Hall.replay(events, next.state)
     assert markers[@stall] == marker

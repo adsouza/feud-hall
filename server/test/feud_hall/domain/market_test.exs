@@ -65,6 +65,7 @@ defmodule FeudHall.Domain.MarketTest do
   describe "crate_size/2 and level_permille/3" do
     # Independent oracle for the 1-2-5 series: the smallest such value >= n.
     defp series_ceiling(n), do: Enum.find(for(p <- 0..12, m <- [1, 2, 5], do: m * Integer.pow(10, p)), &(&1 >= n))
+    defp ceil_div(a, b), do: div(a + b - 1, b)
 
     test "crate size is about ten servings of the largest line, rounded up to 1, 2 or 5 times a power of ten" do
       catalog = LaunchCatalog.catalog()
@@ -99,6 +100,43 @@ defmodule FeudHall.Domain.MarketTest do
       unused = put_in(catalog, [:products, "saffron"], catalog.products["onion"])
       # No recipe line uses it: 100 * 10.
       assert Market.crate_size(unused, "saffron") == 1_000
+    end
+
+    test "crate_sizes/1 agrees with a per-product scan for every launch product" do
+      catalog = LaunchCatalog.catalog()
+      lines = for recipe <- Map.values(catalog.recipes), line <- recipe.lines, do: line
+
+      # Independent oracle: for one product, scan every line for a direct use or a
+      # substitute use at its converted quantity (rounded up), keep the largest.
+      oracle = fn product ->
+        use_of = fn line ->
+          cond do
+            line.product == product ->
+              line.qty
+
+            line.substitute && line.substitute.product == product ->
+              ceil_div(line.qty * line.substitute.num, line.substitute.den)
+
+            true ->
+              nil
+          end
+        end
+
+        uses = for line <- lines, qty = use_of.(line), qty != nil, do: qty
+
+        series_ceiling(Enum.max(uses, fn -> 100 end) * 10)
+      end
+
+      sizes = Market.crate_sizes(catalog)
+      products = Map.keys(catalog.products)
+      assert Enum.sort(Map.keys(sizes)) == Enum.sort(products)
+      assert Enum.any?(lines, & &1.substitute)
+
+      mismatches = for p <- products, sizes[p] != oracle.(p), do: {p, sizes[p], oracle.(p)}
+      assert mismatches == []
+
+      # The thin lookup reads the same map.
+      for p <- Enum.take(Enum.sort(products), 5), do: assert(Market.crate_size(catalog, p) == sizes[p])
     end
 
     test "the series rounding covers the exact examples" do

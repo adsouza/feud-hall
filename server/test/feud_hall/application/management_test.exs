@@ -3,6 +3,7 @@ defmodule FeudHall.Application.ManagementTest do
   use ExUnitProperties
 
   alias FeudHall.Application.{CommandWorkflow, Management, Recovery}
+  alias FeudHall.Application.Projections.MarketActivity
   alias FeudHall.Domain.{Clock, Identity, Market}
   alias FeudHall.Domain.Content.SliceCatalog
   alias FeudHall.Domain.Hall.Invariants
@@ -980,6 +981,7 @@ defmodule FeudHall.Application.ManagementTest do
                  filled: ^filled,
                  short: 0,
                  cost: encoded_cost,
+                 automated: false,
                  reason: nil
                }
              ] = view.purchases.recent
@@ -1044,6 +1046,16 @@ defmodule FeudHall.Application.ManagementTest do
 
       assert {:ok, guest} = Management.view(rt, nil)
       refute Jason.encode!(guest) =~ "menu_products"
+
+      # A restaurant with no stall falls back to its own menu.
+      state = rt.state
+      state = %{state | stalls: Map.delete(state.stalls, "s002")}
+      state = %{state | management: %{state.management | leases: Map.delete(state.management.leases, "s002")}}
+      stall_less = %{rt | state: state}
+      rival = restaurant_view(stall_less, "rival-device")
+      assert rival.stalls == []
+      assert rival.menu_products == products_of(catalog, Map.keys(rival.menu))
+      assert rival.menu_products != []
     end
 
     test "a rival's view carries the trip and nothing private" do
@@ -1052,10 +1064,9 @@ defmodule FeudHall.Application.ManagementTest do
 
       assert {:ok, %{hall: hall, profile: profile}} = Management.view(rt, "rival-device")
       batch = rt.state.market.batch - 1
-      at = rt.state.market.next_clear_at - rt.state.catalog.rules.market.clear_every_hall_ms
 
       # The rival filled nothing, so the owner's trip is the only one.
-      assert hall.market_trips == [%{batch: batch, at: at, restaurant_id: "r1", products: [p], size: "small"}]
+      assert hall.market_trips == [%{batch: batch, restaurant_id: "r1", products: [p], size: "small"}]
 
       encoded = Jason.encode!(hall)
 
@@ -1118,12 +1129,40 @@ defmodule FeudHall.Application.ManagementTest do
       assert requested_at < cleared_at, "the request and its clearing share the batch"
       assert rt.state.market.requests == %{}
 
-      assert [%{request_id: ^request_id, filled: ^qty, short: 0, reason: nil, batch: batch}] =
+      assert [%{request_id: ^request_id, filled: ^qty, short: 0, reason: nil, batch: batch, automated: true}] =
                restaurant_view(rt, "owner-device").purchases.recent
 
       assert batch == cleared.batch
       assert {:ok, %{hall: %{market_trips: [trip]}}} = Management.view(rt, "rival-device")
       assert %{restaurant_id: "r1", products: [^p], size: "small", batch: ^batch} = trip
+    end
+
+    test "the clearing's outcomes and trips are adopted only when its append succeeds" do
+      {rt, _p, _crate, _limit} = owner_and_rival_requests()
+      to = Clock.service_ms(rt.state.market.next_clear_at)
+
+      envelope = %{
+        actor: {:system, :scheduler},
+        command_id: "tick:#{to}",
+        command: {:advance_clock, %{to_service_ms: to}}
+      }
+
+      assert rt.market_activity == MarketActivity.new()
+
+      for fault <- [:before_commit, :unavailable, :fenced] do
+        failing = %{rt | store: InMemoryEventStore.fail_next(rt.store, fault)}
+        assert {:error, _, failed} = CommandWorkflow.execute(failing, envelope)
+        assert failed.market_activity == MarketActivity.new(), "#{fault} adopted the projection"
+        assert restaurant_view(failed, "owner-device").purchases.recent == []
+      end
+
+      uncertain = %{rt | store: InMemoryEventStore.fail_next(rt.store, :lost_reply)}
+      assert {:uncertain, _, unsure} = CommandWorkflow.execute(uncertain, envelope)
+      assert unsure.market_activity == MarketActivity.new()
+
+      assert {:accepted, _, committed} = CommandWorkflow.execute(rt, envelope)
+      assert [%{request_id: "PR:buy"}] = restaurant_view(committed, "owner-device").purchases.recent
+      assert [%{restaurant_id: "r1"}] = MarketActivity.trips(committed.market_activity)
     end
 
     test "after a restart the projection is empty and pending requests are still shown" do
