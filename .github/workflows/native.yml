@@ -1,8 +1,11 @@
 name: native packages
 
 on:
+  # A v* tag builds the clients for the hosted hall and drafts a GitHub
+  # Release from them. GitHub skips path filters for tag pushes.
   push:
     branches: [main]
+    tags: ["v*"]
     paths: ["app/**", "server/priv/content/**", "assets/branding/**", "packaging/**", ".github/workflows/native.yml"]
   pull_request:
     paths: ["app/**", "server/priv/content/**", "assets/branding/**", "packaging/**", ".github/workflows/native.yml"]
@@ -22,9 +25,9 @@ concurrency:
 
 env:
   CARGO_PROFILE_RELEASE_DEBUG: '0'
-  # Pushes to main target the hosted hall that Render deploys from main; pull
-  # requests and dispatches without an input target a local hall.
-  FEUD_HALL_NATIVE_ORIGIN: ${{ inputs.hall_origin || (github.event_name == 'push' && github.ref == 'refs/heads/main' && 'https://feud-hall.onrender.com') || 'http://localhost:4000' }}
+  # Pushes to main and release tags target the hosted hall that Render deploys
+  # from main; pull requests and dispatches without an input target a local hall.
+  FEUD_HALL_NATIVE_ORIGIN: ${{ inputs.hall_origin || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'https://feud-hall.onrender.com') || 'http://localhost:4000' }}
 
 jobs:
   # The trust-boundary tests build a debug binary; run them beside the release
@@ -76,6 +79,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      # Every run keeps the version sources in step; a release tag must match them.
+      - name: Check client version sources
+        run: python3 packaging/check_version.py ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.4"
@@ -142,6 +148,7 @@ jobs:
           checksum = lambda path: hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
           manifest = {
               "revision": os.environ["GITHUB_SHA"],
+              "ref": os.environ["GITHUB_REF"],
               "hall_origin": os.environ["FEUD_HALL_NATIVE_ORIGIN"],
               "client_protocol": 1,
               "runner": platform.platform(),
@@ -155,3 +162,57 @@ jobs:
           name: feud-hall-${{ runner.os }}-${{ runner.arch }}
           path: release/
           if-no-files-found: error
+
+  # A release tag drafts a GitHub Release once every package and trust-boundary
+  # check has passed. Publishing the draft is a manual step after the installed
+  # client checks in docs/DEPLOYMENT.md.
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [trust-boundary, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: feud-hall-*
+          path: artifacts
+      - name: Collect release files
+        run: |
+          shopt -s nullglob
+          mkdir release
+          # Each platform has its own manifest.json; name it after the platform.
+          for dir in artifacts/feud-hall-*/; do
+            platform=$(basename "$dir" | sed 's/^feud-hall-//' | tr '[:upper:]' '[:lower:]')
+            jq -e --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF" \
+              '.revision == $sha and .ref == $ref and (.hall_origin | startswith("https://"))' \
+              "$dir/manifest.json"
+            cp "$dir/manifest.json" "release/manifest-$platform.json"
+            for file in "$dir"*; do
+              [ "$(basename "$file")" = manifest.json ] || cp "$file" release/
+            done
+          done
+          for file in feud-hall-amd64.deb feud-hall-x86_64.flatpak manifest-linux-x64.json; do
+            test -f "release/$file"
+          done
+          macos=(release/feud-hall-macos-*.zip)
+          test "${#macos[@]}" -eq 1
+          (cd release && sha256sum -- * > ../SHA256SUMS) && mv SHA256SUMS release/
+          ls -l release
+      - name: Draft the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # A re-run refreshes the assets of its own draft; it never touches a
+          # release that has already been published.
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            test "$draft" = true || { echo "::error::Release $TAG is already published"; exit 1; }
+            gh release upload "$TAG" release/* --clobber
+          else
+            flags=(--draft --verify-tag --generate-notes --title "Feud Hall $TAG")
+            case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+            gh release create "$TAG" "${flags[@]}" release/*
+          fi

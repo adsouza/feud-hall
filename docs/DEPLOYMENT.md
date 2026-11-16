@@ -332,6 +332,43 @@ The release artifacts include the intended server, protocol, source revision,
 and SHA-256 checksums. Supply the release-test or canonical HTTPS origin when
 dispatching the workflow for that environment.
 
+### Publishing a client release
+
+A `v<major>.<minor>.<patch>` tag (optionally with a `-pre` suffix) drafts a
+GitHub Release from the native workflow. The client version lives in four
+places that must agree: `version` in `app/src-tauri/tauri.conf.json`,
+`[package] version` in `app/src-tauri/Cargo.toml`, the `feud-hall` entry in
+`app/src-tauri/Cargo.lock`, and the newest `<release>` in
+`packaging/flatpak/io.github.adsouza.FeudHall.metainfo.xml`. Every native run
+checks they agree with `packaging/check_version.py`, so a partial bump fails
+in its pull request.
+
+1. Bump all four version sources in a pull request, adding a dated
+   `<release>` entry at the top of the metainfo list, and merge it. Run
+   `python3 packaging/check_version.py v<version>` from the repository root
+   to confirm locally.
+2. Tag the merged commit on `main` and push the tag:
+   `git tag -a v<version> -m "Feud Hall v<version>"` then
+   `git push origin v<version>`.
+3. The tag run builds the clients for `https://feud-hall.onrender.com`, fails
+   at once if the tag does not match the version sources, and repeats the
+   package install and launch checks. Once every package and trust-boundary
+   job passes, its `publish` job creates a draft release named
+   `Feud Hall v<version>` with generated notes, the `.deb`, the Flatpak, the
+   macOS zip, one `manifest-<platform>.json` per platform, and `SHA256SUMS`.
+   It refuses to attach manifests whose revision or tag differ from the run
+   or whose hall origin is not HTTPS. A tag with a `-pre` suffix is marked as
+   a prerelease.
+4. Download the draft's packages, do the installed-client checks under
+   [Native release artifacts](#native-release-artifacts) that CI does not
+   cover (English/Japanese UI, fonts, Japanese input, supported
+   distributions), then publish the draft on GitHub.
+
+Re-running a failed tag run replaces the assets of its own draft. It stops
+without changes if that release has already been published; fix forward with
+a new version instead of moving a published tag. The tag workflow has not yet
+run on GitHub, so its first real tag is also its first qualification.
+
 ## Rollback, interruption, and restore
 
 - Resolve an uncertain commit through its original receipt/event range before

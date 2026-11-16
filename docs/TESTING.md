@@ -406,7 +406,11 @@ where it must not move keyboard focus. From `app/src-tauri/`, run `cargo fmt --c
 `cargo test --locked --bin feud-hall` after `bun run desktop:assets` in
 `app/`. Keep Cargo to one local build job. The native workflow builds the
 macOS bundle, installs both Linux packages, and attempts their launch; a
-parallel job runs the trust-boundary tests on both systems. Hosted Cargo uses
+parallel job runs the trust-boundary tests on both systems. Each packaging
+job first runs `python3 packaging/check_version.py`, which requires the four
+client version sources to agree and, on a `v*` tag, to match the tag; see
+[Publishing a client release](DEPLOYMENT.md#publishing-a-client-release).
+Hosted Cargo uses
 every runner core and restores dependency builds cached from `main`.
 In each packaged client, check Cmd (macOS) or Ctrl (Linux) with `+`/`=`, `-`,
 and `0` for whole-page zoom and reset. Check reflow, focused input/draft
