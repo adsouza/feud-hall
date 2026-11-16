@@ -300,8 +300,12 @@ stable development signing does not provide public notarization.
 
 #### Point a local build at the hosted hall
 
-The hosted hall is `https://feud-hall.onrender.com`. To test a local client
-against it, build a debug bundle from `app/`:
+The hosted hall is `https://feud-hall.onrender.com`. The native workflow builds
+its packages for this origin on pushes to `main`; pull requests target
+`http://localhost:4000`, and a manual run uses its `hall_origin` input or, when
+omitted, localhost. Each artifact's `manifest.json` records its `hall_origin`.
+The packaged smoke launch only reads `/api/state` while signed out. To test a
+local client against the hosted hall, build a debug bundle from `app/`:
 
 ```sh
 FEUD_HALL_NATIVE_ORIGIN=https://feud-hall.onrender.com CARGO_BUILD_JOBS=1 bun run desktop:build --debug --bundles app -- --locked

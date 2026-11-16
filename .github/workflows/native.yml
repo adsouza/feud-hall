@@ -22,7 +22,9 @@ concurrency:
 
 env:
   CARGO_PROFILE_RELEASE_DEBUG: '0'
-  FEUD_HALL_NATIVE_ORIGIN: ${{ inputs.hall_origin || 'http://localhost:4000' }}
+  # Pushes to main target the hosted hall that Render deploys from main; pull
+  # requests and dispatches without an input target a local hall.
+  FEUD_HALL_NATIVE_ORIGIN: ${{ inputs.hall_origin || (github.event_name == 'push' && github.ref == 'refs/heads/main' && 'https://feud-hall.onrender.com') || 'http://localhost:4000' }}
 
 jobs:
   # The trust-boundary tests build a debug binary; run them beside the release
