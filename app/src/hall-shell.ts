@@ -66,7 +66,15 @@ export function createFurniture() {
   };
 }
 
-export function createHallShell(scene: T.Scene, redraw: () => void) {
+/**
+ * The rooms' walls, floors, ceilings, tables and seats. A caller that moves
+ * its own stools passes `seats: false`; the shell then draws no seats.
+ */
+export function createHallShell(
+  scene: T.Scene,
+  redraw: () => void,
+  { seats: drawSeats = true }: { seats?: boolean } = {},
+) {
   const rooms = new T.Group();
   const ceilings: T.Group[] = [];
   const edges: Edge[] = [];
@@ -157,6 +165,7 @@ export function createHallShell(scene: T.Scene, redraw: () => void) {
     mesh.frustumCulled = false;
     scene.add(mesh);
   }
+  seats.visible = drawSeats;
 
   const transform = new T.Object3D();
   function groupBoxes(parent: T.Group) {

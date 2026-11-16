@@ -146,7 +146,8 @@ export function createStallKit(
     shutterVertices.setZ(i, 0.013 * (1 - Math.cos(slat * Math.PI * 2)));
   }
   shutterGeometry.computeVertexNormals();
-  let shutterLabel = "";
+  // Null until the first paint, so even an empty label paints the slats.
+  let shutterLabel: string | null = null;
 
   function paintShutters(label: string) {
     if (shutterLabel === label) return;
