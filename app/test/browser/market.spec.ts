@@ -1215,3 +1215,51 @@ test("market: the cart reports the crates it draws, up to its cap", async ({
   await expect(host).toHaveAttribute("data-market-cart-total", "15");
   await expect(host).toHaveAttribute("data-market-cart", "12");
 });
+
+test("market: end to end, an order sent to the real server fills and the stock rises", async ({
+  page,
+  hall,
+}) => {
+  test.setTimeout(120_000);
+  // Nothing stubbed: the real command, the real views and the real clearing.
+  const owner = await marketOwner(page, hall, { route: false });
+  const [product] = owner.products;
+  const offer = owner.restaurant.market[product];
+  const stockOf = async () =>
+    (await state(page)).profile!.restaurant!.inventory[product] ?? 0;
+  const before = await stockOf();
+  const commands: string[] = [];
+  page.on("request", (request) => {
+    if (!request.url().endsWith("/api/commands")) return;
+    const body = request.postDataJSON() as Command;
+    if (body.kind === "submit_purchase_request") commands.push(body.command_id);
+  });
+  const panel = panelOf(page);
+  await chooseVendorOf(panel, product);
+  await addButton(panel, product).click();
+  // A generous limit, so a price move at the clearing cannot reject it.
+  await limitField(panel, product).fill(String(BigInt(offer.price) * 3n));
+  await panel
+    .getByRole("button", { name: en("sendOrder"), exact: true })
+    .click();
+  await expect.poll(() => commands.length).toBe(1);
+  await expect(panel.getByText(en("cartEmpty"))).toBeVisible();
+  const line = wayList(panel).locator(`[data-way-request="PR:${commands[0]}"]`);
+  await expect(line).toHaveAttribute("data-way-state", /^(pending|filled)$/, {
+    timeout: 15_000,
+  });
+  // The hall's clock is driven by the harness: move it a clearing at a time.
+  const clearing = 4 * 60_000;
+  for (let round = 0; round < 3; round++) {
+    if ((await line.getAttribute("data-way-state")) === "filled") break;
+    const now = (await state(page)).hall.now;
+    await hall.control({ advance_to: now + clearing });
+    await expect(line)
+      .toHaveAttribute("data-way-state", "filled", { timeout: 15_000 })
+      .catch(() => {});
+  }
+  await expect(line).toHaveAttribute("data-way-state", "filled");
+  await expect(line).toContainText(name(product));
+  await expect.poll(stockOf, { timeout: 15_000 }).toBeGreaterThan(before);
+  expect(commands).toHaveLength(1);
+});

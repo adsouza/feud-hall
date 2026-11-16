@@ -554,9 +554,9 @@ files and browser specs. Run each file on its own. Server files run from
 
 | Check | File | What it pins |
 | --- | --- | --- |
-| Crate size and level | `test/feud_hall/domain/market_test.exs` | `Market.crate_size/2` (the 1, 2, 5 series, substitutes at converted quantity, a product no recipe uses) and `Market.level_permille/3`. |
-| Market activity | `test/feud_hall/application/market_activity_test.exs` | Outcomes per request with reasons, trip sizes and their boundaries, the six-clearing window, no change from other events. Events come from the real `Market.clear/1`. |
-| Views | `test/feud_hall/application/management_test.exs` (the "purchases in the views" and `menu_products` cases) | The owner's pending and recent entries, the request ID form `"PR:" <> command_id`, a request created and cleared inside one batch by restock automation, an empty `recent` after `Recovery.recover`, and that the public hall and a guest's view carry only trips and none of the private key names. |
+| Crate size and level | `test/feud_hall/domain/market_test.exs` | `Market.crate_sizes/1` and its lookup `Market.crate_size/2` (the 1, 2, 5 series, substitutes at converted quantity, a product no recipe uses), agreement with an independent per-product scan for every launch product, and `Market.level_permille/3`. |
+| Market activity | `test/feud_hall/application/market_activity_test.exs` | Outcomes per request with reasons and the `automated` flag, trip sizes and their boundaries, trips without times, the six-clearing window for outcomes and the newest two clearings for trips, no change from other events. Events come from the real `Market.clear/1`. |
+| Views | `test/feud_hall/application/management_test.exs` (the "purchases in the views" and `menu_products` cases) | The owner's pending and recent entries, the request ID form `"PR:" <> command_id`, a request created and cleared inside one batch by restock automation (marked automated), an empty `recent` after `Recovery.recover`, the projection adopted only when the clearing's append succeeds (failed, fenced and uncertain appends keep the old one), `menu_products` for a restaurant with no stall, and that the rival's hall view carries only trips and none of the private key names while a guest sees the same trips. |
 | Coverage | `test/feud_hall/application/market_goods_coverage_test.exs` | Every launch catalog product has a valid vendor, shape, colour and variant in `app/src/market-goods.json`; no stale entry; the file is sorted; a substitute sits at its primary's vendor and looks different; meat, fish and dairy are at their vendors, with named exceptions. It derives both sides from the catalog and pins no product count. |
 
 Browser specs run from `app/` after a production build, with Node capped:
@@ -565,25 +565,41 @@ Browser specs run from `app/` after a production build, with Node capped:
 `--grep '<scenario>'` for one case. `market.spec.ts` drives the built client
 through the disposable Phoenix and PostgreSQL harness with page clocks
 installed before the page loads; the other four import the modules under test
-directly. All assert on data attributes and text rather than pixels, and none
+directly.
+
+Most `market.spec.ts` cases are **not** end to end: the test answers every
+`submit_purchase_request` itself and serves hand-edited copies of the owner's
+view from then on (pending entries, outcomes, prices, trips). They pin what the
+panel does with a given view, not what the server does. Two cases use the real
+server unstubbed: "the hall's Stock panel opens the market" (no purchase) and
+"end to end, an order sent to the real server fills and the stock rises",
+which adds a crate, sends it through the real command, sees the real pending
+entry, moves the harness's hall clock one clearing at a time (at most three)
+and expects the real outcome "filled" and a higher stock for that product. The
+harness clock is manual, so nothing waits on real clearing time. All assert on data attributes and text rather than pixels, and none
 qualifies hardware rendering or frame rate.
 
 | Spec | What it pins |
 | --- | --- |
-| `market-goods.spec.ts` | `goodFor`, `hasGood` and `shelves` (fallback to a plain carton at the pantry, a substitute directly after its primary, sorted output) and that every vendor label exists in English and Japanese. |
-| `market-cart.spec.ts` | The cart model: exact decimal-string limits (the 10% default rounded up, including a 30-digit price), requests with exactly four keys, `requestIdFor`, `track`, `arrivedCrates`, and a property with one assertion per run. |
-| `market-layout.spec.ts` | Stall layout and trip routes, the click rule (a container adds only from a focused vendor; a shopper never blocks a click), and `stageTrips` (a seen clearing is never staged again). |
+| `market-goods.spec.ts` | `goodFor`, `hasGood` and `shelves` (fallback to a plain carton at the pantry, a substitute directly after its primary, sorted output), every key of `market-goods.json` parsing into a valid entry, a seeded property that `shelvesOf` lists every given product exactly once whatever the entries say, and that every vendor label exists in English and Japanese. |
+| `market-cart.spec.ts` | The cart model: exact decimal-string limits (the 10% default rounded up, with an independent upper bound, including a 30-digit price), invalid limit text, requests with exactly four keys, lines kept when their offer is gone, `requestIdFor`, `track`, `arrivedCrates`, and the "On its way" model (`onItsWay`, `recordSend`, `dismissWay`): server lines never sent here, "sent" until a newer view, "settled" only when truly gone, outcomes remembered for their minute, one line for a replaced request, unconfirmed sends, dismissal, an older server, bounded memory, and idempotence of every step. |
+| `market-layout.spec.ts` | Stall layout, camera poses and trip routes, the click rule (a container adds only from a focused vendor; a shopper never blocks a click), `stageTrips` (a seen clearing is never staged again), out of stock meaning stock 0 with a minimum fill for a small stock, and `cartSlots` (draft and arrived crates in separate halves of the cart, never sharing a place, up to each group's cap). |
 | `people.spec.ts` | Includes the cart-pushing pose: hands at handle height for any look, still arms, and precedence over carrying and sitting. |
-| `market.spec.ts` | The panel on the Business page against the built client: add, send, pending, filled or short, with the filled crates arriving on the cart and leaving with their line; a price limit exceeded; a rival's fill as an unlabelled shopper; list-only without WebGL and after a scene failure; the star note; drafts surviving refresh and leaving the section; an uncertain send resolved by its command ID; a replacing request; a canvas click at `data-market-hit`; the hall's Stock link; every string in Japanese; malformed server data. |
+| `market.spec.ts` | The panel on the Business page against the built client: add, send, pending, filled or short, with the filled crates arriving on the cart and leaving with their line; a price limit exceeded; a rival's fill as an unlabelled shopper; list-only without WebGL and after a scene failure; the star note; drafts surviving refresh and leaving the section; an uncertain send resolved by its command ID; a replacing request; a canvas click at `data-market-hit`; the hall's Stock link; every string in Japanese; malformed server data; after a reload a pending request still listed; a price rejection and an automatic order sent elsewhere; a text-form order; two sends of one product as one line, never "settled"; a mistyped limit kept and blocking Send; an unusable cart line kept and skipped; the scene created only when its host comes on screen; drawn crate counts capped; and the end-to-end case above. |
 
 The scene exposes `data-market-containers`, `data-market-shoppers`,
-`data-market-cart` (the draft), `data-market-arrived` (crates of committed
-fills on the cart), `data-market-vendor` and `data-market-hit` on its host for
-tests. `data-market-hit="<product>:<x>,<y>"` gives CSS pixels inside the canvas
+`data-market-cart` (draft crates drawn on the owner's cart),
+`data-market-arrived` (arrived crates drawn, from committed fills),
+`data-market-cart-total` and `data-market-arrived-total` (the uncapped counts
+asked for), `data-market-vendor` and `data-market-hit` on its host for tests.
+The host has no attributes until the scene is created, which happens the first
+time it comes on screen. `data-market-hit="<product>:<x>,<y>"` gives CSS pixels inside the canvas
 for the selected container once the camera has settled, so a test can click a
 real container. Not covered by any automated check: the frame rate of the market
-scene (no bench exists for it), touch input in the scene, and Japanese text read
-by a fluent reader.
+scene (no bench exists for it), touch input in the scene, Japanese text read
+by a fluent reader, that the scene stops drawing when scrolled away again
+(only its creation on first sight is tested), and the type of any `.svelte`
+component (`bun check` reads only `.ts` files).
 
 ### How to run the frame bench
 
