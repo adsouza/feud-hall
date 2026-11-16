@@ -7,6 +7,11 @@ import {
   introFrame,
   type IntroFrame,
 } from "./hall-intro-timeline";
+import {
+  createIntroFacade,
+  lightboxTexture,
+  signTint,
+} from "./hall-intro-facade";
 import { STAFF_SPOTS, queueSpot, toHall } from "./hall-layout";
 import { createHallLights } from "./hall-lights";
 import { createFurniture, createHallShell } from "./hall-shell";
@@ -78,23 +83,6 @@ type Diner = {
   restYaw: number;
 };
 
-/** A lightbox with the stall's accent above and below: a sign, no words. */
-function blankSign(accent: T.Color) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 40;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.fillStyle = "#f3e4c6";
-  ctx.fillRect(0, 0, 256, 40);
-  ctx.fillStyle = "#" + accent.getHexString();
-  ctx.fillRect(0, 0, 256, 5);
-  ctx.fillRect(0, 35, 256, 5);
-  const texture = new T.CanvasTexture(canvas);
-  texture.colorSpace = T.SRGBColorSpace;
-  return texture;
-}
-
 export function createHallIntro(
   host: HTMLElement,
   onFail: () => void,
@@ -132,13 +120,12 @@ export function createHallIntro(
   const placements = CUISINES.map((_, i) => spotPlacement(ROOM, i));
   const stalls: StallParts[] = CUISINES.map((cuisine, i) => {
     const parts = kit.build({ cuisine }, placements[i]!);
-    parts.sign.material.map = blankSign(stallAccent(cuisine));
+    parts.sign.material.map = lightboxTexture(stallAccent(cuisine));
     parts.sign.material.needsUpdate = true;
     scene.add(parts.root);
     return parts;
   });
-  const signDark = new T.Color("#2b2d3a");
-  const signLit = new T.Color("#ffffff");
+  const facade = createIntroFacade(scene, roomCentre(ROOM));
 
   // Stools the staff slide into place; the shell draws the tables.
   const furniture = createFurniture();
@@ -332,7 +319,9 @@ export function createHallIntro(
   const viewpoint = new T.Vector3();
   /**
    * What the shell sees: always inside the room, so every wall stays up even
-   * from the street, and above the ceiling until the lights come on. Higher
+   * from the street, and above the ceiling until the lights come on. The
+   * street shot sees the ceiling only through the doorway, so it comes on
+   * there with the lightbox rather than as a change across the frame. Higher
    * than the ceiling, the shell hides it itself, so the rise sees the room.
    */
   function shellViewpoint(frame: IntroFrame) {
@@ -369,8 +358,19 @@ export function createHallIntro(
     onFail();
   }
 
+  /** Any throw while drawing ends the intro once; the loop stops with it. */
   function draw(now: number) {
     if (disposed || failed) return;
+    try {
+      drawFrame(now);
+    } catch {
+      fail();
+      return;
+    }
+    origin ??= performance.now();
+  }
+
+  function drawFrame(now: number) {
     const ms = elapsed(now);
     const frame = introFrame(ms, stalls.length, skippedAt);
     if (host.dataset.introBeat !== frame.beat)
@@ -385,8 +385,9 @@ export function createHallIntro(
     if (frame.sign !== signOn) {
       signOn = frame.sign;
       for (const { sign } of stalls)
-        sign.material.color.copy(frame.sign ? signLit : signDark);
+        sign.material.color.copy(signTint(frame.sign));
     }
+    facade.update(ms, frame.sign, skippedAt !== undefined);
     placeStools(frame.stoolProgress);
     // Movers stay out of the walk from the door and fade in for their beat.
     const moverOpacity =
@@ -398,13 +399,7 @@ export function createHallIntro(
       moverOpacity,
       ms - (skippedAt === undefined ? INTRO_BEATS.hold : skippedAt),
     );
-    try {
-      renderer.render(scene, camera);
-    } catch {
-      fail();
-      return;
-    }
-    origin ??= performance.now();
+    renderer.render(scene, camera);
   }
 
   function animate(now: number) {
@@ -476,6 +471,7 @@ export function createHallIntro(
       }
       kit.dispose();
       box.dispose();
+      facade.dispose();
       lights.dispose();
       shell.dispose();
       stools.dispose();

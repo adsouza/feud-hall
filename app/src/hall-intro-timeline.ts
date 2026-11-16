@@ -1,7 +1,7 @@
 // The decorative hall opening intro: a pure function from elapsed time to the
 // camera, lights, shutters and stools of a made-up room 1. It reads no clock
 // and touches no Three.js; the renderer supplies `ms` and draws the frame.
-import { entrance, roomCentre, spotPlacement } from "./room-layout";
+import { ROOM_SIDE, entrance, roomCentre, spotPlacement } from "./room-layout";
 import { SHUTTER_ROLL_MS, shutterLevel } from "./shutter-roll";
 
 export const INTRO_BEATS = {
@@ -29,6 +29,14 @@ const EYE = 1.55;
 const ROOM = 1;
 /** The camera passes the entrance this far into the lights beat. */
 const THROUGH_DOOR_MS = 5500;
+/**
+ * Before dawn the camera stands this far out on the street beyond
+ * `entrance().outside` (about 10 m from the entrance wall), so the facade,
+ * its doorway and its top edge fill the frame rather than the doorway alone.
+ */
+const STREET_BACK = 8;
+/** Height on the entrance wall the street shot looks at. */
+const FACADE_GAZE_Y = 2.6;
 /** Hold orbit: one turn per 90 s, high above the stalls. */
 const ORBIT_MS = 90000;
 const ORBIT_RADIUS = 14;
@@ -120,7 +128,8 @@ export function introFrame(
 
   const beat = beatAt(ms);
   const door = entrance(ROOM);
-  const outside: Vec3 = [door.outside.x, EYE, door.outside.z];
+  const street: Vec3 = [door.outside.x, EYE, door.outside.z + STREET_BACK];
+  const facade: Vec3 = [centre.x, FACADE_GAZE_Y, centre.z + ROOM_SIDE / 2];
   const inside: Vec3 = [door.inside.x, EYE, door.inside.z];
   const gaze: Vec3 = [centre.x, 1.8, centre.z];
   const firstTarget = aisleTarget(0, stalls);
@@ -132,12 +141,12 @@ export function introFrame(
   let camera: Vec3;
   let target: Vec3;
   if (ms < INTRO_BEATS.lights) {
-    camera = outside;
-    target = gaze;
+    camera = street;
+    target = facade;
   } else if (ms < THROUGH_DOOR_MS) {
     const t = smooth(span(ms, INTRO_BEATS.lights, THROUGH_DOOR_MS));
-    camera = mix(outside, inside, t);
-    target = gaze;
+    camera = mix(street, inside, t);
+    target = mix(facade, gaze, t);
   } else if (ms < INTRO_BEATS.shutters) {
     const t = smooth(span(ms, THROUGH_DOOR_MS, INTRO_BEATS.shutters));
     camera = mix(inside, aisleStart, t);

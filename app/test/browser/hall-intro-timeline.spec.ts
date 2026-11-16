@@ -1,6 +1,11 @@
 import { expect, test } from "./hall";
 import { introFrame } from "../../src/hall-intro-timeline";
-import { roomAt } from "../../src/room-layout";
+import {
+  ENTRANCE_WIDTH,
+  ROOM_SIDE,
+  roomAt,
+  roomCentre,
+} from "../../src/room-layout";
 
 test("intro timeline: beats change at their boundaries", () => {
   expect(introFrame(0, 9).beat).toBe("outside");
@@ -36,10 +41,59 @@ test("intro timeline: shutters rise one after another", () => {
   expect(introFrame(16000, 9).shutterLevels).toEqual(Array(9).fill(0));
 });
 
-test("intro timeline: the camera starts outside the entrance and keeps moving in the hold", () => {
-  expect(introFrame(0, 9).camera[1]).toBeCloseTo(1.55);
-  const c = introFrame(0, 9).camera;
-  expect(roomAt(c[0], c[2])).toBeNull();
+type Vec = [number, number, number];
+const sub = (a: Vec, b: Vec): Vec => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a: Vec, b: Vec) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a: Vec, b: Vec): Vec => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+];
+const unit = (a: Vec): Vec => {
+  const l = Math.hypot(...a);
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
+/** Whether a point lies in a 42° vertical-FOV, 16:9 view from camera to target. */
+function inView(camera: Vec, target: Vec, point: Vec) {
+  const forward = unit(sub(target, camera));
+  const right = unit(cross(forward, [0, 1, 0]));
+  const up = cross(right, forward);
+  const v = sub(point, camera);
+  const depth = dot(v, forward);
+  const tanV = Math.tan((21 * Math.PI) / 180);
+  return (
+    depth > 0 &&
+    Math.abs(dot(v, up)) / depth <= tanV &&
+    Math.abs(dot(v, right)) / depth <= (tanV * 16) / 9
+  );
+}
+
+test("intro timeline: the street shot frames the entrance facade", () => {
+  // hall-shell's wall height, doorway height and wall depth.
+  const wallTop = 4.65;
+  const doorwayTop = 3.05;
+  const face = roomCentre(1).z + ROOM_SIDE / 2 + 0.22;
+  const { camera, target } = introFrame(0, 9);
+  expect(camera[1]).toBeCloseTo(1.55);
+  expect(roomAt(camera[0], camera[2])).toBeNull();
+  const distance = camera[2] - face;
+  expect(distance).toBeGreaterThanOrEqual(8);
+  expect(distance).toBeLessThanOrEqual(10.5);
+  const x = roomCentre(1).x;
+  const points: [string, Vec][] = [["wall top", [x, wallTop, face]]];
+  for (const side of [-1, 1]) {
+    const edge = x + (side * ENTRANCE_WIDTH) / 2;
+    points.push(
+      [`doorway side ${side} foot`, [edge, 0, face]],
+      [`doorway side ${side} head`, [edge, doorwayTop, face]],
+      [`wall top over doorway side ${side}`, [edge, wallTop, face]],
+    );
+  }
+  for (const [name, point] of points)
+    expect(inView(camera, target, point), name).toBe(true);
+});
+
+test("intro timeline: the camera keeps moving in the hold", () => {
   expect(introFrame(40000, 9).camera).not.toEqual(introFrame(50000, 9).camera);
 });
 
