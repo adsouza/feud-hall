@@ -36,6 +36,7 @@
   function fail() {
     if (failed || ended) return;
     failed = true;
+    clearTimeout(dissolveTimer);
     disposeScene();
     onFail();
   }
@@ -47,6 +48,7 @@
   onMount(() => {
     scene = createHallIntro(host, fail);
     if (!scene) fail();
+    else if (failed) disposeScene();
     const hintTimer = setTimeout(() => (hintVisible = false), HINT_MS);
     window.addEventListener("pointerdown", skipOnInput);
     window.addEventListener("keydown", skipOnInput);
@@ -63,6 +65,7 @@
     if (!ending || ended || failed || dissolveTimer !== undefined) return;
     faded = true;
     dissolveTimer = setTimeout(() => {
+      if (failed) return;
       ended = true;
       disposeScene();
       onEnded();
