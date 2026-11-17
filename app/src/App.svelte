@@ -3196,219 +3196,223 @@
           </select></label
         >
       </div>
-      {#if restaurant.stall_limit}
-        <section
-          data-business-section="locations"
-          class:phone-section-hidden={visibleBusinessSection !== "locations"}
-        >
-          <h2>{t("currentLocations")}</h2>
-          {#if ownerStall}
-            <label class="desktop-only"
-              >{t("location")}
-              <select
-                value={ownerStall.id}
-                onchange={(event) => {
-                  ownerStallId = event.currentTarget.value;
-                  refitCuisine = "";
-                }}
-              >
-                {#each restaurant.stalls as stall (stall.id)}
-                  <option value={stall.id}
-                    >{stall.id} · {title(
-                      stall.cuisine ?? restaurant.cuisine,
-                    )}</option
+      <!-- Locations and recognition take a column each, like the menu beside them. -->
+      <div class="business-grid">
+        {#if restaurant.stall_limit}
+          <section
+            data-business-section="locations"
+            class:phone-section-hidden={visibleBusinessSection !== "locations"}
+          >
+            <h2>{t("currentLocations")}</h2>
+            {#if ownerStall}
+              <label class="desktop-only"
+                >{t("location")}
+                <select
+                  value={ownerStall.id}
+                  onchange={(event) => {
+                    ownerStallId = event.currentTarget.value;
+                    refitCuisine = "";
+                  }}
+                >
+                  {#each restaurant.stalls as stall (stall.id)}
+                    <option value={stall.id}
+                      >{stall.id} · {title(
+                        stall.cuisine ?? restaurant.cuisine,
+                      )}</option
+                    >
+                  {/each}
+                </select>
+              </label>
+              {#if ownerStall.ready_at && ownerStall.ready_at > view.hall.now}
+                <p>
+                  {t("readyIn")}
+                  {serviceDuration(ownerStall.ready_at - view.hall.now)}
+                </p>
+              {/if}
+              {#if ownerStall.mode === "closed"}
+                <details>
+                  <summary>{t("refitLocation")}</summary>
+                  <form
+                    onsubmit={(event) => {
+                      event.preventDefault();
+                      if (restaurant && ownerStall && refitCuisine)
+                        void submit("refit_location", {
+                          restaurant_id: restaurant.id,
+                          stall_id: ownerStall.id,
+                          cuisine: refitCuisine,
+                        });
+                    }}
                   >
-                {/each}
-              </select>
-            </label>
-            {#if ownerStall.ready_at && ownerStall.ready_at > view.hall.now}
-              <p>
-                {t("readyIn")}
-                {serviceDuration(ownerStall.ready_at - view.hall.now)}
-              </p>
+                    <CuisinePicker
+                      cuisines={view.hall.cuisines.filter(
+                        (cuisine) => cuisine !== ownerStall?.cuisine,
+                      )}
+                      bind:value={refitCuisine}
+                      label={t("chooseCuisine")}
+                      overlapLabel={t("overlappingCuisines")}
+                      {title}
+                    />
+                    <button
+                      disabled={disabled ||
+                        !refitCuisine ||
+                        refitCuisine === ownerStall.cuisine}
+                    >
+                      {t("refitLocation")} · {cash(
+                        ownerStall.refit_cost ?? "0",
+                      )}
+                    </button>
+                  </form>
+                </details>
+                <p>{t("closedLocationHint")}</p>
+                <button
+                  {disabled}
+                  onclick={() =>
+                    submit("surrender_location", {
+                      restaurant_id: restaurant?.id,
+                      stall_id: ownerStall?.id,
+                    })}
+                >
+                  {t("surrenderLocation")}
+                </button>
+              {/if}
             {/if}
-            {#if ownerStall.mode === "closed"}
-              <details>
-                <summary>{t("refitLocation")}</summary>
+            {#if restaurant.stalls.length >= restaurant.stall_limit}
+              <p>{t("noMoreLocations")}</p>
+            {:else if profile.draft || profile.slots.length}
+              <details bind:open={expansionOpen} bind:this={expansionDetails}>
+                <summary
+                  >{t(
+                    restaurant.stalls.length
+                      ? "expandLocation"
+                      : "reopenLocation",
+                  )}</summary
+                >
                 <form
                   onsubmit={(event) => {
                     event.preventDefault();
-                    if (restaurant && ownerStall && refitCuisine)
-                      void submit("refit_location", {
+                    if (restaurant && expansionSlot && expansionCuisine)
+                      void submit("lease_location", {
                         restaurant_id: restaurant.id,
-                        stall_id: ownerStall.id,
-                        cuisine: refitCuisine,
+                        stall_id: expansionSlot.stall_id,
+                        cuisine: expansionCuisine,
+                        // The rent shown; the server refuses if the quote has moved.
+                        expected_rent: expansionSlot.rent,
                       });
                   }}
                 >
+                  {#if !profile.draft}
+                    <label
+                      >{t("location")}
+                      <select bind:value={expansionStallId} required>
+                        <option value="">—</option>
+                        {#each profile.slots as slot (slot.stall_id)}
+                          <option value={slot.stall_id}
+                            >{slot.stall_id} · {title(slot.tier)} · {cash(
+                              slot.rent,
+                            )}</option
+                          >
+                        {/each}
+                      </select>
+                    </label>
+                  {/if}
+                  {#if expansionSlot}
+                    <p>
+                      {expansionSlot.stall_id} · {t("exposure")}
+                      {expansionSlot.exposure / 1000}× ·
+                      {t("rent")}
+                      {cash(expansionSlot.rent)} · {t("holding")}
+                      {cash(expansionSlot.holding)} ·
+                      {t("setupFee")}
+                      {cash(expansionSlot.setup_fee)}
+                    </p>
+                    <!-- With an estimate, the line explains the estimate's rent instead. -->
+                    {#if !expansionEstimate && expansionRentLine}
+                      <p class="rent-explanation">{expansionRentLine}</p>
+                    {/if}
+                  {/if}
                   <CuisinePicker
-                    cuisines={view.hall.cuisines.filter(
-                      (cuisine) => cuisine !== ownerStall?.cuisine,
-                    )}
-                    bind:value={refitCuisine}
+                    cuisines={view.hall.cuisines}
+                    bind:value={expansionCuisine}
                     label={t("chooseCuisine")}
                     overlapLabel={t("overlappingCuisines")}
                     {title}
                   />
+                  {#if expansionEstimate}
+                    <div class="lease-estimate">
+                      <p>
+                        {t("dailyOverheadEstimate")}
+                        {cash(expansionEstimate.overhead)}
+                      </p>
+                      {#if expansionRentLine}
+                        <p class="rent-explanation">{expansionRentLine}</p>
+                      {/if}
+                      {#if expansionEstimate.meals}
+                        <p>
+                          {t("breakEvenMeals").replace(
+                            "{meals}",
+                            expansionEstimate.meals,
+                          )}
+                        </p>
+                      {:else}
+                        <p>{t("noStarterMargin")}</p>
+                      {/if}
+                    </div>
+                  {/if}
                   <button
-                    disabled={disabled ||
-                      !refitCuisine ||
-                      refitCuisine === ownerStall.cuisine}
+                    disabled={disabled || !expansionSlot || !expansionCuisine}
+                    >{t("leaseLocation")}</button
                   >
-                    {t("refitLocation")} · {cash(ownerStall.refit_cost ?? "0")}
-                  </button>
                 </form>
               </details>
-              <p>{t("closedLocationHint")}</p>
+            {/if}
+            {#if !restaurant.stalls.length && !profile.draft && (profile.waitlisted || !profile.slots.length)}
               <button
                 {disabled}
                 onclick={() =>
-                  submit("surrender_location", {
-                    restaurant_id: restaurant?.id,
-                    stall_id: ownerStall?.id,
-                  })}
+                  profile?.waitlisted
+                    ? submit("leave_waitlist")
+                    : submit("join_waitlist", {
+                        tiers: ["quiet", "standard", "busy", "prime"],
+                      })}
               >
-                {t("surrenderLocation")}
+                {t(profile.waitlisted ? "leaveWaitlist" : "joinWaitlist")}
               </button>
             {/if}
-          {/if}
-          {#if restaurant.stalls.length >= restaurant.stall_limit}
-            <p>{t("noMoreLocations")}</p>
-          {:else if profile.draft || profile.slots.length}
-            <details bind:open={expansionOpen} bind:this={expansionDetails}>
-              <summary
-                >{t(
-                  restaurant.stalls.length
-                    ? "expandLocation"
-                    : "reopenLocation",
-                )}</summary
-              >
-              <form
-                onsubmit={(event) => {
-                  event.preventDefault();
-                  if (restaurant && expansionSlot && expansionCuisine)
-                    void submit("lease_location", {
-                      restaurant_id: restaurant.id,
-                      stall_id: expansionSlot.stall_id,
-                      cuisine: expansionCuisine,
-                      // The rent shown; the server refuses if the quote has moved.
-                      expected_rent: expansionSlot.rent,
-                    });
-                }}
-              >
-                {#if !profile.draft}
-                  <label
-                    >{t("location")}
-                    <select bind:value={expansionStallId} required>
-                      <option value="">—</option>
-                      {#each profile.slots as slot (slot.stall_id)}
-                        <option value={slot.stall_id}
-                          >{slot.stall_id} · {title(slot.tier)} · {cash(
-                            slot.rent,
-                          )}</option
-                        >
-                      {/each}
-                    </select>
-                  </label>
-                {/if}
-                {#if expansionSlot}
-                  <p>
-                    {expansionSlot.stall_id} · {t("exposure")}
-                    {expansionSlot.exposure / 1000}× ·
-                    {t("rent")}
-                    {cash(expansionSlot.rent)} · {t("holding")}
-                    {cash(expansionSlot.holding)} ·
-                    {t("setupFee")}
-                    {cash(expansionSlot.setup_fee)}
-                  </p>
-                  <!-- With an estimate, the line explains the estimate's rent instead. -->
-                  {#if !expansionEstimate && expansionRentLine}
-                    <p class="rent-explanation">{expansionRentLine}</p>
-                  {/if}
-                {/if}
-                <CuisinePicker
-                  cuisines={view.hall.cuisines}
-                  bind:value={expansionCuisine}
-                  label={t("chooseCuisine")}
-                  overlapLabel={t("overlappingCuisines")}
-                  {title}
-                />
-                {#if expansionEstimate}
-                  <div class="lease-estimate">
-                    <p>
-                      {t("dailyOverheadEstimate")}
-                      {cash(expansionEstimate.overhead)}
-                    </p>
-                    {#if expansionRentLine}
-                      <p class="rent-explanation">{expansionRentLine}</p>
-                    {/if}
-                    {#if expansionEstimate.meals}
-                      <p>
-                        {t("breakEvenMeals").replace(
-                          "{meals}",
-                          expansionEstimate.meals,
-                        )}
-                      </p>
-                    {:else}
-                      <p>{t("noStarterMargin")}</p>
-                    {/if}
-                  </div>
-                {/if}
-                <button
-                  disabled={disabled || !expansionSlot || !expansionCuisine}
-                  >{t("leaseLocation")}</button
-                >
-              </form>
-            </details>
-          {/if}
-          {#if !restaurant.stalls.length && !profile.draft && (profile.waitlisted || !profile.slots.length)}
-            <button
-              {disabled}
-              onclick={() =>
-                profile?.waitlisted
-                  ? submit("leave_waitlist")
-                  : submit("join_waitlist", {
-                      tiers: ["quiet", "standard", "busy", "prime"],
-                    })}
-            >
-              {t(profile.waitlisted ? "leaveWaitlist" : "joinWaitlist")}
-            </button>
-          {/if}
-        </section>
-        <section
-          data-business-section="recognition"
-          class:phone-section-hidden={visibleBusinessSection !== "recognition"}
-        >
-          <h2>{t("recognition")}</h2>
-          <p>{t("reputation")} {(restaurant.reputation ?? 0) / 100}%</p>
-          {#if restaurant.award_review_at != null}
-            <p>
-              {t("nextReview")}
-              {t("diningDay").replace(
-                "{day}",
-                String(Math.floor(restaurant.award_review_at / 86_400_000)),
-              )}
-            </p>
-          {/if}
-          <h3>{t("milestones")}</h3>
-          <ul>
-            {#each restaurant.milestones ?? [] as milestone (milestone.milestone)}
-              <li>{title(milestone.milestone)}</li>
-            {/each}
-          </ul>
-          <h3>{t("awards")}</h3>
-          <ul>
-            {#each restaurant.awards ?? [] as award}
-              <li>
-                {title(award.distinction)}{award.cuisine
-                  ? " · " + title(award.cuisine)
-                  : ""}
-              </li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
-      <div class="business-grid">
+          </section>
+          <section
+            data-business-section="recognition"
+            class:phone-section-hidden={visibleBusinessSection !==
+              "recognition"}
+          >
+            <h2>{t("recognition")}</h2>
+            <p>{t("reputation")} {(restaurant.reputation ?? 0) / 100}%</p>
+            {#if restaurant.award_review_at != null}
+              <p>
+                {t("nextReview")}
+                {t("diningDay").replace(
+                  "{day}",
+                  String(Math.floor(restaurant.award_review_at / 86_400_000)),
+                )}
+              </p>
+            {/if}
+            <h3>{t("milestones")}</h3>
+            <ul>
+              {#each restaurant.milestones ?? [] as milestone (milestone.milestone)}
+                <li>{title(milestone.milestone)}</li>
+              {/each}
+            </ul>
+            <h3>{t("awards")}</h3>
+            <ul>
+              {#each restaurant.awards ?? [] as award}
+                <li>
+                  {title(award.distinction)}{award.cuisine
+                    ? " · " + title(award.cuisine)
+                    : ""}
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
         {@render managementPanel("menu")}
         {@render managementPanel("supply")}
         {#if ownerStall}

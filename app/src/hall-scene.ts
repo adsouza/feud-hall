@@ -1287,10 +1287,12 @@ export function createHallScene(
             root.rotation.y,
           ),
         );
+      // About 12° down: the counter's front edge (top 0.93 m, 1.03 m ahead of
+      // the eye) sits 31° below level, so the 42° view keeps a sliver of it.
       orbit.target
         .copy(camera.position)
         .add(
-          new T.Vector3(0, -0.0045, 0.01).applyAxisAngle(
+          new T.Vector3(0, -0.0022, 0.01).applyAxisAngle(
             new T.Vector3(0, 1, 0),
             root.rotation.y,
           ),
