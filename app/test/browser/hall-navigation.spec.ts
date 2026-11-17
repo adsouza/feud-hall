@@ -84,7 +84,10 @@ test("every first arrow enters at eye level facing an open stall, then walking r
     await host.press(key);
     const camera = await pose();
     expect(camera.position.y, key).toBeCloseTo(1.55, 4);
-    expect(Math.abs(camera.forward.y), key).toBeLessThan(0.08);
+    // Shift+ArrowUp tilts 1.15 × 1/30 rad at once, and a frame drawn before
+    // the key is released adds at most 1.15 × 0.05 rad: sin(0.0958) ≈ 0.096.
+    // Two such frames would reach about 0.153.
+    expect(Math.abs(camera.forward.y), key).toBeLessThan(0.1);
     const id = await selected.inputValue();
     const index = snapshot.hall.stalls.findIndex(
       (stall: any) => stall.stall_id === id,
