@@ -191,3 +191,20 @@ test("crash notice is not covered by the opening intro while the hall is startin
     )
     .toBe(true);
 });
+
+test("crash notice keeps its dismiss button beside the text", async ({
+  page,
+  hall,
+}) => {
+  await asDesktop(page, reports);
+  await page.goto(hall.origin);
+  const dismiss = await notice(page)
+    .getByRole("button", { name: "Dismiss notification" })
+    .boundingBox();
+  const show = await notice(page)
+    .getByRole("button", { name: "Show in folder" })
+    .boundingBox();
+  const path = await notice(page).locator("code").boundingBox();
+  expect(dismiss!.x).toBeGreaterThan(path!.x + path!.width);
+  expect(dismiss!.y).toBeLessThan(show!.y);
+});

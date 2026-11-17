@@ -106,7 +106,7 @@ fn start_diagnostics(app: &App) -> Diagnostics {
     );
     fields.insert("os".into(), std::env::consts::OS.into());
     fields.extend(diagnostics::environment_from(
-        std::env::vars(),
+        std::env::vars_os(),
         std::fs::read_to_string("/.flatpak-info").ok().as_deref(),
     ));
     #[cfg(target_os = "linux")]

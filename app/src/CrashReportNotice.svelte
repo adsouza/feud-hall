@@ -68,8 +68,13 @@
 {/if}
 
 <style>
+  /* Laid out like the refusal notice: text first, dismiss at the end. */
   .crash-notice {
+    display: flex;
+    justify-content: space-between;
     align-items: flex-start;
+    gap: 0.75rem;
+    margin: 1em 0;
   }
   .crash-notice-text {
     display: grid;

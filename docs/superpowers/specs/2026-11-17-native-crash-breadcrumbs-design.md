@@ -67,9 +67,11 @@ single `write` and no user-space buffering, so a hard crash loses at most the
 record being written. The first record, `session_started`, carries: app version
 and target OS; `XDG_SESSION_TYPE`; whether `WAYLAND_DISPLAY` and `DISPLAY` are
 set; `GDK_BACKEND`; every `WEBKIT_*` variable; the `runtime=` line from
-`/.flatpak-info` when present; and the GTK and WebKitGTK versions. Each file is
-capped (256 KiB proposed); past the cap, one `log_truncated` record is written
-and later records are dropped. Clean session logs are pruned so only the most
+`/.flatpak-info` when present; and the GTK and WebKitGTK versions. (Revised in
+review: the log rotates between two halves of a 256 KiB cap, repeating
+`session_started` at the top of each, so the newest records survive a long
+session. The first draft dropped records past the cap, which lost the ones a
+crash needs. `WEBKIT_*` values other than short flags are recorded as `set`.) Clean session logs are pruned so only the most
 recent few remain.
 
 **Native events.** Window focus gained/lost, resized, scale-factor changes,

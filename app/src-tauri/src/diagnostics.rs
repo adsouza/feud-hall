@@ -1,11 +1,14 @@
 //! Desktop crash breadcrumbs: one JSON Lines file per session, written as
 //! events happen so a hard crash loses at most the record being written.
+//! The log rotates between two halves of the cap (`.jsonl` and `.jsonl.old`),
+//! so a long session keeps its newest records, the ones a crash needs.
 //! Diagnostics never fail the game: any I/O error turns them off.
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use time::macros::format_description;
@@ -117,9 +120,11 @@ struct Inner {
 
 struct State {
     file: Option<File>,
+    path: PathBuf,
     written: u64,
     cap: u64,
-    truncated: bool,
+    // The session_started record, repeated at the top of each new half.
+    header: Option<String>,
     window: u64,
     in_window: u32,
     dropped: u64,
@@ -147,9 +152,10 @@ impl Breadcrumbs {
                 started: Instant::now(),
                 state: Mutex::new(State {
                     file: Some(file),
+                    path: path.to_path_buf(),
                     written,
                     cap,
-                    truncated: false,
+                    header: None,
                     window: 0,
                     in_window: 0,
                     dropped: 0,
@@ -179,13 +185,11 @@ impl Breadcrumbs {
             return;
         };
         let line = inner.line(source, event, fields);
-        if state.written + line.len() as u64 > state.cap {
-            if !state.truncated {
-                state.truncated = true;
-                let notice = inner.line(Source::Native, "log_truncated", Map::new());
-                state.write(&notice);
-            }
-            return;
+        if event == "session_started" {
+            state.header = Some(line.clone());
+        }
+        if state.written > 0 && state.written + line.len() as u64 > state.cap / 2 {
+            state.rotate();
         }
         state.write(&line);
     }
@@ -260,7 +264,30 @@ impl Inner {
     }
 }
 
+pub fn previous_half(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".old");
+    PathBuf::from(name)
+}
+
 impl State {
+    fn rotate(&mut self) {
+        self.file = None;
+        let reopened = fs::rename(&self.path, previous_half(&self.path)).and_then(|()| {
+            OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&self.path)
+        });
+        let Ok(file) = reopened else { return };
+        self.file = Some(file);
+        self.written = 0;
+        if let Some(header) = self.header.clone() {
+            self.write(&header);
+        }
+    }
+
     fn write(&mut self, line: &str) {
         let Some(file) = &mut self.file else { return };
         // One write per record: the kernel keeps it if the process dies next.
@@ -272,10 +299,26 @@ impl State {
     }
 }
 
+/// Short flag-like values (`1`, `true`, `0`) are kept; anything else, such
+/// as a path that could name the user, is recorded only as set.
+fn webkit_value(value: &str) -> &str {
+    let flag = value.len() <= 16
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if flag {
+        value
+    } else {
+        "set"
+    }
+}
+
 /// The session's environment, limited to an allowlist: no paths, user names
 /// or unrelated variables reach the log.
+/// Takes `vars_os()`: `std::env::vars()` panics on a non-UTF-8 variable,
+/// which would stop the game from starting.
 pub fn environment_from(
-    vars: impl IntoIterator<Item = (String, String)>,
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
     flatpak_info: Option<&str>,
 ) -> Map<String, Value> {
     let mut environment = Map::new();
@@ -283,6 +326,8 @@ pub fn environment_from(
     let mut wayland = false;
     let mut x11 = false;
     for (key, value) in vars {
+        let Ok(key) = key.into_string() else { continue };
+        let value = value.to_string_lossy().into_owned();
         match key.as_str() {
             "XDG_SESSION_TYPE" => {
                 environment.insert("session_type".into(), value.into());
@@ -293,7 +338,7 @@ pub fn environment_from(
             "WAYLAND_DISPLAY" => wayland = !value.is_empty(),
             "DISPLAY" => x11 = !value.is_empty(),
             _ if key.starts_with("WEBKIT_") => {
-                webkit.insert(key, value.into());
+                webkit.insert(key, webkit_value(&value).into());
             }
             _ => {}
         }
@@ -364,24 +409,40 @@ mod tests {
     }
 
     #[test]
-    fn cap_writes_log_truncated_once() {
+    fn cap_keeps_the_newest_records() {
         let path = scratch("cap").join("session.jsonl");
-        let crumbs = Breadcrumbs::open(&path, 600);
-        for index in 0..50 {
+        let old = path.with_extension("jsonl.old");
+        let crumbs = Breadcrumbs::open(&path, 1200);
+        crumbs.record(
+            Source::Native,
+            "session_started",
+            fields(json!({"os": "linux"})),
+        );
+        for index in 0..100 {
             crumbs.record(
                 Source::Native,
                 "window_resized",
                 fields(json!({"width": index})),
             );
         }
-        let text = std::fs::read_to_string(&path).unwrap();
-        let longest = text.lines().map(str::len).max().unwrap() as u64 + 1;
-        assert!(text.len() as u64 <= 600 + longest, "{} bytes", text.len());
-        let truncated = lines(&path)
-            .iter()
-            .filter(|line| line["event"] == "log_truncated")
-            .count();
-        assert_eq!(truncated, 1);
+        let current = std::fs::read_to_string(&path).unwrap();
+        let previous = std::fs::read_to_string(&old).unwrap();
+        let longest = current
+            .lines()
+            .chain(previous.lines())
+            .map(str::len)
+            .max()
+            .unwrap() as u64
+            + 1;
+        assert!(
+            (current.len() + previous.len()) as u64 <= 1200 + longest,
+            "{} bytes",
+            current.len() + previous.len()
+        );
+        let newest = lines(&path);
+        assert_eq!(newest[0]["event"], "session_started");
+        assert_eq!(newest[0]["os"], "linux");
+        assert_eq!(newest.last().unwrap()["width"], 99);
     }
 
     #[test]
@@ -405,7 +466,7 @@ mod tests {
         ]
         .map(|(key, value)| (key.to_string(), value.to_string()));
         let environment = environment_from(
-            vars,
+            vars.map(|(key, value)| (key.into(), value.into())),
             Some("[Application]\nruntime=runtime/org.gnome.Platform/x86_64/50\n"),
         );
         assert_eq!(environment["session_type"], "wayland");
@@ -470,5 +531,34 @@ mod tests {
         assert_eq!(lines(&path)[20]["dropped"], 5);
         assert_eq!(events[21], "webview_cut");
         assert_eq!(events.len(), 22);
+    }
+
+    #[test]
+    fn environment_survives_non_utf8_and_hides_webkit_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let vars: Vec<(OsString, OsString)> = vec![
+            (
+                "XDG_SESSION_TYPE".into(),
+                OsString::from_vec(vec![b'x', 0xff]),
+            ),
+            (OsString::from_vec(vec![0xfe, b'A']), "anything".into()),
+            ("WEBKIT_DISABLE_COMPOSITING_MODE".into(), "1".into()),
+            (
+                "WEBKIT_INJECTED_BUNDLE_PATH".into(),
+                "/home/ria/.local/lib/bundle".into(),
+            ),
+        ];
+        let environment = environment_from(vars, None);
+        assert_eq!(environment["session_type"], "x\u{fffd}");
+        assert_eq!(
+            environment["webkit_env"]["WEBKIT_DISABLE_COMPOSITING_MODE"],
+            "1"
+        );
+        assert_eq!(
+            environment["webkit_env"]["WEBKIT_INJECTED_BUNDLE_PATH"],
+            "set"
+        );
+        assert!(!serde_json::to_string(&environment).unwrap().contains("ria"));
     }
 }

@@ -38,6 +38,9 @@ fn marker_path(dir: &Path, id: &str) -> PathBuf {
 fn log_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("session-{id}.jsonl"))
 }
+fn old_log_path(dir: &Path, id: &str) -> PathBuf {
+    crate::diagnostics::previous_half(&log_path(dir, id))
+}
 fn report_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("crash-{id}.txt"))
 }
@@ -85,6 +88,7 @@ impl Session {
             .collect();
         for id in clean.iter().rev().skip(KEEP_LOGS) {
             let _ = fs::remove_file(log_path(&self.dir, id));
+            let _ = fs::remove_file(old_log_path(&self.dir, id));
         }
     }
 }
@@ -103,12 +107,18 @@ pub fn collect(dir: &Path, own: &str, os: &str) -> Vec<PathBuf> {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) | Err(TryLockError::Error(_)) => continue,
         }
-        let log = fs::read_to_string(log_path(dir, &id)).ok();
+        let older = fs::read_to_string(old_log_path(dir, &id)).ok();
+        let newer = fs::read_to_string(log_path(dir, &id)).ok();
+        let log = match (older, newer) {
+            (None, None) => None,
+            (older, newer) => Some(older.unwrap_or_default() + &newer.unwrap_or_default()),
+        };
         let path = report_path(dir, &id);
         if fs::write(&path, build_report(&id, log.as_deref(), os)).is_err() {
             continue;
         }
         let _ = fs::remove_file(log_path(dir, &id));
+        let _ = fs::remove_file(old_log_path(dir, &id));
         let _ = fs::remove_file(marker_path(dir, &id));
         reports.push(path);
     }
@@ -397,5 +407,23 @@ mod tests {
         assert!(pending(&file).is_empty());
         assert!(collect(&file, "x", "linux").is_empty());
         assert!(start(&file, "x").is_err());
+    }
+
+    #[test]
+    fn rotated_log_is_joined_in_report() {
+        let dir = scratch("rotated");
+        let id = "20261117T121130.000Z-2";
+        let mut lines = LOG.lines();
+        let first = format!("{}\n{}\n", lines.next().unwrap(), lines.next().unwrap());
+        let last = format!("{}\n", lines.next().unwrap());
+        fs::write(dir.join(format!("session-{id}.marker")), "").unwrap();
+        fs::write(dir.join(format!("session-{id}.jsonl.old")), first).unwrap();
+        fs::write(dir.join(format!("session-{id}.jsonl")), last).unwrap();
+        collect(&dir, "20261117T130000.000Z-2", "linux");
+        let report = fs::read_to_string(dir.join(format!("crash-{id}.txt"))).unwrap();
+        assert!(report.contains("window_focus"));
+        assert!(report.contains("selection_owner_changed"));
+        assert!(report.contains("Last 3 events"));
+        assert!(!dir.join(format!("session-{id}.jsonl.old")).exists());
     }
 }

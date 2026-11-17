@@ -313,9 +313,12 @@ positions and cannot masquerade as new live sales or trigger external delivery.
 A native crash (for example a SEGV inside WebKitGTK) cannot be caught safely
 in-process; the system's crash capture (systemd-coredump, macOS crash reports)
 keeps the stack. The Tauri client keeps the context: a per-session JSON Lines
-log (schema `v: 1`) in the app log directory, one unbuffered write per record,
-capped at 256 KiB. The first record carries the app version and an allowlisted
-environment (session type, display presence, `GDK_BACKEND`, `WEBKIT_*`, the
+log (schema `v: 1`) in the app log directory, one unbuffered write per record.
+The log rotates between two halves of 256 KiB (`.jsonl` and `.jsonl.old`, with
+the opening record repeated at the top of each), so a long session keeps its
+newest records. The first record carries the app version and an allowlisted
+environment (session type, display presence, `GDK_BACKEND`, `WEBKIT_*` with
+anything other than a short flag value recorded only as set, the
 Flatpak runtime, and the run-time GTK/WebKitGTK versions). Native records cover
 window focus/size/close and, on Linux, ownership changes of the CLIPBOARD and
 PRIMARY selections, never their contents. The webview reports through the
