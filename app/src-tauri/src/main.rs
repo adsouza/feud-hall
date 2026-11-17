@@ -1,3 +1,4 @@
+mod diagnostics;
 mod transport;
 
 use tauri::webview::NewWindowResponse;
