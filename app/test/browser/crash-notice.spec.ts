@@ -164,3 +164,30 @@ test("crash notice follows the Japanese locale", async ({ page, hall }) => {
     page.getByRole("button", { name: "フォルダーで表示" }),
   ).toBeVisible();
 });
+
+test("crash notice is not covered by the opening intro while the hall is starting", async ({
+  page,
+  hall,
+}) => {
+  await asDesktop(page, reports);
+  // No hall reply: the client keeps waiting and plays the opening intro.
+  await page.route("**/api/state**", (route) => route.abort("timedout"));
+  await page.goto(hall.origin);
+  await expect(notice(page)).toBeVisible();
+  await expect(page.locator("[data-intro-stage]")).toBeVisible();
+  await expect
+    .poll(() =>
+      notice(page).evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const points = [
+          [box.left + 8, box.top + 8],
+          [box.right - 8, box.bottom - 8],
+          [box.left + box.width / 2, box.top + box.height / 2],
+        ];
+        return points.every(([x, y]) =>
+          element.contains(document.elementFromPoint(x, y)),
+        );
+      }),
+    )
+    .toBe(true);
+});

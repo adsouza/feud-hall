@@ -214,6 +214,7 @@
   >(null);
   let introInsets = $state({ top: 0, bottom: 0 });
   let headerElement = $state<HTMLElement>();
+  let crashNoticeElement = $state<HTMLElement>();
   let mainElement = $state<HTMLElement>();
   let navigationElement = $state<HTMLElement>();
   let introCaptionElement = $state<HTMLElement>();
@@ -254,10 +255,16 @@
   // or to the window's bottom.
   function placeIntro() {
     if (!mainElement || !navigationElement) return;
+    // The stage starts below whatever is shown above it: the waiting caption
+    // and, on the desktop, a crash report notice.
+    const above = [introCaptionElement, crashNoticeElement]
+      .map((element) => element?.getBoundingClientRect())
+      .filter((box) => box && box.height > 0)
+      .map((box) => box!.bottom);
     const top = Math.max(
       0,
-      introCaptionElement
-        ? introCaptionElement.getBoundingClientRect().bottom + INTRO_CAPTION_GAP
+      above.length
+        ? Math.max(...above) + INTRO_CAPTION_GAP
         : mainElement.getBoundingClientRect().top,
     );
     const navigationTop = navigationElement.getBoundingClientRect().top;
@@ -281,6 +288,7 @@
       mainElement,
       navigationElement,
       introCaptionElement,
+      crashNoticeElement,
     ])
       if (element) observer.observe(element);
     return () => {
@@ -2560,6 +2568,10 @@
   >{inWorldNotices && updateAvailable && connected ? t("newVersion") : ""}</span
 >
 <main bind:this={mainElement}>
+  <!-- First in main and measured by placeIntro, so the opening intro never covers it. -->
+  {#if nativeClient}<div bind:this={crashNoticeElement}>
+      <CrashReportNotice {t} />
+    </div>{/if}
   {#if intro !== "idle"}
     <div
       class="intro-stage"
@@ -2647,7 +2659,6 @@
       </div>
     {/if}
   {/if}
-  {#if nativeClient}<CrashReportNotice {t} />{/if}
   {#if !view}
     <p>{t("loading")}</p>
   {:else if page === "hall"}
