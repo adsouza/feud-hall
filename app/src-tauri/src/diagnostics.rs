@@ -162,6 +162,7 @@ impl Breadcrumbs {
         Breadcrumbs { inner: None }
     }
 
+    #[cfg(test)]
     pub fn is_enabled(&self) -> bool {
         self.inner.as_ref().is_some_and(|inner| {
             inner
