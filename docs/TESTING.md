@@ -425,6 +425,21 @@ separation. It does not substitute for installed WKWebView/WebKitGTK checks.
 Local macOS verification on November 11, 2026 confirmed that 120% zoom
 survives an actual app quit/relaunch and that the next Cmd+- returns to 100%.
 The native Linux persistence path has not been exercised locally.
+Crash breadcrumbs: `cargo test --locked --bin feud-hall diagnostics::
+crash_reports:: native_events::` covers the log writer (cap, environment
+allowlist, unwritable folder), webview validation and rate limit, lock-based
+detection of dead sessions (a running second instance is left alone), report
+assembly from partial or missing logs, pruning, and acknowledgment. The Linux
+selection hooks and toolkit versions compile only in the hosted native workflow.
+`bun run test:browser --grep 'diagnostics'` runs the actual
+`diagnostics.js` with a mocked bridge: no copied or selected text, truncated
+errors, one GPU record, and no report loop when the bridge rejects.
+`bun run test:browser --grep 'crash notice'` (after `bun run build`) runs the
+client in mocked desktop mode against a test hall: the newest path without a
+Copy button, Show in folder failure, acknowledgment across reload, and Japanese.
+Both mock the native side, so check one real crash report on an installed
+Linux package: Show in folder in the Flatpak, and the notice after
+`kill -SEGV` on the running client.
 Track real installed-client gameplay, native IME and GPU measurements,
 live Render evidence, and a representative 30-real-day archive separately.
 See the [local Milestone 6 evidence](superpowers/reports/2026-11-10-milestone-6-local.md).
