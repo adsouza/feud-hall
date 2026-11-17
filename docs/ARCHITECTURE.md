@@ -308,6 +308,31 @@ them. Pure decision/evolution functions have no logging side effects; wrappers
 observe their results. Replay diagnostics identify the replay run and historical
 positions and cannot masquerade as new live sales or trigger external delivery.
 
+### Desktop crash breadcrumbs
+
+A native crash (for example a SEGV inside WebKitGTK) cannot be caught safely
+in-process; the system's crash capture (systemd-coredump, macOS crash reports)
+keeps the stack. The Tauri client keeps the context: a per-session JSON Lines
+log (schema `v: 1`) in the app log directory, one unbuffered write per record.
+The log rotates between two halves of 256 KiB (`.jsonl` and `.jsonl.old`, with
+the opening record repeated at the top of each), so a long session keeps its
+newest records. The first record carries the app version and an allowlisted
+environment (session type, display presence, `GDK_BACKEND`, `WEBKIT_*` with
+anything other than a short flag value recorded only as set, the
+Flatpak runtime, and the run-time GTK/WebKitGTK versions). Native records cover
+window focus/size/close and, on Linux, ownership changes of the CLIPBOARD and
+PRIMARY selections, never their contents. The webview reports through the
+`diagnostic_breadcrumb` command, which accepts only fixed kinds with bounded
+fields (no selected, copied, or typed text; error messages at most 300
+characters) and 20 records per second. Each session holds an exclusive lock on
+its marker file. At startup an unlocked marker means that session ended without
+a clean exit, and its log becomes a `crash-*.txt` report with instructions for
+finding the stack. PIDs are not used, because a Flatpak's PID is namespaced.
+The desktop client shows the report's path with Show in folder and never writes
+to the clipboard. Reports stay on the device; there is no upload. Diagnostics
+failures disable the log for the session and never affect the game. See the
+[design](superpowers/specs/2026-11-17-native-crash-breadcrumbs-design.md).
+
 Centralized search, retention/access policy, and operational investigation are
 required by [Deployment](DEPLOYMENT.md#diagnostic-operations-and-retention).
 Coverage, redaction, correlation, and failure-isolation evidence are defined in

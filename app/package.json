@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "oxlint src test/browser src-tauri/src/zoom.js vite.config.ts playwright.config.ts",
+    "lint": "oxlint src test/browser src-tauri/src/zoom.js src-tauri/src/diagnostics.js vite.config.ts playwright.config.ts",
     "format": "prettier --ignore-path ../.gitignore --write .",
     "format:check": "prettier --ignore-path ../.gitignore --check .",
     "check:svelte": "svelte-check --tsconfig ./tsconfig.svelte.json",

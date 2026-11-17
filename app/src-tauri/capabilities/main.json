@@ -1,7 +1,14 @@
 {
   "identifier": "main",
-  "description": "The packaged main window can use the bounded hall transport and page zoom.",
+  "description": "The packaged main window can use the bounded hall transport, page zoom, and crash breadcrumbs.",
   "windows": ["main"],
   "local": true,
-  "permissions": ["allow-hall-request", "core:webview:allow-set-webview-zoom"]
+  "permissions": [
+    "allow-hall-request",
+    "allow-diagnostic-breadcrumb",
+    "allow-crash-reports",
+    "allow-acknowledge-crash-reports",
+    "allow-reveal-crash-report",
+    "core:webview:allow-set-webview-zoom"
+  ]
 }

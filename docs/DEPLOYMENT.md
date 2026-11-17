@@ -403,6 +403,23 @@ run on GitHub, so its first real tag is also its first qualification.
   and the current recovery status. Credentials still obey their wall-time expiry;
   current safety/absence holds and recorded cleaning state survive recovery.
 
+### Desktop crash reports
+
+After a session ends without a clean exit, the next launch shows where its
+report was saved. Reports and session logs are in the app log directory: on
+Linux `~/.var/app/io.github.adsouza.FeudHall/data/io.github.adsouza.FeudHall/logs`
+for the Flatpak (`~/.local/share/io.github.adsouza.FeudHall/logs` for the
+`.deb`), and on macOS `~/Library/Logs/io.github.adsouza.FeudHall`. The newest 5
+reports and 5 clean session logs are kept. A report's header lists the
+environment and the last 40 breadcrumbs, then says how to find the stack. On
+Linux that means `coredumpctl list feud-hall --since "<session start>"`, then,
+with `org.gnome.Sdk//50`, `org.gnome.Sdk.Debug//50`, and
+`org.gnome.Platform.Debug//50` installed,
+`flatpak-coredumpctl -m <PID> io.github.adsouza.FeudHall` and `bt full` in gdb.
+The PID is the host one shown by `coredumpctl`, not the one inside the sandbox.
+On macOS, use the matching `feud-hall-*` file in
+`~/Library/Logs/DiagnosticReports`. The report ends with the raw JSON Lines log.
+
 ## Diagnostic operations and retention
 
 Before public launch, provision centralized searchable structured logs and linked

@@ -1080,6 +1080,8 @@ dependencies = [
 name = "feud-hall"
 version = "0.1.0"
 dependencies = [
+ "gdk",
+ "gtk",
  "keyring",
  "reqwest",
  "serde",
@@ -1087,7 +1089,9 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-window-state",
+ "time",
  "tokio",
+ "webkit2gtk",
 ]
 
 [[package]]
