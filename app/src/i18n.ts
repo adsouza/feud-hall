@@ -375,6 +375,12 @@ const en = {
   reason: "Decision reason",
   update: "Updated",
   dismissNotification: "Dismiss notification",
+  crashReportTitle: "Feud Hall closed unexpectedly last time.",
+  crashReportBody:
+    "A diagnostic report was saved. It contains no passwords or game text. Please send it to the developers:",
+  crashReportShow: "Show in folder",
+  crashReportShowFailed:
+    "The folder could not be opened. The report's location is shown above.",
   retry: "Retry same command",
   uncertain:
     "The server may have committed this command. Retry with its original ID.",
@@ -860,6 +866,12 @@ const ja: Record<Key, string> = {
   reason: "判断理由",
   update: "更新しました",
   dismissNotification: "通知を閉じる",
+  crashReportTitle: "前回、Feud Hallが予期せず終了しました。",
+  crashReportBody:
+    "診断レポートを保存しました。パスワードやゲーム内の文章は含まれていません。開発者に送ってください：",
+  crashReportShow: "フォルダーで表示",
+  crashReportShowFailed:
+    "フォルダーを開けませんでした。レポートの場所は上に表示されています。",
   retry: "同じ操作を再試行",
   uncertain:
     "操作はすでに確定している可能性があります。同じIDで再試行してください。",

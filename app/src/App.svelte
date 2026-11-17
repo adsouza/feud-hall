@@ -8,6 +8,7 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import { isTauri } from "@tauri-apps/api/core";
+  import CrashReportNotice from "./CrashReportNotice.svelte";
   import { fade } from "svelte/transition";
   import appIcon from "../../assets/branding/feud-hall-icon.svg?no-inline";
   import CuisinePicker from "./CuisinePicker.svelte";
@@ -2646,6 +2647,7 @@
       </div>
     {/if}
   {/if}
+  {#if nativeClient}<CrashReportNotice {t} />{/if}
   {#if !view}
     <p>{t("loading")}</p>
   {:else if page === "hall"}
