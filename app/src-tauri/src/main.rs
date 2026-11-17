@@ -157,6 +157,7 @@ fn main() {
                 .initialization_script(
                     include_str!("zoom.js").replace("__FEUD_OS__", std::env::consts::OS),
                 )
+                .initialization_script(include_str!("diagnostics.js"))
                 .on_navigation(|url| {
                     url.scheme() == "tauri"
                         && url.host_str() == Some("localhost")
