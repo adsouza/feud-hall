@@ -1,7 +1,8 @@
 //! Desktop crash breadcrumbs: one JSON Lines file per session, written as
 //! events happen so a hard crash loses at most the record being written.
 //! Diagnostics never fail the game: any I/O error turns them off.
-use serde_json::{Map, Value};
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -11,6 +12,83 @@ use time::macros::format_description;
 use time::OffsetDateTime;
 
 pub const LOG_CAP: u64 = 256 * 1024;
+const WEBVIEW_PER_SECOND: u32 = 20;
+
+/// The only things the page can report. Unknown kinds and extra fields are
+/// refused, so the page has no way to write arbitrary text to the log. The
+/// field-less kinds are empty struct variants: serde ignores extra fields on
+/// unit variants even with `deny_unknown_fields`.
+#[derive(Deserialize, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WebviewCrumb {
+    Visibility {
+        visible: bool,
+    },
+    Focus {
+        focused: bool,
+    },
+    Copy {},
+    Cut {},
+    Selection {
+        length: u32,
+    },
+    WebglLost {},
+    WebglRestored {},
+    Error {
+        message: String,
+        file: String,
+        line: u32,
+    },
+    Rejection {
+        message: String,
+    },
+    Gpu {
+        vendor: String,
+        renderer: String,
+    },
+}
+
+fn clip(text: &str, limit: usize) -> String {
+    text.chars().take(limit).collect()
+}
+
+impl WebviewCrumb {
+    fn record(self) -> (&'static str, Value) {
+        match self {
+            WebviewCrumb::Visibility { visible } => {
+                ("webview_visibility", json!({ "visible": visible }))
+            }
+            WebviewCrumb::Focus { focused } => ("webview_focus", json!({ "focused": focused })),
+            WebviewCrumb::Copy {} => ("webview_copy", json!({})),
+            WebviewCrumb::Cut {} => ("webview_cut", json!({})),
+            WebviewCrumb::Selection { length } => {
+                ("webview_selection", json!({ "length": length }))
+            }
+            WebviewCrumb::WebglLost {} => ("webview_webgl_lost", json!({})),
+            WebviewCrumb::WebglRestored {} => ("webview_webgl_restored", json!({})),
+            WebviewCrumb::Error {
+                message,
+                file,
+                line,
+            } => (
+                "webview_error",
+                json!({
+                    "message": clip(&message, 300),
+                    "file": clip(file.rsplit('/').next().unwrap_or_default(), 120),
+                    "line": line,
+                }),
+            ),
+            WebviewCrumb::Rejection { message } => (
+                "webview_rejection",
+                json!({ "message": clip(&message, 300) }),
+            ),
+            WebviewCrumb::Gpu { vendor, renderer } => (
+                "webview_gpu",
+                json!({ "vendor": clip(&vendor, 200), "renderer": clip(&renderer, 200) }),
+            ),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub enum Source {
@@ -42,6 +120,9 @@ struct State {
     written: u64,
     cap: u64,
     truncated: bool,
+    window: u64,
+    in_window: u32,
+    dropped: u64,
 }
 
 pub fn utc_timestamp(at: OffsetDateTime) -> String {
@@ -69,6 +150,9 @@ impl Breadcrumbs {
                     written,
                     cap,
                     truncated: false,
+                    window: 0,
+                    in_window: 0,
+                    dropped: 0,
                 }),
             })),
         }
@@ -103,6 +187,55 @@ impl Breadcrumbs {
             return;
         }
         state.write(&line);
+    }
+}
+
+impl Breadcrumbs {
+    pub fn record_webview(&self, crumb: WebviewCrumb) {
+        let window = self
+            .inner
+            .as_ref()
+            .map_or(0, |inner| inner.started.elapsed().as_secs());
+        self.record_webview_at(crumb, window);
+    }
+
+    /// Rate-limits by one-second window; a window that dropped records is
+    /// reported, with its count, before the next accepted record.
+    fn record_webview_at(&self, crumb: WebviewCrumb, window: u64) {
+        let Some(inner) = &self.inner else { return };
+        let dropped = {
+            let Ok(mut state) = inner.state.lock() else {
+                return;
+            };
+            let mut dropped = 0;
+            if state.window != window {
+                state.window = window;
+                state.in_window = 0;
+                dropped = std::mem::take(&mut state.dropped);
+            }
+            if state.in_window >= WEBVIEW_PER_SECOND {
+                state.dropped += 1;
+                return;
+            }
+            state.in_window += 1;
+            dropped
+        };
+        if dropped > 0 {
+            self.record(
+                Source::Webview,
+                "webview_rate_limited",
+                fields(json!({ "dropped": dropped })),
+            );
+        }
+        let (event, data) = crumb.record();
+        self.record(Source::Webview, event, fields(data));
+    }
+}
+
+fn fields(value: Value) -> Map<String, Value> {
+    match value {
+        Value::Object(map) => map,
+        _ => Map::new(),
     }
 }
 
@@ -288,5 +421,53 @@ mod tests {
         let serialized = serde_json::to_string(&environment).unwrap();
         assert!(!serialized.contains("hunter2"));
         assert!(!serialized.contains("/home/ria"));
+    }
+
+    #[test]
+    fn unknown_kind_and_extra_field_are_rejected() {
+        assert!(serde_json::from_value::<WebviewCrumb>(json!({"kind": "paste"})).is_err());
+        assert!(
+            serde_json::from_value::<WebviewCrumb>(json!({"kind": "copy", "text": "x"})).is_err()
+        );
+        assert!(serde_json::from_value::<WebviewCrumb>(
+            json!({"kind": "selection", "length": 3, "text": "abc"})
+        )
+        .is_err());
+        assert!(serde_json::from_value::<WebviewCrumb>(json!({"kind": "copy"})).is_ok());
+    }
+
+    #[test]
+    fn error_message_is_truncated_to_300_chars() {
+        let path = scratch("truncate").join("session.jsonl");
+        let crumbs = Breadcrumbs::open(&path, LOG_CAP);
+        crumbs.record_webview(WebviewCrumb::Error {
+            message: "日本語".repeat(400),
+            file: "tauri://localhost/assets/index-abc.js".into(),
+            line: 7,
+        });
+        let written = lines(&path);
+        assert_eq!(written[0]["event"], "webview_error");
+        assert_eq!(written[0]["message"].as_str().unwrap().chars().count(), 300);
+        assert_eq!(written[0]["file"], "index-abc.js");
+        assert_eq!(written[0]["line"], 7);
+    }
+
+    #[test]
+    fn rate_limit_drops_and_reports() {
+        let path = scratch("rate").join("session.jsonl");
+        let crumbs = Breadcrumbs::open(&path, LOG_CAP);
+        for _ in 0..25 {
+            crumbs.record_webview_at(WebviewCrumb::Copy {}, 10);
+        }
+        crumbs.record_webview_at(WebviewCrumb::Cut {}, 11);
+        let events: Vec<String> = lines(&path)
+            .iter()
+            .map(|line| line["event"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(events.iter().filter(|e| *e == "webview_copy").count(), 20);
+        assert_eq!(events[20], "webview_rate_limited");
+        assert_eq!(lines(&path)[20]["dropped"], 5);
+        assert_eq!(events[21], "webview_cut");
+        assert_eq!(events.len(), 22);
     }
 }
