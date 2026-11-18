@@ -10,6 +10,7 @@
 import {
   PICKUP_SPOT,
   QUEUE_DRAW_MAX,
+  TAKE_MS,
   collectMs,
   collectTray,
   queueSpot,
@@ -45,6 +46,7 @@ export type FloorStall = {
   position: number;
   waiting: number;
   lastService: string | null;
+  personalService?: boolean;
 };
 export type FloorInput = {
   now: number;
@@ -81,6 +83,8 @@ export type FloorFigure = {
    * absent.
    */
   take?: number;
+  /** This collector has the shared tray position until the end of its lift. */
+  counterTray?: boolean;
   /**
    * The stall whose counter the tray comes from, while `take` is present; the
    * stall whose queue the figure stands in, while queued.
@@ -140,6 +144,8 @@ type Collect = {
   fromX: number;
   fromZ: number;
   stall: string;
+  trayAt: number;
+  waitMs: number;
 };
 type Sit = { kind: "sit"; start: number; end: number; seat: Seat };
 type Leg = Walk | Stand | Collect | Sit;
@@ -165,6 +171,8 @@ type StallState = {
   /** The raw waiting count at the last snapshot. */
   waiting: number;
   lastService: string | null;
+  /** End of the last scheduled lift, even if its diner is still approaching. */
+  counterFreeAt: number;
   /** Figures bound for the queue, by spot; the last is the one served. */
   queue: Figure[];
 };
@@ -302,6 +310,7 @@ function place(figure: Figure, leg: Leg, now: number, out: FloorFigure) {
   out.stride = 0;
   out.carrying = false;
   out.take = undefined;
+  out.counterTray = undefined;
   out.stall = undefined;
   out.spot = undefined;
   out.seat = undefined;
@@ -315,7 +324,7 @@ function place(figure: Figure, leg: Leg, now: number, out: FloorFigure) {
     out.activity = "walking";
     out.carrying = leg.carrying;
   } else if (leg.kind === "collect") {
-    const step = collectTray(leg.fromX, leg.fromZ, now - leg.start);
+    const step = collectTray(leg.fromX, leg.fromZ, now - leg.start, leg.waitMs);
     const at = toHall(leg.frame, step.x, step.z);
     out.x = at.x;
     out.z = at.z;
@@ -324,6 +333,7 @@ function place(figure: Figure, leg: Leg, now: number, out: FloorFigure) {
     out.activity = "collecting";
     out.carrying = step.take > 0;
     out.take = step.take;
+    out.counterTray = now >= leg.trayAt;
     out.stall = leg.stall;
   } else if (leg.kind === "stand") {
     out.x = leg.x;
@@ -562,15 +572,22 @@ export function createDinerFloor(): {
         [fromX, fromZ] = queueSpot(figure.spot);
       }
     }
+    const duration = collectMs(fromX, fromZ);
+    // A second diner can approach while the first is finishing, then
+    // waits to lift until the shared tray position is free.
+    const waitMs = Math.max(0, state.counterFreeAt - (t + duration - TAKE_MS));
     const collect: Collect = {
       kind: "collect",
       start: t,
-      end: t + collectMs(fromX, fromZ),
+      end: t + duration + waitMs,
       frame: placement,
       fromX,
       fromZ,
       stall: id,
+      trayAt: Math.max(t, state.counterFreeAt),
+      waitMs,
     };
+    state.counterFreeAt = collect.end;
     legs.push(collect);
     t = collect.end;
     const pickup = [pickupAt(placement), pickupOut(placement)];
@@ -756,6 +773,7 @@ export function createDinerFloor(): {
       placement: spotPlacement(stall.room, stall.position),
       waiting: 0,
       lastService: stall.lastService,
+      counterFreeAt: -Infinity,
       queue: [],
     };
     stalls.set(stall.id, state);
@@ -795,6 +813,7 @@ export function createDinerFloor(): {
     for (const state of stalls.values()) {
       state.queue.length = 0;
       state.waiting = 0;
+      state.counterFreeAt = now;
     }
     for (const figure of figures) {
       if (figure.end <= now) continue;
@@ -816,10 +835,12 @@ export function createDinerFloor(): {
 
   /** Rule 11: motion turned off; walkers are placed or removed. */
   function stopMotion(now: number) {
-    for (const state of stalls.values())
+    for (const state of stalls.values()) {
+      state.counterFreeAt = now;
       state.queue.forEach((f, n) =>
         plan(f, [standAt(state.placement, n, now)]),
       );
+    }
     for (const figure of figures) {
       if (figure.stall !== null || figure.end <= now) continue;
       if (figure.seat && figure.seatUntil > now)
@@ -958,7 +979,11 @@ export function createDinerFloor(): {
       const change = changes.get(s.id);
       if (!change) continue;
       const state = stalls.get(s.id)!;
-      if (change.served) serve(state.queue.pop()!, state, s.id, now, input);
+      if (change.served) {
+        const diner = state.queue.pop()!;
+        if (s.personalService) remove(diner);
+        else serve(diner, state, s.id, now, input);
+      }
       // Diners already waiting beyond the drawn queue (or newly drawable under
       // a raised limit) move up into view: standing at their spots, untallied.
       while (state.queue.length < Math.min(change.afterService, cap))

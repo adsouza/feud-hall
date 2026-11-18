@@ -843,13 +843,10 @@ test("a personal tray in a room that is not drawn cannot be taken", async ({
     false,
   );
   // A served private tray waits at Hall 4's counter.
-  snapshot.profile!.visit = {
-    id: "far-visit",
-    stall: "room-4-3",
-    tray_status: "served",
-    stage: "served",
-    dessert: "none",
-  };
+  snapshot.profile!.counter_pickups = [
+    { id: "far-service", stall: "room-4-3" },
+  ];
+  snapshot.hall.stalls[2].last_service = "far-service";
   snapshot.hall.access = "open";
   await nextPoll(page);
   const host = page.locator("[data-hall-canvas]");

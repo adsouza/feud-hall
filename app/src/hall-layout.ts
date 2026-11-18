@@ -76,7 +76,12 @@ export function collectMs(fromX: number, fromZ: number): number {
  * diner in the queue is the one served, so their row is empty to their right
  * and the route passes no one who is still waiting.
  */
-export function collectTray(fromX: number, fromZ: number, ms: number) {
+export function collectTray(
+  fromX: number,
+  fromZ: number,
+  ms: number,
+  waitMs = 0,
+) {
   const [spotX, spotZ] = PICKUP_SPOT;
   const across = Math.abs(spotX - fromX);
   const forward = Math.abs(spotZ - fromZ);
@@ -100,7 +105,7 @@ export function collectTray(fromX: number, fromZ: number, ms: number) {
     pose.x = spotX;
     pose.z = spotZ;
     pose.yaw = Math.atan2(COUNTER_TRAY[0] - spotX, COUNTER_TRAY[1] - spotZ);
-    const held = (ms - (across + forward) / COLLECT_SPEED) / TAKE_MS;
+    const held = (ms - (across + forward) / COLLECT_SPEED - waitMs) / TAKE_MS;
     const t = Math.min(Math.max(held, 0), 1);
     pose.take = t * t * (3 - 2 * t);
   }

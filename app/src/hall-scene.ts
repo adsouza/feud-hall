@@ -1,13 +1,12 @@
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import type { Stall } from "./api";
+import type { CounterPickup, Stall } from "./api";
 import { createCuisineArt } from "./cuisine-art";
 import { createHallLights } from "./hall-lights";
 import { createHallShell } from "./hall-shell";
 import { createStallKit, hash, stallAccent } from "./stall-model";
 import { createPickupHands } from "./hall-pickup";
-import type { PersonalTray } from "./diner-pickup";
 import { createTabletScreen } from "./hall-tablet";
 import type { TabletView, TabletAction } from "./hall-tablet";
 import {
@@ -89,7 +88,7 @@ export type Appearance = {
   ownedStalls: string[];
   selected: string;
   pickup: string;
-  pickups: PersonalTray[];
+  pickups: CounterPickup[];
   closedLabel: string;
   cuisineLabel: (id: string) => string;
   reopeningHeading: string;
@@ -130,6 +129,7 @@ type Counter = {
   reopeningLabel: string;
   plaque: T.Mesh;
   pickup: T.Mesh;
+  pickupId?: string;
   serviceLamp: T.Mesh;
   index: number; // stable per stall, for animation phase only
   placement: SpotPlacement;
@@ -289,8 +289,8 @@ export function createHallScene(
   const personalMaterial = pickupMaterial.clone();
   personalMaterial.emissive.set("#684724");
   personalMaterial.emissiveIntensity = 0.2;
-  const personalPickups = new Map<string, { mesh: T.Mesh; stall: string }>();
   const collectedPickups = new Set<string>();
+  let takingStall = "";
   const stallKit = createStallKit(box, () => draw());
   const wood = new T.MeshStandardMaterial({
     color: "#826451",
@@ -536,7 +536,7 @@ export function createHallScene(
     const serviceLamp = brick(root, light, -1.23, 1.68, 0.91, 0.15, 0.2, 0.12);
     const edge = brick(root, highlight, 0, 0.032, 1.14, 3.47, 0.065, 0.11);
     const pickup = new T.Mesh(pickupGeometry, pickupMaterial);
-    pickup.position.set(0, 0.93, 0.88);
+    pickup.position.set(COUNTER_TRAY[0], 0.93, COUNTER_TRAY[1]);
     root.add(pickup);
     const plaque = brick(root, plaqueMat, 1.48, 1.2, 1.05, 0.25, 0.3, 0.05);
     const reopening = new T.Group();
@@ -635,6 +635,7 @@ export function createHallScene(
     carriedMaterial,
     FLOOR_LIMIT,
   );
+  carriedTrays.name = "diner-carried-trays";
   const steamGeometry = new T.SphereGeometry(0.115, 6, 4);
   const steam = new T.InstancedMesh(
     steamGeometry,
@@ -694,7 +695,7 @@ export function createHallScene(
     const x = figure.x + Math.sin(figure.yaw) * carry.forward;
     const z = figure.z + Math.cos(figure.yaw) * carry.forward;
     dummy.rotation.set(0, figure.yaw, 0);
-    dummy.scale.setScalar(0.75);
+    dummy.scale.setScalar(from ? T.MathUtils.lerp(1, 0.75, take) : 0.75);
     if (from)
       dummy.position.set(
         T.MathUtils.lerp(from[0], x, take),
@@ -756,6 +757,16 @@ export function createHallScene(
     if (activity === "walking" || activity === "collecting") floorWalking++;
     else if (activity === "seated") floorSeated++;
     if (activity === "collecting" && diner.take !== undefined && model) {
+      // One counter mesh stays put until this diner lifts it. A private
+      // pickup takes precedence over older, still-animating public service.
+      if (
+        !diner.counterTray ||
+        personalPickup(model) ||
+        playerTaking(diner.stall!)
+      )
+        return;
+      model.pickup.visible = diner.take === 0;
+      if (diner.take === 0) return;
       const counter = toHall(model.placement, COUNTER_TRAY[0], COUNTER_TRAY[1]);
       trayFrom[0] = counter.x;
       trayFrom[1] = 0.93;
@@ -804,6 +815,14 @@ export function createHallScene(
   const heldArrows = new Set<string>();
   let shiftHeld = false;
 
+  function personalPickup(model: Counter) {
+    return model.pickupId && !collectedPickups.has(model.pickupId);
+  }
+
+  function playerTaking(stall: string) {
+    return pickupHands.active && takingStall === stall;
+  }
+
   function draw(now = performance.now()) {
     if (disposed || document.hidden) return;
     const started = performance.now();
@@ -838,10 +857,9 @@ export function createHallScene(
       model.sign.visible = detailed || stalls.size <= SMALL_HALL;
       model.edge.visible = inspected;
       model.pickup.visible =
-        Boolean(model.activity?.handover) &&
-        ![...personalPickups.values()].some(
-          (tray) => tray.stall === id && tray.mesh.visible,
-        );
+        appearance.serving &&
+        !playerTaking(id) &&
+        Boolean(personalPickup(model) || model.activity?.handover);
       const activity = model.activity;
       const yaw = model.placement.yaw;
       const owner = toHall(model.placement, -0.61, 0.08);
@@ -1098,15 +1116,22 @@ export function createHallScene(
   }
 
   function takePickup(id: string) {
-    const item = personalPickups.get(id);
-    if (pickupHands.active || !item?.mesh.visible || collectedPickups.has(id))
+    const stall = appearance.pickups.find((tray) => tray.id === id)?.stall;
+    const model = stall === undefined ? undefined : stalls.get(stall);
+    if (
+      !stall ||
+      pickupHands.active ||
+      !model?.root.visible ||
+      !model.pickup.visible ||
+      model.pickupId !== id ||
+      !personalPickup(model) ||
+      !actions.collect(id)
+    )
       return;
-    const model = stalls.get(item.stall);
-    if (!model || !actions.collect(id)) return;
-    const from = item.mesh.getWorldPosition(new T.Vector3());
-    const rotation = item.mesh.getWorldQuaternion(new T.Quaternion());
+    const from = model.pickup.getWorldPosition(new T.Vector3());
+    const rotation = model.pickup.getWorldQuaternion(new T.Quaternion());
     collectedPickups.add(id);
-    item.mesh.visible = false;
+    model.pickup.visible = false;
     stopWalking();
     if (readingMenu) {
       actions.tablet(readingMenu, { kind: "close" });
@@ -1114,7 +1139,7 @@ export function createHallScene(
     }
     setInside("");
     if (appearance.motion) {
-      walking = item.stall;
+      walking = stall;
       const position = toHall(model.placement, 0, 2.2);
       camera.position.set(position.x, EYE_HEIGHT, position.z);
       orbit.target.copy(camera.position).add(
@@ -1127,7 +1152,8 @@ export function createHallScene(
       configureCamera();
       camera.updateProjectionMatrix();
       orbit.update();
-      actions.walk(item.stall);
+      actions.walk(walking);
+      takingStall = walking;
       pickupHands.begin(from, rotation, performance.now());
     } else actions.collected();
     schedule();
@@ -1525,15 +1551,16 @@ export function createHallScene(
     );
     // A tray is taken only from a stall in a room that is drawn.
     const food = nearest(
-      [...personalPickups.values()]
+      [...stalls.values()]
         .filter(
-          (item) => item.mesh.visible && stalls.get(item.stall)?.root.visible,
+          (model) =>
+            model.root.visible && model.pickup.visible && personalPickup(model),
         )
-        .map((item) => item.mesh),
+        .map((model) => model.pickup),
     );
     if (food && (!screen || food.distance < screen.distance)) {
       const id = food.object.userData.pickupId as string;
-      if (!selected || selected === personalPickups.get(id)?.stall) {
+      if (!selected || selected === food.object.userData.stall) {
         takePickup(id);
         return;
       }
@@ -1666,6 +1693,9 @@ export function createHallScene(
         }
       }
       const spots = assignSpots(next.stalls);
+      const privateTrays = new Map(
+        next.pickups.map((tray) => [tray.stall, tray.id]),
+      );
       // Without the room rule every room in use is open.
       openRooms = T.MathUtils.clamp(
         next.rooms?.open ??
@@ -1716,6 +1746,15 @@ export function createHallScene(
             : idleTablet.material;
         model.activity = stall.activity;
         model.open = stall["open?"];
+        model.pickupId = privateTrays.get(stall.stall_id);
+        model.pickup.userData.pickupId = model.pickupId;
+        model.pickup.userData.stall = stall.stall_id;
+        model.pickup.name = model.pickupId
+          ? "personal-pickup:" + model.pickupId
+          : "counter-tray";
+        model.pickup.material = model.pickupId
+          ? personalMaterial
+          : pickupMaterial;
         // A counter seen for the first time, or any counter under reduced
         // motion, rests at its committed state; otherwise the shutter rolls.
         model.roll = rollTo(
@@ -1765,6 +1804,10 @@ export function createHallScene(
               position: spot.position,
               waiting: stall.activity?.waiting ?? 0,
               lastService: stall.last_service ?? null,
+              personalService: Boolean(
+                stall.last_service &&
+                privateTrays.get(stall.stall_id) === stall.last_service,
+              ),
             };
           }),
           animate: next.motion,
@@ -1782,34 +1825,6 @@ export function createHallScene(
         if (room !== currentRoom || !host.hasAttribute("data-hall-room"))
           setRoom(room);
         else applyRooms();
-      }
-      const available = new Set(
-        next.pickups
-          .filter((tray) => !collectedPickups.has(tray.id))
-          .map((tray) => tray.id),
-      );
-      for (const [id, item] of personalPickups)
-        if (!available.has(id) || !stalls.has(item.stall)) {
-          item.mesh.removeFromParent();
-          personalPickups.delete(id);
-        }
-      const stacked = new Map<string, number>();
-      for (const tray of next.pickups) {
-        if (collectedPickups.has(tray.id)) continue;
-        const model = stalls.get(tray.stall);
-        if (!model) continue;
-        let item = personalPickups.get(tray.id);
-        if (!item) {
-          const mesh = new T.Mesh(pickupGeometry, personalMaterial);
-          mesh.name = "personal-pickup:" + tray.id;
-          mesh.userData.pickupId = tray.id;
-          item = { mesh, stall: tray.stall };
-          personalPickups.set(tray.id, item);
-        }
-        if (item.mesh.parent !== model.root) model.root.add(item.mesh);
-        const index = stacked.get(tray.stall) ?? 0;
-        stacked.set(tray.stall, index + 1);
-        item.mesh.position.set(0, 0.93 + index * 0.13, 0.88);
       }
       if (detailChanged)
         renderer.setPixelRatio(

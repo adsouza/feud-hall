@@ -485,6 +485,23 @@ test("floor: a served diner collects, sits for EAT_MS, then leaves", () => {
   expect(floor.boundFor("s04")).toBe(0);
 });
 
+test("floor: two rapid services lift one counter tray at a time, in order", () => {
+  const floor = createDinerFloor();
+  floor.apply(input({ waiting: { s04: 3 } }));
+  floor.apply(input({ now: 10, waiting: { s04: 2 }, served: { s04: "a" } }));
+  const first = all(floor, 10).find((diner) => diner.counterTray)!.look;
+  floor.apply(input({ now: 20, waiting: { s04: 1 }, served: { s04: "b" } }));
+
+  const lifts = new Set<FloorFigure["look"]>();
+  for (let now = 20; now < 3000; now += 20) {
+    const collectors = all(floor, now).filter((diner) => diner.counterTray);
+    expect(collectors.length).toBeLessThanOrEqual(1);
+    for (const diner of collectors) if (diner.carrying) lifts.add(diner.look);
+  }
+  expect(lifts.size).toBe(2);
+  expect([...lifts][0]).toBe(first);
+});
+
 test("floor: with every seat taken the served diner leaves carrying", () => {
   const floor = createDinerFloor();
   const waiting = (n: number) => Object.fromEntries(IDS.map((id) => [id, n]));

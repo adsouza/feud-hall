@@ -11,7 +11,7 @@ defmodule FeudHall.Application.Management do
   their substitutes), which no other view carries.
   """
   alias FeudHall.Application.DinerBrowse
-  alias FeudHall.Application.Projections.MarketActivity
+  alias FeudHall.Application.Projections.{CounterService, MarketActivity}
   alias FeudHall.Domain.{Clock, Dietary, Identity, Kitchen, Market, Money, Offers, PublicView}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
 
@@ -100,6 +100,7 @@ defmodule FeudHall.Application.Management do
     public = PublicView.build(state)
     activity = queue_activity(state)
     market_activity = Map.get(runtime, :market_activity) || MarketActivity.new()
+    counter_services = Map.get(runtime, :counter_services, %{})
     rooms = Rooms.summary(state)
 
     stalls =
@@ -118,7 +119,7 @@ defmodule FeudHall.Application.Management do
           retiring: Population.closing?(state, restaurant.id),
           awards: Recognition.active_awards(state, restaurant.id),
           activity: stall_activity(state, stall.stall_id, activity, open?),
-          last_service: Map.get(Map.get(runtime, :counter_services, %{}), stall.stall_id),
+          last_service: counter_services[stall.stall_id][:id],
           menu: Map.new(stall.menu, fn {id, price} -> {id, cents(price)} end)
         })
         |> Map.merge(spot_fields(state, rooms, stall.stall_id))
@@ -153,7 +154,13 @@ defmodule FeudHall.Application.Management do
 
     view = %{
       hall: hall,
-      profile: account && private_view(identity, state, account, public.market, rooms, market_activity)
+      profile:
+        account &&
+          Map.put(
+            private_view(identity, state, account, public.market, rooms, market_activity),
+            :counter_pickups,
+            CounterService.pickups(counter_services, state, principal)
+          )
     }
 
     case DinerBrowse.checkout_menu(state, params["stall_id"], params["profile_id"], principal) do

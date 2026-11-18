@@ -261,9 +261,35 @@ defmodule FeudHall.Application.VisitorPlayTest do
     rt = advance(rt, quote.earliest_completion)
     assert {:ok, %{tasted: ["levantine"], options: []}} = DinerBrowse.compare(rt, "diner", %{"new_to_me" => "1"})
 
+    assert {:ok,
+            %{hall: %{stalls: [%{last_service: marker}]}, profile: %{counter_pickups: [%{stall: @stall, id: marker}]}}} =
+             Management.view(rt, "diner")
+
+    assert {:ok, %{profile: %{counter_pickups: []}}} = Management.view(rt, "other")
+
     for device <- [nil, "other"] do
       assert {:ok, %{tasted: [], options: [%{main: @recipe}]}} = DinerBrowse.compare(rt, device, %{"new_to_me" => "1"})
     end
+
+    rt = simulated(rt, "next-meal")
+
+    %{ready_at: ready, service_at: served} =
+      FeudHall.Domain.Kitchen.counter_forecast(rt.state, @stall)[{:tray, "T:next-meal"}]
+
+    rt = advance(rt, ready)
+
+    assert {:ok,
+            %{hall: %{stalls: [%{last_service: ^marker, activity: %{handover: true}}]}, profile: %{counter_pickups: []}}} =
+             Management.view(rt, "diner")
+
+    assert rt.counter_services[@stall].principal == nil
+
+    rt = advance(rt, served)
+
+    assert {:ok, %{hall: %{stalls: [%{last_service: next_marker}]}, profile: %{counter_pickups: []}}} =
+             Management.view(rt, "diner")
+
+    assert next_marker != marker
   end
 
   test "checkout menu hides reserved stock while leaving the advertised menu intact" do
@@ -345,7 +371,7 @@ defmodule FeudHall.Application.VisitorPlayTest do
 
     assert failed.counter_services == %{}
     assert {:accepted, _, rt} = command(failed, "serve", {:system, :scheduler}, :advance_clock, payload)
-    marker = rt.counter_services[@stall]
+    %{id: marker} = rt.counter_services[@stall]
     assert is_binary(marker)
     assert rt.state.trays == %{}
     assert {:ok, %{hall: %{stalls: [%{last_service: ^marker}]}}} = Management.view(rt, nil)
@@ -364,7 +390,7 @@ defmodule FeudHall.Application.VisitorPlayTest do
     markers = CounterService.retain(candidate, markers)
 
     assert candidate == FeudHall.Domain.Hall.replay(events, next.state)
-    assert markers[@stall] == marker
+    assert markers[@stall] == rt.counter_services[@stall]
     assert {:ok, reopened} = CommandWorkflow.open(InMemoryEventStore, rt.store)
     assert reopened.state == rt.state
     assert reopened.counter_services == %{}

@@ -807,14 +807,22 @@ is a presentation action. Committed events drive service and the dessert
 offer clock. Both the HTML and 3D views invoke the same authorized use cases
 and share active visit and pending command identities.
 
-Personal tray visuals derive from the signed-in principal's active served course and recent private dining receipts, never from anonymous public service markers. Deduplicate by principal, visit and course (main/drink together, dessert separately), with client-session collection state outside the scene so remounts cannot replay it. Collection sends no economic command and cannot alter payment, settlement or dessert clocks. Bind asynchronous receipt responses to the current principal and request generation. The Three.js adapter owns disposable camera-relative arm geometry and the short reach/grasp/lower animation; reduced motion skips it.
+The same committed view gives the signed-in diner their own current counter
+pickup, identified by the public service marker. The runtime projection
+retires the pickup at the next handover or stall closure and expires it after
+30 seconds of available hall time. The client deduplicates collected markers
+across scene remounts. Collection is cosmetic, and the private receipt
+continues to show the committed meal outcome.
 
 The public hall carries a bounded runtime projection of completed counter service,
 with one latest batch-position/event-offset marker per occupied stall. It updates
 after a successful append and contains no order or customer identifiers. Recovery
-establishes a fresh animation baseline. The 3D view uses new markers to move a tray
-from the counter into a departing figure's hands, including when another customer
-has already replaced that figure in the queue.
+establishes a fresh animation baseline. The 3D view uses one stationary tray
+mesh per stall. A public collector borrows that position until their animated
+lift clears it. A personal pickup uses the same mesh and replaces the queue
+figure for that service marker. The Three.js adapter renders the first-person
+reach and lift with disposable camera-relative geometry. Reduced motion
+skips the lift animations.
 
 Successful shift completion and its server-owned task/end-time evidence grant
 service-level licensing eligibility in the same cross-stream batch as the hall's

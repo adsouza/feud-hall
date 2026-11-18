@@ -209,6 +209,7 @@ type Shift = {
   } | null;
   handover?: (HandoverItem & { done_at: number }) | null;
 };
+export type CounterPickup = { id: string; stall: string };
 export type Profile = {
   account: {
     id: string;
@@ -225,6 +226,7 @@ export type Profile = {
   slots: Slot[];
   draft: (Slot & { expires_at: number }) | null;
   waitlisted: boolean;
+  counter_pickups?: CounterPickup[];
   visit: {
     id: string;
     stall: string;

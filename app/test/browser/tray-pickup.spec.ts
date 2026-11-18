@@ -1,7 +1,6 @@
 import * as T from "three";
 import { createGuest, expect, state, test } from "./hall";
-import { servedTrays } from "../../src/diner-pickup";
-import type { DiningHistory, Profile } from "../../src/api";
+import type { View } from "../../src/api";
 
 test.use({
   launch: true,
@@ -19,6 +18,8 @@ type Probe = Window & {
   hallScene: T.Scene;
   hallCamera: T.Camera;
   pickupPhases: string[];
+  counterStall?: string;
+  trayFrames: { atCounter: number; stationary: boolean; carried: number }[];
 };
 
 async function probe(page: import("@playwright/test").Page) {
@@ -26,6 +27,7 @@ async function probe(page: import("@playwright/test").Page) {
     const view = window as unknown as Probe;
     view.__THREE_DEVTOOLS__ = new EventTarget();
     view.pickupPhases = [];
+    view.trayFrames = [];
     view.__THREE_DEVTOOLS__.addEventListener("observe", (event) => {
       const renderer = (event as CustomEvent).detail as T.WebGLRenderer & {
         isWebGLRenderer?: boolean;
@@ -38,6 +40,36 @@ async function probe(page: import("@playwright/test").Page) {
         view.hallCamera = camera;
         const hands = scene.getObjectByName("player-pickup-hands");
         if (hands?.visible) view.pickupPhases.push(hands.userData.phase);
+        if (!view.counterStall) return;
+        const counter = scene.children
+          .flatMap((group) => group.children)
+          .flatMap((stall) => stall.children)
+          .find(
+            (object) =>
+              object.userData.stall === view.counterStall &&
+              (object.name === "counter-tray" ||
+                object.name.startsWith("personal-pickup:")),
+          );
+        const carried = scene.getObjectByName(
+          "diner-carried-trays",
+        ) as T.InstancedMesh;
+        if (!counter || !carried) return;
+        const origin = counter.getWorldPosition(counter.position.clone());
+        const matrix = carried.matrix.clone();
+        const point = origin.clone();
+        let atCounter = Number(counter.visible);
+        for (let i = 0; i < carried.count; i++) {
+          carried.getMatrixAt(i, matrix);
+          if (
+            point.setFromMatrixPosition(matrix).distanceToSquared(origin) < 1e-6
+          )
+            atCounter++;
+        }
+        view.trayFrames.push({
+          atCounter,
+          stationary: counter.visible,
+          carried: carried.count,
+        });
       };
     });
   });
@@ -125,71 +157,86 @@ test("only tablet screen clicks open the tablet; counters and other trays only s
   await expect(host).toHaveAttribute("data-hall-tablet", stall);
 });
 
-test("only committed served courses create personal trays", () => {
-  const account = {
-    id: "diner",
-    name: "Diner",
-    "owner?": false,
-    "reviewer?": false,
-    proof: null,
-    quota: 0,
-    progress: 0,
-  };
-  const profile: Pick<Profile, "account" | "visit"> = {
-    account,
-    visit: {
-      id: "visit",
-      stall: "stall",
-      tray_status: "preparing",
-      stage: "counter",
-      dessert: "none",
-    },
-  };
-  expect(servedTrays(profile, null, 1000)).toEqual([]);
-  profile.visit!.tray_status = "served";
-  profile.visit!.stage = "served";
-  profile.visit!.dessert = "offered";
-  const main = servedTrays(profile, null, 1000);
-  expect(main).toEqual([{ id: "diner:visit:main", stall: "stall" }]);
-  profile.visit!.dessert = "accepted";
-  profile.visit!.stage = "preparing";
-  expect(servedTrays(profile, null, 1000)).toEqual(main);
-  profile.visit!.stage = "served";
-  expect(servedTrays(profile, null, 1000)).toHaveLength(2);
-  const history: DiningHistory = {
-    before: null,
-    receipts: [
-      {
-        visit_id: "visit",
-        stall_id: "stall",
-        restaurant_id: "r",
-        at: 1000,
-        reason: "completed",
-        total: "800",
-        courses: [
-          {
-            kind: "main",
-            recipe_id: "meal",
-            outcome: "served",
-            price: "600",
-            charged: "600",
-          },
-          {
-            kind: "dessert",
-            recipe_id: "sweet",
-            outcome: "served",
-            price: "200",
-            charged: "200",
-          },
-        ],
-      },
-    ],
-  };
-  expect(servedTrays(profile, history, 1000)).toHaveLength(2);
-  profile.visit = null;
-  expect(servedTrays(profile, history, 1000)).toHaveLength(2);
-  expect(servedTrays(profile, history, 721001)).toEqual([]);
-  expect(servedTrays(null, history, 1000)).toEqual([]);
+test("the next diner takes the sole counter tray even when a new handover has started", async ({
+  page,
+  hall,
+}) => {
+  await probe(page);
+  await page.goto(hall.origin);
+  await createGuest(page, "Counter diner");
+  const snapshot: View = await state(page);
+  const stall = snapshot.hall.stalls[0];
+  for (const entry of snapshot.hall.stalls) {
+    entry.last_service = null;
+    entry.activity!.waiting = entry === stall ? 3 : 0;
+    entry.activity!.handover = false;
+  }
+  await page.route("**/api/state**", (route) =>
+    route.fulfill({ json: snapshot }),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "Location", exact: true })
+    .selectOption(stall.stall_id);
+  const take = page.getByRole("button", { name: "Take tray", exact: true });
+  const frames = () =>
+    page.evaluate(() => (window as unknown as Probe).trayFrames);
+  await page.evaluate((id) => {
+    (window as unknown as Probe).counterStall = id;
+  }, stall.stall_id);
+
+  snapshot.hall.position++;
+  stall.last_service = "own-meal";
+  stall.activity!.waiting--;
+  snapshot.profile!.counter_pickups = [
+    { id: "own-meal", stall: stall.stall_id },
+  ];
+  await expect(take).toBeVisible();
+  await expect.poll(() => trayCount(page)).toBe(1);
+  await expect
+    .poll(async () => (await frames()).at(-1))
+    .toMatchObject({
+      atCounter: 1,
+      stationary: true,
+      carried: 0,
+    });
+
+  // Move on without collecting the private tray. The next handover replaces
+  // it, and the receipt from the previous meal no longer controls the counter.
+  snapshot.profile!.counter_pickups = [];
+  stall.activity!.handover = true;
+  snapshot.hall.position++;
+  await expect(take).toHaveCount(0);
+  await expect.poll(() => trayCount(page)).toBe(0);
+  await expect
+    .poll(async () => (await frames()).at(-1))
+    .toMatchObject({
+      atCounter: 1,
+      stationary: true,
+      carried: 0,
+    });
+
+  // The next completed handover and another active counter job can arrive in
+  // the same snapshot. The departing diner lifts the old tray first.
+  stall.last_service = "next-meal";
+  stall.activity!.waiting--;
+  snapshot.hall.position++;
+  await expect
+    .poll(async () =>
+      (await frames()).some(
+        (frame) => !frame.stationary && frame.carried === 1,
+      ),
+    )
+    .toBe(true);
+  await expect
+    .poll(async () => (await frames()).at(-1))
+    .toMatchObject({
+      atCounter: 1,
+      stationary: true,
+      carried: 1,
+    });
+  expect((await frames()).every((frame) => frame.atCounter <= 1)).toBe(true);
 });
 
 for (const reduced of [false, true])

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { Stall } from "./api";
+  import type { CounterPickup, Stall } from "./api";
   import type { Key } from "./i18n";
   import type {
     CameraState,
@@ -9,7 +9,6 @@
     createHallScene,
   } from "./hall-scene";
   import type { TabletView, TabletAction } from "./hall-tablet";
-  import type { PersonalTray } from "./diner-pickup";
   import { createHallAudio } from "./hall-audio";
 
   let {
@@ -54,7 +53,7 @@
     ownedStalls: Stall[];
     selected: string;
     pickup: string;
-    pickups: PersonalTray[];
+    pickups: CounterPickup[];
     onTakePickup: (id: string) => boolean;
     tablet: TabletView | null;
     onTabletAction: (id: string, action: TabletAction) => void;

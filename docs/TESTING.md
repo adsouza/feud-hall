@@ -799,9 +799,14 @@ an update-required answer ending it, Japanese caption and hint, the text
 screen under reduced motion or without WebGL, and a second slow load playing
 it again. Run it with `--grep 'intro:'` after building the client.
 
-`tray-pickup.spec.ts` checks private served-course eligibility and deduplication,
-real ray clicks on a served tray, reaching/taking animation, reduced-motion F-key
-collection, and absence after scene remount. It verifies that collection changes
+`tray-pickup.spec.ts` checks that an unattended personal tray gives way to the
+next diner and that a new handover shares the counter position with the
+departing diner's lift. It also covers real ray clicks, reaching/taking
+animation, reduced-motion F-key collection, and absence after scene remount.
+`diner-floor.spec.ts` checks that two closely spaced lifts use the counter in
+order. The visitor-play application checks cover committed service markers,
+private pickup visibility, and expiration at the next handover.
+The pickup checks verify that collection changes
 neither the committed position nor dining balance and sends no gameplay command.
 It also checks real canvas clicks on counter surfaces, signage and another diner's
 public tray in the immersive layout: these select the stall without opening the

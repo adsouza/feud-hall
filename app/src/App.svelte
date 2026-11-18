@@ -27,7 +27,6 @@
   import type { CameraState, HallTarget } from "./hall-scene";
   import { splitTabletMessage } from "./tablet-text";
   import { CLIENT_CHECK_MS, newerClientServed } from "./client-version";
-  import { servedTrays } from "./diner-pickup";
   import { assignSpots } from "./room-layout";
   import { rentExplanation } from "./rent";
   import type { TabletView, TabletAction, TabletRow } from "./hall-tablet";
@@ -647,7 +646,13 @@
   }
   let recentPickup = $derived.by(() => {
     const newest = receipts?.receipts[0];
-    if (!newest || !view || view.hall.now - newest.at > 720_000) return "";
+    if (
+      !newest ||
+      !view ||
+      receiptOwnerId !== profile?.account.id ||
+      view.hall.now - newest.at > 720_000
+    )
+      return "";
     return newest.courses.some(
       (course) => course.kind === "main" && course.outcome === "served",
     )
@@ -662,13 +667,9 @@
       : recentPickup,
   );
   let personalTrays = $derived(
-    view?.hall.access === "open"
-      ? servedTrays(
-          profile,
-          receiptOwnerId === profile?.account.id ? receipts : null,
-          view.hall.now,
-        ).filter((tray) => !takenTrayIds.includes(tray.id))
-      : [],
+    (profile?.counter_pickups ?? []).filter(
+      (tray) => !takenTrayIds.includes(tray.id),
+    ),
   );
   function takePersonalTray(id: string) {
     if (!personalTrays.some((tray) => tray.id === id)) return false;
