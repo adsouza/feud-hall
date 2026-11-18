@@ -12,6 +12,7 @@
   import { fade } from "svelte/transition";
   import appIcon from "../../assets/branding/feud-hall-icon.svg?no-inline";
   import CuisinePicker from "./CuisinePicker.svelte";
+  import LocationPicker from "./LocationPicker.svelte";
   import CuisineArtwork from "./CuisineArtwork.svelte";
   import DinerCompare from "./DinerCompare.svelte";
   import HallScene from "./HallScene.svelte";
@@ -3022,10 +3023,27 @@
       </details>
     {/if}
   {:else if page === "business"}
+    {#snippet leaseTerms(slot: Slot, line: string)}
+      <p>
+        <strong>{slot.stall_id} · {title(slot.tier)}</strong>
+        {#if slot.room}
+          · {hallRoomLabel(slot.room)}{/if}
+        · {t("exposure")}
+        {slot.exposure / 1000}×
+      </p>
+      <p>
+        {t("rent")}
+        {cash(slot.rent)} · {t("holding")}
+        {cash(slot.holding)} ·
+        {t("setupFee")}
+        {cash(slot.setup_fee)}
+      </p>
+      {#if line}<p class="rent-explanation">{line}</p>{/if}
+    {/snippet}
     <h1>{restaurant?.name ?? t("createRestaurant")}</h1>
     {#if !profile?.account["owner?"]}<p>{t("needsLicense")}</p>
     {:else if !restaurant}
-      <p>{t("setupHint")}</p>
+      <p>{t(profile.draft ? "finishStallSetup" : "chooseFirstSpot")}</p>
       <form
         onsubmit={(e) => {
           e.preventDefault();
@@ -3033,6 +3051,7 @@
         }}
       >
         {#if profile.draft}
+          {@render leaseTerms(profile.draft, rentLine(profile.draft))}
           <label
             >{t("restaurantName")}<input
               bind:value={restaurantName}
@@ -3042,37 +3061,25 @@
           >
           <CuisinePicker
             cuisines={view.hall.cuisines}
+            recipes={view.hall.recipes}
+            {locale}
             bind:value={chosenCuisine}
             label={t("cuisine")}
             overlapLabel={t("overlappingCuisines")}
-            {title}
           />
         {:else}
-          <label
-            >{t("location")}<select
-              aria-label={t("location")}
-              bind:value={chosenSlot}
-              required
-              ><option value="">—</option
-              >{#each profile.slots as slot (slot.stall_id)}<option
-                  value={slot.stall_id}
-                  >{slot.stall_id} · {title(slot.tier)} · {cash(
-                    slot.rent,
-                  )}</option
-                >{/each}</select
-            ></label
+          <LocationPicker
+            slots={profile.slots}
+            rooms={view.hall.rooms}
+            {locale}
+            bind:value={chosenSlot}
           >
-        {/if}
-        {#if selectedSlot}
-          {@const line = rentLine(selectedSlot)}
-          <p>
-            {selectedSlot.stall_id} · {t("exposure")}
-            {selectedSlot.exposure / 1000}× · {t("rent")}
-            {cash(selectedSlot.rent)} · {t("holding")}
-            {cash(selectedSlot.holding)} · {t("setupFee")}
-            {cash(selectedSlot.setup_fee)}
-          </p>
-          {#if line}<p class="rent-explanation">{line}</p>{/if}
+            {#snippet terms()}
+              {#if selectedSlot}
+                {@render leaseTerms(selectedSlot, rentLine(selectedSlot))}
+              {/if}
+            {/snippet}
+          </LocationPicker>
         {/if}
         <button disabled={disabled || !selectedSlot}
           >{t(profile.draft ? "confirmLease" : "reserveLease")}</button
@@ -3260,10 +3267,11 @@
                       cuisines={view.hall.cuisines.filter(
                         (cuisine) => cuisine !== ownerStall?.cuisine,
                       )}
+                      recipes={view.hall.recipes}
+                      {locale}
                       bind:value={refitCuisine}
                       label={t("chooseCuisine")}
                       overlapLabel={t("overlappingCuisines")}
-                      {title}
                     />
                     <button
                       disabled={disabled ||
@@ -3313,42 +3321,33 @@
                       });
                   }}
                 >
-                  {#if !profile.draft}
-                    <label
-                      >{t("location")}
-                      <select bind:value={expansionStallId} required>
-                        <option value="">—</option>
-                        {#each profile.slots as slot (slot.stall_id)}
-                          <option value={slot.stall_id}
-                            >{slot.stall_id} · {title(slot.tier)} · {cash(
-                              slot.rent,
-                            )}</option
-                          >
-                        {/each}
-                      </select>
-                    </label>
-                  {/if}
-                  {#if expansionSlot}
-                    <p>
-                      {expansionSlot.stall_id} · {t("exposure")}
-                      {expansionSlot.exposure / 1000}× ·
-                      {t("rent")}
-                      {cash(expansionSlot.rent)} · {t("holding")}
-                      {cash(expansionSlot.holding)} ·
-                      {t("setupFee")}
-                      {cash(expansionSlot.setup_fee)}
-                    </p>
-                    <!-- With an estimate, the line explains the estimate's rent instead. -->
-                    {#if !expansionEstimate && expansionRentLine}
-                      <p class="rent-explanation">{expansionRentLine}</p>
+                  {#snippet terms()}
+                    {#if expansionSlot}
+                      <!-- With an estimate, the line explains the estimate's rent instead. -->
+                      {@render leaseTerms(
+                        expansionSlot,
+                        expansionEstimate ? "" : expansionRentLine,
+                      )}
                     {/if}
+                  {/snippet}
+                  {#if profile.draft}
+                    {@render terms()}
+                  {:else}
+                    <LocationPicker
+                      slots={profile.slots}
+                      rooms={view.hall.rooms}
+                      {locale}
+                      bind:value={expansionStallId}
+                      {terms}
+                    />
                   {/if}
                   <CuisinePicker
                     cuisines={view.hall.cuisines}
+                    recipes={view.hall.recipes}
+                    {locale}
                     bind:value={expansionCuisine}
                     label={t("chooseCuisine")}
                     overlapLabel={t("overlappingCuisines")}
-                    {title}
                   />
                   {#if expansionEstimate}
                     <div class="lease-estimate">

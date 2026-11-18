@@ -534,9 +534,12 @@ one-worker shards, for
 changes to the web client, server, or branding assets. The suite exercises
 dining, helper handover, invitation and cuisine selection, and NPC startup
 recovery through the built client, Phoenix, and disposable PostgreSQL databases.
-The launch journey also checks all 24 map choices, an equipment purchase, and
-leasing a second location. The dining journey reads a served order from the
-committed history and checks that an unauthenticated session is refused.
+The launch journey checks map and list selection of a first spot with live
+lease terms, all 25 cuisine choices, recipe previews in English and Japanese,
+an equipment purchase, and leasing a second location. The room checks use a
+controlled view to exercise switching open rooms and the loss of a selected
+spot. The dining journey reads a served order from the committed history and
+checks that an unauthenticated session is refused.
 The test harness advances the server's manual clock over stdin. Playwright
 controls browser timers separately and can hold back a view or drop a command
 reply to test the client while the server keeps its committed outcome.

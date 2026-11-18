@@ -925,6 +925,54 @@ async function clickBay(page: Page, id: string) {
 const s043Scarcity =
   "2 of 6 standard spots are taken, so rent is 20% above the usual $100.00.";
 
+test("the setup floor plan follows open rooms and live spot availability", async ({
+  page,
+  hall,
+}) => {
+  await seededOwner(page, hall, "Floor plan owner");
+  const snapshot: View = await state(page);
+  const [first, second] = vacanciesAt([
+    [1, 3],
+    [2, 10],
+  ]);
+  snapshot.hall.rooms = { count: 10, open: 2 };
+  snapshot.profile!.slots = [first, second];
+  await page.route("**/api/state**", (route) =>
+    route.fulfill({ json: snapshot }),
+  );
+  await page.getByRole("button", { name: "Business", exact: true }).click();
+
+  const list = page.getByRole("combobox", { name: "Location", exact: true });
+  await list.selectOption(second.stall_id);
+  const hallTwo = page.getByRole("group", {
+    name: "Stall floor plan · Hall 2",
+  });
+  await expect(
+    hallTwo.getByRole("button", { name: "spot-2-10 · Prime" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(list.locator("optgroup")).toHaveCount(2);
+  const rooms = page.getByRole("navigation", { name: "Halls", exact: true });
+  await expect(rooms.getByRole("button")).toHaveCount(2);
+
+  await rooms.getByRole("button", { name: "Hall 1" }).click();
+  await expect(list).toHaveValue(second.stall_id);
+  await expect(
+    page
+      .getByRole("group", { name: "Stall floor plan · Hall 1" })
+      .getByRole("button", { name: "spot-1-3 · Standard" }),
+  ).toBeVisible();
+
+  snapshot.profile!.slots = [first];
+  await expect(
+    list.locator("option", { hasText: second.stall_id }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Reserve stall for ten minutes" }),
+  ).toBeDisabled();
+  await rooms.getByRole("button", { name: "Hall 2" }).click();
+  await expect(hallTwo.getByRole("button")).toHaveCount(0);
+});
+
 test("leasing from a to-let bay", async ({ page, hall }) => {
   await observeScene(page);
   await seededOwner(page, hall, "Bay owner");

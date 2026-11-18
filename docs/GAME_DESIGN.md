@@ -329,6 +329,8 @@ Proposed initial tiers illustrate the tradeoff; their values require balance tes
 
 The exposure factor affects the likelihood of a simulated diner considering/choosing a stall, alongside cuisine preference, price, reputation, and wait. It is not a guaranteed sales multiplier. All locations draw from the same finite hall-wide arrival pool; a premium lease redistributes opportunity rather than spawning extra customers. A well-run inexpensive stall can outperform an expensive location with an unsuitable menu or poor service. Human visitors choose their own stalls freely.
 
+First-stall setup, expansion and reopening show a schematic floor plan for each open room, with the entrance, seating, and vacant spots in their hall positions. The map and room-grouped list share a selection. A class legend explains the traffic and cost tradeoff, and the selected spot shows its live exposure, open rent, holding fee, and setup fee. Players use the reserve or lease button to submit their choice. Halls without room data show the list and class explanations.
+
 Before confirming a lease, show its exact open and closed rates, prorated costs for the chosen opening schedule, upfront charges, exposure factor and reasons, projected sales as an estimate, and break-even meals at the selected menu margins. Compare the selected location with available cheaper options. At an $8 contribution per meal and the maximum 22-game-hour trading schedule plus two hours of cleaning holding fees, the busy-aisle daily premium is $46.25 (six extra meals) and the prime premium is $111 (fourteen extra meals). With twelve hours open and twelve closed, the respective combined rent/holding premiums are $27.50 and $66, requiring four and nine extra meals. These are cost comparisons, not promises of demand; quotes use the actual schedule and pinned lease terms.
 
 Leases are quoted, not bid for. Players choose among available, affordable slots in open rooms for both their first location and expansions. Keep a useful mix of lower-rent and premium locations in the layout, with the newcomer vacancy reserve applying to affordable locations where possible. If no suitable affordable slot is free, show the actual alternatives or waiting list rather than assigning an unaffordable lease. NPCs pay the same quoted rates and choose locations within their budgets using the current quote. That budget choice is not implemented today: the computer-run planner (`Planner.choose_slot/3`) picks a spot by preferred class and ignores rent.
@@ -1337,6 +1339,10 @@ resizing; zoom and pan may improve legibility without enlarging selected regions
 independently. Small regions receive labels and generous interaction targets,
 not geographically inflated shapes. The map is part of the first playable UI,
 including starter setup, expansion cuisine choice, and refitting.
+
+The picker previews all recipes for the selected cuisine, using the hall's
+active catalog. It identifies the starter recipe and the recipes that can be
+unlocked later, with labels for mains, drinks, and desserts.
 
 Author a geographic footprint for every cuisine's stable content ID. Footprints
 represent the menu's regional inspirations and may be subnational, cross-border,

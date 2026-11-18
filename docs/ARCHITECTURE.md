@@ -530,6 +530,8 @@ For a hall with rooms, `GET /api/state` adds `room` and `position` to each `hall
 
 Existing managed halls receive version 3 through the recorded `hall_catalog_expanded` event at start-up (command ID `web-launch-catalog:3`, see [Deployment](DEPLOYMENT.md#local-management-game)). `CatalogExpansion.decide/2` gives each pinned spot the room and position of the same spot ID in the launch layout and keeps its tier, keeps a pinned room rule if one exists, and takes each computer-run profile's preferred class from the launch profile with the same ID. A pinned spot ID missing from the launch layout fails validation and emits no event. `evolve` is unchanged: events before the upgrade replay under the old rule because the rule reads the catalog in force at each position.
 
+The business location picker uses `profile.slots` for both its selectable bays and list, with open-room bounds from `hall.rooms` and geometry from the 3D room layout module. A position without a quote is unavailable on the map. Both controls write the same draft spot ID, and the details use the selected server quote. A held slot uses `profile.draft`.
+
 ### The recorded rule change
 
 Balance values are data, and a managed launch hall changes them only through a recorded event, beside the catalog expansion above.
@@ -1180,6 +1182,11 @@ become economic identifiers. Keep labels in the English/Japanese catalogs and
 retain selection/viewport through updates. Map hits and list actions produce
 only a draft cuisine ID; existing setup/refit use cases validate and commit it.
 No projected area or map interaction changes economic weights or eligibility.
+
+The recipe preview filters `hall.recipes` by that draft cuisine ID and uses
+the projected `starter` and `kind` fields to label what the player can serve
+at setup and what they can learn later. Recipe names use the same localized
+content labels as the restaurant menu.
 
 Enforce the game's explicit footprint assignments in geometry validation and
 interaction fixtures: Eastern Thrace is included only in the Turkish cuisine
