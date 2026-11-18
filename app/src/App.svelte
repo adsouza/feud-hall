@@ -2962,6 +2962,9 @@
             stall["open?"] && view?.hall.access === "open" ? "open" : "closed",
           )}</span
         >
+        {#if stall.sold_out && stall["open?"] && view?.hall.access === "open"}
+          <span class="stall-sold-out">{t("soldOut")}</span>
+        {/if}
         {#if !stall["open?"]}
           <p>{t("reopeningExpected")} · {reopeningTime(stall)}</p>
         {/if}

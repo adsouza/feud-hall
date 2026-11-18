@@ -126,6 +126,17 @@ section h2 {
 .good {
   color: #96e5c9;
 }
+.stall-sold-out {
+  display: inline-block;
+  margin-inline-start: 0.45rem;
+  padding: 0.08rem 0.5rem;
+  border: 1px solid #a66b3b;
+  border-radius: 0.35rem;
+  background: #47291c;
+  color: #ffe2ae;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
 .banner {
   border-color: var(--accent);
 }

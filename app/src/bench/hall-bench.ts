@@ -5,7 +5,7 @@
 // or eye=1 to stand at eye height looking east through the room's doorway
 // (eye=2: looking south through the entrance onto the street).
 // room=<1..10> picks the room to show (default 1) and rooms=<1..10> how many
-// rooms are open (default 10). Vacant spots of open rooms are "to let" bays.
+// rooms are open (default 10). Open rooms show signs at vacant bays.
 // floor=1 also sends today's diner totals and a queue limit of six, so the
 // floor has deeper queues and diners who walk in and out without buying, on
 // top of the served diners who sit and eat (floor=0, the default, sends
@@ -115,7 +115,8 @@ function appearance(service: number): Appearance {
     tabletHint: "",
     rooms: { count: 10, open },
     vacancies,
-    toLetLabel: "To let",
+    toLetLabel: "Available for Rent",
+    soldOutLabel: "Sold Out",
     serving: true,
     // Each synthetic update is a new server view.
     snapshot: service,

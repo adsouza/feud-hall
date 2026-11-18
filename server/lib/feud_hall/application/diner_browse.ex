@@ -2,7 +2,7 @@ defmodule FeudHall.Application.DinerBrowse do
   @moduledoc "Read-only dining options and private tasting history."
 
   alias FeudHall.Application.Replay
-  alias FeudHall.Domain.{Dietary, Identity, Inventory, Money, Offers, PublicView, Substitution}
+  alias FeudHall.Domain.{Dietary, Identity, Inventory, Money, Offers, PublicView}
   alias FeudHall.Domain.Hall.{Admission, Progression}
 
   @limit 12
@@ -144,8 +144,7 @@ defmodule FeudHall.Application.DinerBrowse do
 
         for id <- Enum.sort(Map.keys(restaurant.menu)),
             recipe = state.catalog.recipes[id],
-            policies = Map.get(restaurant.policies, id, %{}),
-            {:error, :unavailable} == Substitution.resolve(state.catalog, recipe, policies, available),
+            Offers.ingredients_unavailable?(state.catalog, restaurant, recipe, available),
             do: id
 
       _ ->

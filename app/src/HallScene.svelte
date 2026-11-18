@@ -158,6 +158,7 @@
       queueLimit,
       snapshot,
       toLetLabel: t("toLet"),
+      soldOutLabel: t("soldOut"),
       ownedStalls: ownedStalls.map((stall) => stall.stall_id),
       selected,
       pickup,

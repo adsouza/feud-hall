@@ -12,7 +12,7 @@ defmodule FeudHall.Application.Management do
   """
   alias FeudHall.Application.DinerBrowse
   alias FeudHall.Application.Projections.{CounterService, MarketActivity}
-  alias FeudHall.Domain.{Clock, Dietary, Identity, Kitchen, Market, Money, Offers, PublicView}
+  alias FeudHall.Domain.{Clock, Dietary, Identity, Inventory, Kitchen, Market, Money, Offers, PublicView}
   alias FeudHall.Domain.Hall.Management, as: HallManagement
 
   alias FeudHall.Domain.Hall.{
@@ -102,6 +102,7 @@ defmodule FeudHall.Application.Management do
     market_activity = Map.get(runtime, :market_activity) || MarketActivity.new()
     counter_services = Map.get(runtime, :counter_services, %{})
     rooms = Rooms.summary(state)
+    stock = open_stall_stock(state, public.stalls)
 
     stalls =
       Enum.map(public.stalls, fn stall ->
@@ -115,6 +116,7 @@ defmodule FeudHall.Application.Management do
           cuisine: Progression.cuisine(location, restaurant),
           npc: restaurant.owner_kind == :npc,
           open?: open?,
+          sold_out: open? and Offers.sold_out?(state.catalog, restaurant, stall.menu, Map.fetch!(stock, restaurant.id)),
           reopens_at: HallManagement.estimated_reopening(state, stall.stall_id),
           retiring: Population.closing?(state, restaurant.id),
           awards: Recognition.active_awards(state, restaurant.id),
@@ -168,6 +170,16 @@ defmodule FeudHall.Application.Management do
       menu -> {:ok, Map.put(view, :checkout_menu, menu)}
     end
   end
+
+  defp open_stall_stock(%{access: :open} = state, stalls) do
+    stalls
+    |> Enum.reduce(MapSet.new(), fn stall, ids ->
+      if stall.open?, do: MapSet.put(ids, stall.restaurant_id), else: ids
+    end)
+    |> Map.new(fn id -> {id, Inventory.availability(state.restaurants[id].batches, state.now)} end)
+  end
+
+  defp open_stall_stock(_state, _stalls), do: %{}
 
   @doc """
   Per stall, the counts the hall view reports in each stall's `activity`:

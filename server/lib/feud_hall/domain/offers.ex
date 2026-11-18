@@ -134,6 +134,21 @@ defmodule FeudHall.Domain.Offers do
     end
   end
 
+  @doc "A menu with mains is sold out when no listed main can be made from free stock."
+  def sold_out?(catalog, restaurant, menu, available) do
+    mains = for {id, _price} <- menu, %{kind: :main} = recipe <- [catalog.recipes[id]], do: recipe
+    mains != [] and Enum.all?(mains, &ingredients_unavailable?(catalog, restaurant, &1, available))
+  end
+
+  @doc "Checks a recipe's complete bill under the owner's substitution policy."
+  def ingredients_unavailable?(catalog, restaurant, recipe, available),
+    do: resolve_ingredients(catalog, restaurant, recipe, available) == {:error, :unavailable}
+
+  defp resolve_ingredients(catalog, restaurant, recipe, available) do
+    policies = Map.get(restaurant.policies, recipe.id, %{})
+    Substitution.resolve(catalog, recipe, policies, available)
+  end
+
   @doc """
   Quotes one course: unlocked, offered, correct kind, compatible with the
   visit's requirement over the resolved bill, and reservable.
@@ -141,14 +156,13 @@ defmodule FeudHall.Domain.Offers do
   def quote_course(state, restaurant, recipe_id, kind, requirement, committed, available) do
     catalog = state.catalog
     recipe = catalog.recipes[recipe_id]
-    policies = Map.get(restaurant.policies, recipe_id, %{})
 
     with :ok <- check(recipe != nil, :unknown_recipe),
          :ok <- check(recipe.kind == kind, :wrong_course_kind),
          :ok <- check(recipe.cuisine == restaurant.cuisine, :not_on_menu),
          :ok <- check(recipe_id in restaurant.unlocked, :recipe_locked),
          {:ok, price} <- menu_price(restaurant, recipe_id),
-         {:ok, resolved} <- Substitution.resolve(catalog, recipe, policies, available),
+         {:ok, resolved} <- resolve_ingredients(catalog, restaurant, recipe, available),
          {:ok, carbs} <- Dietary.check(catalog, requirement, resolved.lines, committed) do
       {:ok,
        %{

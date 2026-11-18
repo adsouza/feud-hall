@@ -563,8 +563,9 @@ its own application. Replay it with `--grep 'generated review edits'`.
 Run `--grep 'M5 '` for the live 3D hall, WebGL loss and HTML checkout journey,
 and the helper staging and yield journey. The Chromium checks use software
 rendering. They do not qualify hardware or 150-stall frame rates. The focused
-`visitor_play_test.exs` file checks replay, payroll, tasting privacy, and
-staging across different readiness boundaries. The curated mutation
+`visitor_play_test.exs` file checks replay, payroll, tasting privacy,
+staging across different readiness boundaries, and public sold-out status
+with stock reservations, substitution policy, and batch expiry. The curated mutation
 `M5 staged setup credit can be reused` checks the one-use invariant.
 `test/browser/run-shard.ts I/N` deals the listed test locations round-robin
 so slow hall files spread across shards (Playwright's `--shard` keeps them
@@ -645,7 +646,7 @@ reports frame delivery. From `app/`, run
 URL with `detail=1` in a GPU-backed browser window that stays visible and
 focused for the whole run (a hidden tab stops the scene drawing). Stall *i*
 takes its room and position from the client fallback (stall IDs in order,
-fifteen to a room); vacant spots of open rooms are "to let" bays.
+fifteen to a room); vacant spots in open rooms display "Available for Rent".
 `rooms=<1..10>` (default `10`) sets how many rooms are open and
 `room=<1..10>` (default `1`, at most `rooms`) the room shown; the scene draws
 that room and its open neighbours. Add `near=1` (default `0`) to start the
@@ -770,12 +771,13 @@ stall-ID fallback (fifteen to a room, independent of input order), walking
 limited to open rooms and doorways between them, table spots clear of queues
 and paths, walking entrances, and coordinate round trips.
 `app/test/browser/hall-rooms.spec.ts` drives the built client and scene:
-Hall 1 of a new hall with its three stalls and twelve "to let" bays, only the
+Hall 1 of a new hall with its three stalls and twelve vacant bays, only the
 current room and open neighbours drawn, a closed room not entered, the camera
 leaving a room that closes, moving to a selected stall's room, stalls that
 never move, 150 stalls across ten rooms, the Halls control and `[`/`]` keys,
 the list grouped by room with **View spot** (also without WebGL), the room
-restored on return, Japanese labels, and leasing from a bay with its rent
+restored on return, Japanese labels, live Sold Out signage and its bilingual
+list badge, and leasing from a bay with its rent
 explanation. `app/test/browser/rent.spec.ts` checks the rent explanation's
 exact BigInt percentage and both languages. Run each with one worker; they are
 presentation checks, not a frame-rate or simulation capacity benchmark.

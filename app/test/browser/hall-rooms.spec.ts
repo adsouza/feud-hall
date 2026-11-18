@@ -183,6 +183,19 @@ test("a new hall shows Hall 1 with its three stalls and twelve to-let bays", asy
   page,
   hall,
 }) => {
+  await page.addInitScript(() => {
+    const labels: string[] = [];
+    Object.assign(window, { vacancySignLines: labels });
+    const fill = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (
+      this: CanvasRenderingContext2D,
+      ...args: Parameters<typeof fill>
+    ) {
+      if (this.canvas.width === 384 && this.canvas.height === 160)
+        labels.push(args[0]);
+      fill.apply(this, args);
+    };
+  });
   await page.goto(hall.origin);
   const snapshot: View = await state(page);
   expect(snapshot.hall.rooms).toEqual({ count: 10, open: 1 });
@@ -191,6 +204,19 @@ test("a new hall shows Hall 1 with its three stalls and twelve to-let bays", asy
   await expect(host.locator("canvas")).toBeVisible();
   await expect(host).toHaveAttribute("data-hall-room", "1");
   await expect(host).toHaveAttribute("data-hall-bays", "12");
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const { vacancySignLines: lines } = window as unknown as {
+          vacancySignLines: string[];
+        };
+        return lines.some(
+          (line, index) =>
+            line === "Available" && lines[index + 1] === "for Rent",
+        );
+      }),
+    )
+    .toBe(true);
   await expect(
     page
       .getByRole("combobox", { name: "Location", exact: true })
@@ -199,6 +225,48 @@ test("a new hall shows Hall 1 with its three stalls and twelve to-let bays", asy
     "—",
     ...snapshot.hall.stalls.map((s) => `${s.name} · ${s.stall_id}`),
   ]);
+});
+
+test("Sold Out signage follows live stock in the hall and stall list", async ({
+  page,
+  hall,
+}, info) => {
+  await observeScene(page);
+  const snapshot = await routed(page, hall.origin, [[1, 3]], 1);
+  const [stall] = snapshot.hall.stalls;
+  const sign = () =>
+    page.evaluate(() => {
+      const { hallScene } = window as unknown as Probe;
+      return hallScene?.getObjectByName("sold-out-sign")?.visible;
+    });
+
+  stall.sold_out = false;
+  await expect.poll(sign).toBe(false);
+  stall.sold_out = true;
+  await expect.poll(sign).toBe(true);
+
+  const host = page.locator("[data-hall-canvas]");
+  await host.focus();
+  await host.press("ArrowUp");
+  await host
+    .locator("canvas")
+    .screenshot({ path: info.outputPath("sold-out-sign.png") });
+
+  stall["open?"] = false;
+  await expect.poll(sign).toBe(false);
+  stall["open?"] = true;
+  await expect.poll(sign).toBe(true);
+
+  await page.getByRole("button", { name: "Stall list", exact: true }).click();
+  await expect(page.getByText("Sold Out", { exact: true })).toBeVisible();
+  await page.getByLabel("Language / 言語").selectOption("ja");
+  const badge = page.getByText("売り切れ", { exact: true });
+  await expect(badge).toBeVisible();
+
+  stall.sold_out = false;
+  await expect(badge).toHaveCount(0);
+  await page.getByRole("button", { name: "3Dホール", exact: true }).click();
+  await expect.poll(sign).toBe(false);
 });
 
 test("only the current room and open neighbours are drawn", async ({
@@ -603,7 +671,7 @@ test("the list and the picker group stalls and vacant spots by open room", async
     const room = page.getByRole("region", { name, exact: true });
     await expect(room.getByRole("heading", { level: 3 })).toHaveText([
       ...stalls,
-      ...spots.map(() => "To let"),
+      ...spots.map(() => "Available for Rent"),
     ]);
     await expect(room.getByRole("button", { name: "View spot" })).toHaveCount(
       spots.length,

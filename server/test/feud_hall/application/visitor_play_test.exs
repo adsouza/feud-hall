@@ -296,7 +296,11 @@ defmodule FeudHall.Application.VisitorPlayTest do
     rt = boot(InMemoryEventStore, InMemoryEventStore.new(), with_drink: true)
     params = %{"stall_id" => @stall, "profile_id" => "vegan"}
 
-    assert {:ok, %{checkout_menu: %{stall_id: @stall, profile_id: "vegan", mains: %{@recipe => ["mint_lemonade"]}}}} =
+    assert {:ok,
+            %{
+              hall: %{stalls: [%{sold_out: false}]},
+              checkout_menu: %{stall_id: @stall, profile_id: "vegan", mains: %{@recipe => ["mint_lemonade"]}}
+            }} =
              Management.view(rt, nil, params)
 
     reserved = fn products ->
@@ -307,14 +311,49 @@ defmodule FeudHall.Application.VisitorPlayTest do
       end)
     end
 
-    assert {:ok, %{checkout_menu: %{mains: %{@recipe => []}}}} =
+    assert {:ok, %{hall: %{stalls: [%{sold_out: false}]}, checkout_menu: %{mains: %{@recipe => []}}}} =
              Management.view(reserved.(["mint"]), nil, params)
 
-    assert {:ok, %{checkout_menu: %{mains: mains}, hall: %{stalls: stalls}}} =
-             Management.view(reserved.(["chickpeas_dried"]), nil, params)
+    out = reserved.(["chickpeas_dried"])
+
+    assert {:ok, %{checkout_menu: %{mains: mains}, hall: %{stalls: [%{sold_out: true, open?: true, menu: menu}]}}} =
+             Management.view(out, nil, params)
 
     assert mains == %{}
-    assert Map.has_key?(Enum.find(stalls, &(&1.stall_id == @stall)).menu, @recipe)
+    assert Map.has_key?(menu, @recipe)
+
+    assert {:ok, %{hall: %{stalls: [%{sold_out: false, open?: false}]}}} =
+             Management.view(put_in(out.state.stalls[@stall].mode, :closed), nil)
+
+    assert {:ok, %{hall: %{stalls: [%{sold_out: false, open?: false}]}}} =
+             Management.view(put_in(out.state.access, :cleaning), nil)
+
+    no_main = update_in(out.state.restaurants["npc-budget"].menu, &Map.delete(&1, @recipe))
+    assert {:ok, %{hall: %{stalls: [%{sold_out: false, open?: true}]}}} = Management.view(no_main, nil)
+
+    no_pita = reserved.(["pita"])
+    assert {:ok, %{hall: %{stalls: [%{sold_out: true}]}}} = Management.view(no_pita, nil)
+
+    packaged_pita = %{
+      id: "test-pita",
+      product: "pita_packaged",
+      product_version: 1,
+      qty: 1,
+      reserved: 0,
+      cost: 1,
+      expires_at: rt.state.now + 1
+    }
+
+    substitute = put_in(no_pita.state.restaurants["npc-budget"].batches["test-pita"], packaged_pita)
+    assert {:ok, %{hall: %{stalls: [%{sold_out: true}]}}} = Management.view(substitute, nil)
+
+    allowed = put_in(substitute.state.restaurants["npc-budget"].policies[@recipe], %{"pita" => :prefer_primary})
+
+    assert {:ok, %{hall: %{stalls: [%{sold_out: false}]}, checkout_menu: %{mains: %{@recipe => ["mint_lemonade"]}}}} =
+             Management.view(allowed, nil, params)
+
+    assert {:ok, %{hall: %{stalls: [%{sold_out: true}]}}} =
+             Management.view(put_in(allowed.state.now, packaged_pita.expires_at), nil)
   end
 
   test "public stall activity counts staffed positions only while open" do

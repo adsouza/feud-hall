@@ -20,6 +20,7 @@ export type Stall = {
   cuisine: string;
   menu: Record<string, Money>;
   "open?": boolean;
+  sold_out?: boolean;
   reopens_at?: number | null;
   last_service?: string | null;
   npc?: boolean;

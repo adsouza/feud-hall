@@ -7,6 +7,7 @@ import { createHallLights } from "./hall-lights";
 import { createHallShell } from "./hall-shell";
 import { createStallKit, hash, stallAccent } from "./stall-model";
 import { createPickupHands } from "./hall-pickup";
+import { layoutTabletText } from "./tablet-text";
 import { createTabletScreen } from "./hall-tablet";
 import type { TabletView, TabletAction } from "./hall-tablet";
 import {
@@ -72,7 +73,7 @@ export type Actions = {
   collected: () => void;
   /** The room the viewer is in changed. */
   room: (room: number) => void;
-  /** A "to let" bay was selected. */
+  /** A vacant bay was selected. */
   vacancy: (stallId: string) => void;
   frame?: (drawMs: number) => void;
 };
@@ -100,9 +101,10 @@ export type Appearance = {
   tabletHint: string;
   /** Absent for halls without the room rule: every room in use is open. */
   rooms?: { count: number; open: number };
-  /** Vacant spots of open rooms; drawn as "to let" bays. */
+  /** Vacant spots in open rooms. */
   vacancies?: HallVacancy[];
   toLetLabel: string;
+  soldOutLabel: string;
   /** The hall is open to diners (`hall.access === "open"`). */
   serving: boolean;
   /** Today's diner totals; absent from servers that do not send them. */
@@ -125,6 +127,7 @@ type Counter = {
   sign: T.Mesh<T.PlaneGeometry, T.MeshBasicMaterial>;
   tablet: T.Mesh<T.PlaneGeometry, T.MeshBasicMaterial>;
   reopening: T.Group;
+  soldOut: T.Group;
   placard: T.Mesh<T.PlaneGeometry, T.MeshBasicMaterial>;
   reopeningLabel: string;
   plaque: T.Mesh;
@@ -339,48 +342,68 @@ export function createHallScene(
     roughness: 0.9,
   });
   const toLetMat = new T.MeshBasicMaterial({ color: "#ffffff" });
-  const toLetGeometry = new T.PlaneGeometry(1.5, 0.62);
-  let toLetLabel = "";
+  const soldOutMat = new T.MeshBasicMaterial({ color: "#ffffff" });
+  const noticeGeometry = new T.PlaneGeometry(1.5, 0.62);
 
-  function paintToLet(label: string, repaint = false) {
-    if (!repaint && label === toLetLabel) return;
-    toLetLabel = label;
-    const canvas = document.createElement("canvas");
-    canvas.width = 384;
-    canvas.height = 160;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.fillStyle = "#fff0cd";
-    ctx.fillRect(0, 0, 384, 160);
-    ctx.fillStyle = "#b8443c";
-    ctx.fillRect(10, 10, 364, 140);
-    ctx.fillStyle = "#fff6e3";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const font = '900 64px "Noto Sans JP", system-ui, sans-serif';
-    ctx.font = font;
-    ctx.fillText(label, 192, 82, 340);
-    const map = new T.CanvasTexture(canvas);
-    map.colorSpace = T.SRGBColorSpace;
-    toLetMat.map?.dispose();
-    toLetMat.map = map;
-    toLetMat.needsUpdate = true;
-    if (!repaint && !document.fonts.check(font, label)) {
-      void document.fonts
-        .load(font, label)
-        .then(() => {
-          if (disposed || toLetLabel !== label) return;
-          paintToLet(label, true);
-          draw();
-        })
-        .catch(() => {});
-    }
+  function noticePainter(material: T.MeshBasicMaterial, background: string) {
+    let lastLabel = "";
+    return function paint(label: string, repaint = false) {
+      if (!repaint && label === lastLabel) return;
+      lastLabel = label;
+      const canvas = document.createElement("canvas");
+      canvas.width = 384;
+      canvas.height = 160;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.fillStyle = "#fff0cd";
+      ctx.fillRect(0, 0, 384, 160);
+      ctx.fillStyle = background;
+      ctx.fillRect(10, 10, 364, 140);
+      ctx.fillStyle = "#fff6e3";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const signFont = (size: number) =>
+        `900 ${size}px "Noto Sans JP", system-ui, sans-serif`;
+      const { size, lines } = layoutTabletText(
+        label,
+        340,
+        64,
+        2,
+        (text, px) => {
+          ctx.font = signFont(px);
+          return ctx.measureText(text).width;
+        },
+      );
+      const font = signFont(size);
+      ctx.font = font;
+      lines.forEach((line, index) =>
+        ctx.fillText(line, 192, 82 + (index - (lines.length - 1) / 2) * size),
+      );
+      const map = new T.CanvasTexture(canvas);
+      map.colorSpace = T.SRGBColorSpace;
+      material.map?.dispose();
+      material.map = map;
+      material.needsUpdate = true;
+      if (!repaint && !document.fonts.check(font, label)) {
+        void document.fonts
+          .load(font, label)
+          .then(() => {
+            if (disposed || lastLabel !== label) return;
+            paint(label, true);
+            draw();
+          })
+          .catch(() => {});
+      }
+    };
   }
+
+  const paintToLet = noticePainter(toLetMat, "#b8443c");
+  const paintSoldOut = noticePainter(soldOutMat, "#82302b");
 
   type Bay = { root: T.Group; hit: T.Mesh; placement: SpotPlacement };
   const bays = new Map<string, Bay>();
 
-  /** An empty spot: a marked floor and a "to let" sign facing the room. */
+  /** An empty spot with a rent sign facing the room. */
   function createBay(id: string, placement: SpotPlacement): Bay {
     const root = new T.Group();
     root.position.set(placement.x, 0, placement.z);
@@ -390,7 +413,7 @@ export function createHallScene(
       brick(root, highlight, side * 1.72, -0.005, 0.08, 0.06, 0.012, 2.5);
     brick(root, wood, 0, 0.62, 0.55, 0.08, 1.24, 0.08);
     brick(root, wood, 0, 0.02, 0.55, 0.6, 0.04, 0.4);
-    const sign = new T.Mesh(toLetGeometry, toLetMat);
+    const sign = new T.Mesh(noticeGeometry, toLetMat);
     sign.position.set(0, 1.42, 0.6);
     root.add(sign);
     const hit = brick(root, hitMat, 0, 1.06, 0.07, 3.5, 2.2, 2.25);
@@ -548,6 +571,16 @@ export function createHallScene(
     placard.position.y = 0.16;
     placard.rotation.x = -0.16;
     reopening.add(placard);
+    const soldOut = new T.Group();
+    soldOut.name = "sold-out-sign";
+    soldOut.position.set(-0.72, 1.43, 1.08);
+    soldOut.visible = false;
+    const soldOutFace = new T.Mesh(noticeGeometry, soldOutMat);
+    soldOutFace.scale.setScalar(0.78);
+    soldOut.add(soldOutFace);
+    for (const x of [-0.35, 0.35])
+      brick(soldOut, dark, x, 0.268, -0.02, 0.04, 0.13, 0.035);
+    root.add(soldOut);
     brick(root, dark, 1.04, 0.91, 0.96, 0.42, 0.07, 0.3);
     brick(root, slate, 1.04, 1.04, 1.02, 0.08, 0.27, 0.08);
     brick(root, dark, 1.04, 1.43, 1.17, 0.68, 1.0, 0.065);
@@ -567,6 +600,7 @@ export function createHallScene(
       sign,
       tablet,
       reopening,
+      soldOut,
       placard,
       reopeningLabel: "",
       plaque,
@@ -792,6 +826,7 @@ export function createHallScene(
     tabletLabel: "",
     tabletHint: "",
     toLetLabel: "",
+    soldOutLabel: "",
     serving: false,
   };
   let hover = "";
@@ -1746,6 +1781,9 @@ export function createHallScene(
             : idleTablet.material;
         model.activity = stall.activity;
         model.open = stall["open?"];
+        model.soldOut.visible = Boolean(
+          model.open && next.serving && stall.sold_out,
+        );
         model.pickupId = privateTrays.get(stall.stall_id);
         model.pickup.userData.pickupId = model.pickupId;
         model.pickup.userData.stall = stall.stall_id;
@@ -1816,6 +1854,11 @@ export function createHallScene(
         });
       updateBays(next);
       paintToLet(next.toLetLabel);
+      if (
+        next.serving &&
+        next.stalls.some((stall) => stall["open?"] && stall.sold_out)
+      )
+        paintSoldOut(next.soldOutLabel);
       // A room that closes, with the viewer in it: go to the highest open room
       // below it. Otherwise follow the view, with doors to match the open rooms.
       const viewRoom = roomOfView();
@@ -1937,6 +1980,7 @@ export function createHallScene(
       tabletGeometry.dispose();
       for (const bay of bays.values()) discardBay(bay);
       toLetMat.map?.dispose();
+      soldOutMat.map?.dispose();
       cuisineArt.dispose();
       hallShell.dispose();
       stallKit.dispose();
@@ -1958,12 +2002,13 @@ export function createHallScene(
         hitMat,
         bayMat,
         toLetMat,
+        soldOutMat,
       ])
         material.dispose();
       for (const geometry of [
         box,
         placardGeometry,
-        toLetGeometry,
+        noticeGeometry,
         pickupGeometry,
         steamGeometry,
         carriedGeometry,
