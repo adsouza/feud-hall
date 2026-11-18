@@ -415,7 +415,8 @@ test("market: a rival's fill appears as an unlabelled shopper", async ({
       ...template,
       stall_id: "rival-stall",
       restaurant_id: "rival-r",
-      name: rivalName,
+      name: "Rival dumpling stall",
+      restaurant_name: rivalName,
     });
     view.hall.market_trips = [
       {
