@@ -12,6 +12,7 @@ export type Recipe = {
 export type Stall = {
   stall_id: string;
   restaurant_id: string;
+  restaurant_name?: string;
   tier: string;
   room?: number;
   position?: number;
@@ -53,6 +54,7 @@ type Lease = {
 };
 export type OwnerStall = {
   id: string;
+  name?: string;
   tier: string;
   mode: string;
   can_open: boolean;

@@ -21,6 +21,10 @@ const messages = {
     "Refitting needs a closed stall, no active orders, a new cuisine, and enough cash for setup.",
     "改装には閉店済みの店舗、処理中の注文がないこと、新しい料理、十分な準備資金が必要です。",
   ],
+  invalid_stall_name: [
+    "Enter a stall name of up to 40 printable characters on one line.",
+    "店舗の表示名は、表示可能な文字を使って1行で40文字以内で入力してください。",
+  ],
   business_distressed: [
     "This venture is in distress. Pay the outstanding charges before resuming trade.",
     "経営危機のため営業できません。未払い金を支払ってください。",

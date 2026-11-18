@@ -1,7 +1,7 @@
 defmodule FeudHall.Domain.Hall.Progression do
   @moduledoc "Venture and location transitions owned by the managed hall."
 
-  alias FeudHall.Domain.{Market, Money}
+  alias FeudHall.Domain.{BusinessName, Market, Money}
   alias FeudHall.Domain.Hall.{CounterPlay, Equipment, Evolver, Management, Population, Recognition, Rooms, Settlement}
 
   @commands [
@@ -40,6 +40,7 @@ defmodule FeudHall.Domain.Hall.Progression do
   end
 
   def cuisine(stall, restaurant), do: Map.get(stall, :cuisine, restaurant.cuisine)
+  def location_name(stall, restaurant), do: Map.get(stall, :name, restaurant.name)
 
   def stall_menu(state, stall, restaurant) do
     cuisine = cuisine(stall, restaurant)
@@ -125,7 +126,7 @@ defmodule FeudHall.Domain.Hall.Progression do
     end
   end
 
-  defp decide_owned(state, restaurant, :refit_location, %{stall_id: sid, cuisine: cuisine}) do
+  defp decide_owned(state, restaurant, :refit_location, %{stall_id: sid, cuisine: cuisine} = data) do
     id = restaurant.id
     cost = state.management.rules.setup_fee
     starter = Enum.find(Map.values(state.catalog.recipes), &(&1.cuisine == cuisine and &1.starter))
@@ -135,18 +136,21 @@ defmodule FeudHall.Domain.Hall.Progression do
          false <- Enum.any?(state.visits, fn {_, visit} -> visit.stall == sid end),
          false <- cuisine == cuisine(stall, restaurant),
          %{id: _} <- starter,
-         true <- Management.available_cash(state, id) >= cost do
-      refit = %{
-        type: :location_refitted,
-        restaurant_id: id,
-        stall_id: sid,
-        cuisine: cuisine,
-        cost: cost,
-        ready_at: state.now + state.catalog.rules.progression.setup_ms
-      }
+         true <- Management.available_cash(state, id) >= cost,
+         {:ok, name_fields} <- refit_name(data) do
+      refit =
+        Map.merge(name_fields, %{
+          type: :location_refitted,
+          restaurant_id: id,
+          stall_id: sid,
+          cuisine: cuisine,
+          cost: cost,
+          ready_at: state.now + state.catalog.rules.progression.setup_ms
+        })
 
       {:ok, Management.end_stall_shift(state, sid, :stall_closed) ++ [refit | starter_menu(restaurant, starter)]}
     else
+      {:error, :invalid_stall_name} = error -> error
       _ -> {:error, :refit_unavailable}
     end
   end
@@ -243,6 +247,14 @@ defmodule FeudHall.Domain.Hall.Progression do
   end
 
   defp decide_owned(_state, _restaurant, _kind, _payload), do: {:error, :invalid_payload}
+
+  defp refit_name(%{stall_name: name}) do
+    if BusinessName.valid?(name) and String.trim(name) != "" and not Regex.match?(~r/[\p{Cc}\p{Zl}\p{Zp}]/u, name),
+      do: {:ok, %{name: name}},
+      else: {:error, :invalid_stall_name}
+  end
+
+  defp refit_name(_data), do: {:ok, %{}}
 
   def released_debt(state, id), do: get_in(state, [:progression, :ventures, id, :released_debt]) || 0
 
@@ -438,7 +450,9 @@ defmodule FeudHall.Domain.Hall.Progression do
     |> Equipment.store(e.stall_id)
     |> CounterPlay.clear_location(e.stall_id)
     |> update_in([:stalls, e.stall_id], fn stall ->
-      Map.merge(stall, %{cuisine: e.cuisine, ready_at: e.ready_at, menu_overrides: %{}, equipment: %{}})
+      stall
+      |> Map.merge(%{cuisine: e.cuisine, ready_at: e.ready_at, menu_overrides: %{}, equipment: %{}})
+      |> Map.merge(Map.take(e, [:name]))
     end)
     |> Management.opening_requested(e.stall_id, false)
     |> update_in([:restaurants, e.restaurant_id, :ledger], fn ledger ->

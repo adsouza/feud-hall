@@ -13,7 +13,7 @@ defmodule FeudHall.Domain.Hall.Decider do
   `FeudHall.Domain.Hall.Advance`.
   """
 
-  alias FeudHall.Domain.{Clock, Content, Market, Money, Random, Substitution}
+  alias FeudHall.Domain.{BusinessName, Clock, Content, Market, Money, Random, Substitution}
 
   alias FeudHall.Domain.Hall.{
     Admission,
@@ -103,7 +103,7 @@ defmodule FeudHall.Domain.Hall.Decider do
       catalog.recipes |> Map.values() |> Enum.find(&(&1.starter and &1.cuisine == Map.get(p, :cuisine)))
 
     cond do
-      not (id?(p[:restaurant_id]) and id?(p[:stall_id]) and name?(p[:name])) ->
+      not (id?(p[:restaurant_id]) and id?(p[:stall_id]) and BusinessName.valid?(p[:name])) ->
         {:error, :invalid_payload}
 
       Map.has_key?(state.owners, {kind, owner}) ->
@@ -537,9 +537,6 @@ defmodule FeudHall.Domain.Hall.Decider do
   defp ensure(_, reason), do: {:error, reason}
 
   defp id?(value), do: is_binary(value) and byte_size(value) in 1..64 and String.printable?(value)
-
-  defp name?(value),
-    do: is_binary(value) and String.length(value) in 1..40 and String.printable?(value) and byte_size(value) <= 160
 
   defp fetch(map, key, reason) do
     case Map.fetch(map, key) do

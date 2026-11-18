@@ -165,6 +165,8 @@ const en = {
   reopenLocation: "Lease a location for this business",
   currentLocations: "Current locations",
   refitLocation: "Refit this location",
+  stallName: "Stall name",
+  refitNameHint: "Edit the name shown to diners. Up to 40 characters.",
   readyIn: "Ready in",
   surrenderLocation: "Surrender closed location",
   surrenderDistressHint:
@@ -674,6 +676,9 @@ const ja: Record<Key, string> = {
   reopenLocation: "この店の営業場所を借りる",
   currentLocations: "現在の店舗",
   refitLocation: "この店舗を改装",
+  stallName: "店舗の表示名",
+  refitNameHint:
+    "来店客に表示する店名を変更できます。40文字以内で入力してください。",
   readyIn: "準備完了まで",
   surrenderLocation: "閉店した店舗を返却",
   surrenderDistressHint:

@@ -293,8 +293,10 @@
   let rival = $state("");
   let showScene = $derived(webgl && !failed && panelWidth >= SCENE_MIN_WIDTH);
   let detailProduct = $derived(hoverProduct || draft.selected);
-  const restaurantName = (id: string) =>
-    stalls.find((stall) => stall.restaurant_id === id)?.name ?? "";
+  const restaurantName = (id: string) => {
+    const stall = stalls.find((stall) => stall.restaurant_id === id);
+    return stall?.restaurant_name ?? stall?.name ?? "";
+  };
   const actions: MarketActions = {
     add: (product) => addToCart(product),
     focusVendor: (vendor) => chooseVendor(vendor),
@@ -384,7 +386,10 @@
       crateText(1),
       vendorName("pantry"),
       money("1000"),
-      stalls.map((stall) => [stall.restaurant_id, stall.name]),
+      stalls.map((stall) => [
+        stall.restaurant_id,
+        stall.restaurant_name ?? stall.name,
+      ]),
     ]);
     if (key === lastKey) return;
     lastKey = key;

@@ -532,6 +532,13 @@ Existing managed halls receive version 3 through the recorded `hall_catalog_expa
 
 The business location picker uses `profile.slots` for both its selectable bays and list, with open-room bounds from `hall.rooms` and geometry from the 3D room layout module. A position without a quote is unavailable on the map. Both controls write the same draft spot ID, and the details use the selected server quote. A held slot uses `profile.draft`.
 
+`refit_location` accepts an optional `stall_name` alongside the new cuisine.
+The name is printable single-line text of up to 40 graphemes and 160 bytes,
+with at least one non-whitespace character. The refit event records the name
+when supplied. Earlier events and requests without it keep the location's
+current name. The Hall and dining views expose the stall name, defaulting to
+the restaurant name. Business-level displays use the restaurant name.
+
 ### The recorded rule change
 
 Balance values are data, and a managed launch hall changes them only through a recorded event, beside the catalog expansion above.

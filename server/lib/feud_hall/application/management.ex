@@ -105,11 +105,13 @@ defmodule FeudHall.Application.Management do
     stalls =
       Enum.map(public.stalls, fn stall ->
         restaurant = state.restaurants[stall.restaurant_id]
+        location = state.stalls[stall.stall_id]
         open? = stall.open? and state.access == :open
 
         Map.merge(stall, %{
-          name: restaurant.name,
-          cuisine: Progression.cuisine(state.stalls[stall.stall_id], restaurant),
+          name: Progression.location_name(location, restaurant),
+          restaurant_name: restaurant.name,
+          cuisine: Progression.cuisine(location, restaurant),
           npc: restaurant.owner_kind == :npc,
           open?: open?,
           reopens_at: HallManagement.estimated_reopening(state, stall.stall_id),
@@ -427,6 +429,7 @@ defmodule FeudHall.Application.Management do
         lease = get_in(state, [:management, :leases, sid]) || %{}
 
         Map.merge(Map.take(stall, [:id, :mode, :tier]), %{
+          name: Progression.location_name(stall, restaurant),
           cuisine: Progression.cuisine(stall, restaurant),
           ready_at: Map.get(stall, :ready_at),
           refit_cost: cents(state.management.rules.setup_fee),

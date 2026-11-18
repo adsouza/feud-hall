@@ -929,6 +929,10 @@ Tradeoffs remain visible: a faster station costs more to buy and operate; a broa
 
 Changing cuisine or replacing incompatible equipment requires a closed, settled stall and a disclosed refit cost/duration. Preserve compatible inventory and shared recipe knowledge; incompatible stock remains owned rather than silently disappearing. Training that takes a worker off duty and capacity-changing upgrades revalidate affected coverage, queued work, and storage claims before acceptance. A refitting location keeps its lease and holding fee, and cannot accept diners or helper offers until the refit completes.
 
+When changing cuisine, the owner can also edit the stall's public name. The
+name takes effect with the refit and applies to that location. A stall that
+has never been renamed displays its restaurant's name.
+
 ## 10. Staff and schedules
 
 Staff members have a role, wage rate, service or cuisine skills, fatigue, and current assignment. The initial roles are cooks and support staff. Support covers counter handover, preparation assistance, and routine stall cleaning during customer-accessible hours according to a simple task policy; this is separate from the automatic hall-wide 03:00–05:00 cleaning. Cuisine skill affects quality; equipment and coverage constrain speed.

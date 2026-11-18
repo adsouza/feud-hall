@@ -3,7 +3,7 @@ defmodule FeudHall.Application.DinerBrowse do
 
   alias FeudHall.Application.Replay
   alias FeudHall.Domain.{Dietary, Identity, Inventory, Money, Offers, PublicView, Substitution}
-  alias FeudHall.Domain.Hall.Admission
+  alias FeudHall.Domain.Hall.{Admission, Progression}
 
   @limit 12
 
@@ -123,7 +123,7 @@ defmodule FeudHall.Application.DinerBrowse do
         is_nil(budget) or quote.total <= budget do
       %{
         stall_id: stall.stall_id,
-        name: state.restaurants[stall.restaurant_id].name,
+        name: Progression.location_name(state.stalls[stall.stall_id], state.restaurants[stall.restaurant_id]),
         cuisine: cuisine,
         main: main,
         drink: include,

@@ -5,7 +5,7 @@ defmodule FeudHall.Web.Protocol do
   alias FeudHall.Web.Token
 
   @commands Map.new(Management.public_commands(), &{Atom.to_string(&1), &1})
-  @keys ~w(name restaurant_id stall_id cuisine recipe_id price product qty max_price_per_kunit
+  @keys ~w(name restaurant_id stall_id stall_name cuisine recipe_id price product qty max_price_per_kunit
     profile_id main drink confirmed content_hash requirement excludes carb_ceiling_mg components
     kind recipe_version variant lines carbs_mg line_id substituted penalty deadline visit_id tray_id
     enabled start_hour end_hour cash_floor expires_at quoted_at rate shift_id task_id selection_id item_id recipes present

@@ -386,6 +386,77 @@ defmodule FeudHall.Application.ProgressionTest do
     assert loaded.state == rt.state
   end
 
+  test "a refit can name one stall and replay the name without changing the venture or other locations" do
+    alias FeudHall.Application.DinerBrowse
+    alias FeudHall.Infrastructure.Snapshot
+
+    rt = boot(PostgresEventStore, FeudHall.PostgresCase.fresh_store(), LaunchCatalog.catalog())
+    {rt, owner} = register(rt, "owner")
+    {rt, rival} = register(rt, "rival")
+    actor = {:principal, owner}
+    rt = accepted(rt, actor, :reserve_stall, %{stall_id: "s001"})
+    rt = accepted(rt, actor, :create_restaurant, location("kitchen", "s001", "tamil"))
+    rt = accepted(rt, actor, :lease_location, location("kitchen", "s002", "tamil"))
+
+    assert {:ok, %{profile: %{restaurant: %{stalls: [%{name: "kitchen"}, %{name: "kitchen"}]}}}} =
+             Management.view(rt, "owner")
+
+    before = rt.state
+    position = rt.position
+    snapshot = Snapshot.take(%{hall: rt.state, control: rt.control}, position)
+    refit = %{restaurant_id: "kitchen", stall_id: "s002", cuisine: "japanese"}
+    name = "  朝の台所  "
+
+    rt =
+      Enum.reduce([nil, 12, "", "　", "First\nSecond", String.duplicate("店", 41)], rt, fn invalid, rt ->
+        assert {:rejected, %{outcome: {:rejected, :invalid_stall_name}, event_count: 0}, rejected} =
+                 command(rt, actor, :refit_location, Map.put(refit, :stall_name, invalid))
+
+        assert rejected.state == before
+        rejected
+      end)
+
+    assert {:rejected, %{outcome: {:rejected, :forbidden}}, rt} =
+             command(rt, {:principal, rival}, :refit_location, Map.put(refit, :stall_name, name))
+
+    named = %{
+      command_id: "refit-stall-name",
+      actor: actor,
+      command: {:refit_location, Map.put(refit, :stall_name, name)}
+    }
+
+    assert {:accepted, receipt, rt} = CommandWorkflow.execute(rt, named)
+    assert {:replayed, ^receipt, retried} = CommandWorkflow.execute(rt, named)
+    assert retried.state == rt.state
+    assert rt.state.stalls["s002"].name == name
+    assert rt.state.stalls["s001"] == before.stalls["s001"]
+    assert rt.state.restaurants["kitchen"].name == "kitchen"
+
+    # An older caller with no stall_name keeps the existing public name.
+    rt = accepted(rt, actor, :refit_location, %{refit | cuisine: "mexican"})
+    assert rt.state.stalls["s002"].name == name
+    assert {:ok, %{hall: %{stalls: [first, second]}, profile: %{restaurant: venture}}} = Management.view(rt, "owner")
+    assert first.name == "kitchen"
+    assert second.name == name
+    assert second.restaurant_name == "kitchen"
+    assert [%{name: "kitchen"}, %{name: ^name}] = venture.stalls
+
+    rt = accepted(rt, actor, :request_starter_stock, %{restaurant_id: "kitchen", stall_id: "s002", budget: 20_000})
+    rt = advance(rt, max(rt.state.stalls["s002"].ready_at, rt.state.market.next_clear_at))
+    rt = accepted(rt, actor, :report_owner_presence, %{present: true})
+    rt = accepted(rt, actor, :open_stall, %{stall_id: "s002"})
+
+    assert {:ok, %{options: [%{stall_id: "s002", name: ^name}]}} =
+             DinerBrowse.compare(rt, "rival", %{"stall_id" => "s002"})
+
+    assert :ok = Invariants.check(rt.state)
+    assert {:ok, replay} = CommandWorkflow.open(PostgresEventStore, rt.store)
+    assert replay.state == rt.state
+    assert {:ok, batches} = PostgresEventStore.read_from(rt.store, position)
+    assert {:ok, %{hall: restored}} = Snapshot.restore(snapshot, batches)
+    assert restored == rt.state
+  end
+
   test "population latches only with 13 leased owners, recovers fresh presence, and restores retained NPC capital" do
     alias FeudHall.Domain.{Demand, Hall}
     alias FeudHall.Domain.Hall.Population

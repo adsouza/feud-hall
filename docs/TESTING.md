@@ -505,6 +505,10 @@ clock partitions, receipt paging and authorization, award review eligibility,
 and NPC retirement and restoration. The mutation cohort includes the
 location limit, distress cost freeze, and guest exclusion from awards.
 
+The named-refit check covers invalid names, owner authorization, repeat
+delivery, a later refit with no name supplied, the dining projection, and
+PostgreSQL genesis and snapshot-tail replay.
+
 The Māori additions also exercise both unlockable mains and a version-1 to
 version-2 launch expansion with a pending order. Check preserved terms and
 pools, forward-only versions, PostgreSQL replay and snapshot-tail replay.
@@ -536,7 +540,8 @@ dining, helper handover, invitation and cuisine selection, and NPC startup
 recovery through the built client, Phoenix, and disposable PostgreSQL databases.
 The launch journey checks map and list selection of a first spot with live
 lease terms, all 25 cuisine choices, recipe previews in English and Japanese,
-an equipment purchase, and leasing a second location. The room checks use a
+an equipment purchase, leasing a second location, and renaming it through a
+cuisine refit. The room checks use a
 controlled view to exercise switching open rooms and the loss of a selected
 spot. The dining journey reads a served order from the committed history and
 checks that an unauthenticated session is refused.

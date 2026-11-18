@@ -145,6 +145,52 @@ test("launch owner selects from all cuisines, equips a recipe and expands", asyn
     )
     .toEqual(["tamil", "mexican"]);
   expect((await state(page)).profile.restaurant.ledger.capital).toBe("500000");
+
+  const ownedLocations = page.locator('[data-business-section="locations"]');
+  const selectedLocation = ownedLocations.locator(":scope > label select");
+  const refit = ownedLocations.locator("details").filter({
+    has: page.getByText("Refit this location", { exact: true }),
+  });
+  await refit.getByText("Refit this location", { exact: true }).click();
+  const name = refit.getByLabel("Stall name", { exact: true });
+  await expect(name).toHaveValue("Test counter");
+  await name.fill("Draft for the first stall");
+  await refit.getByRole("radio", { name: "Japanese", exact: true }).check();
+  await selectedLocation.selectOption(second.stall_id);
+  await expect(name).toHaveValue("Test counter");
+  await expect(
+    refit.getByRole("radio", { name: "Japanese", exact: true }),
+  ).not.toBeChecked();
+
+  await refit.getByRole("radio", { name: "Japanese", exact: true }).check();
+  await name.fill("朝の台所");
+  await page.getByLabel("Language / 言語").selectOption("ja");
+  await expect(
+    ownedLocations.getByLabel("店舗の表示名", { exact: true }),
+  ).toHaveValue("朝の台所");
+  await page.getByLabel("Language / 言語").selectOption("en");
+  await refit.getByRole("button", { name: /^Refit this location ·/ }).click();
+  await expect(selectedLocation.locator("option:checked")).toHaveText(
+    `朝の台所 · ${second.stall_id} · Japanese`,
+  );
+  await expect(
+    page.getByRole("heading", { name: "Test counter", exact: true }),
+  ).toBeVisible();
+
+  const afterRefit = await state(page);
+  expect(
+    afterRefit.hall.stalls.filter((stall: { stall_id: string }) =>
+      [first.stall_id, second.stall_id].includes(stall.stall_id),
+    ),
+  ).toMatchObject([
+    { stall_id: first.stall_id, name: "Test counter", cuisine: "tamil" },
+    { stall_id: second.stall_id, name: "朝の台所", cuisine: "japanese" },
+  ]);
+  await page.getByRole("button", { name: "Hall", exact: true }).click();
+  await page.getByRole("button", { name: "Stall list", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "朝の台所", exact: true }),
+  ).toBeVisible();
 });
 
 test("Maori is selectable on the map in both languages and has its own complete artwork", async ({

@@ -51,6 +51,7 @@
     Page,
     Pending,
     Quote,
+    Restaurant,
     Slot,
     Stall,
     View,
@@ -547,6 +548,7 @@
   let expansionDetails = $state<HTMLDetailsElement>();
   let expansionCuisine = $state("");
   let refitCuisine = $state("");
+  let refitName = $state<string | null>(null);
   let stallId = $state("");
   let main = $state("");
   let drink = $state("");
@@ -678,6 +680,13 @@
     restaurant?.stalls.find((stall) => stall.id === ownerStallId) ??
       restaurant?.stalls[0],
   );
+  let refitScope = $derived(
+    ownerStall && restaurant
+      ? JSON.stringify([restaurant.id, ownerStall.id, ownerStall.cuisine])
+      : "",
+  );
+  let currentStallName = $derived(ownerStall?.name ?? restaurant?.name ?? "");
+  let refitRename = $derived(refitName === currentStallName ? null : refitName);
   let businessSections = $derived<BusinessSection[]>([
     ...(restaurant?.stall_limit ? ["locations" as const] : []),
     "menu",
@@ -1204,6 +1213,13 @@
 
   $effect(() => {
     document.documentElement.lang = locale;
+  });
+
+  $effect(() => {
+    if (refitScope) {
+      refitName = null;
+      refitCuisine = "";
+    }
   });
 
   $effect(() => {
@@ -3023,6 +3039,15 @@
       </details>
     {/if}
   {:else if page === "business"}
+    {#snippet ownerLocationOptions(venture: Restaurant)}
+      {#each venture.stalls as stall (stall.id)}
+        <option value={stall.id}>
+          {stall.name ?? venture.name} · {stall.id} · {title(
+            stall.cuisine ?? venture.cuisine,
+          )}
+        </option>
+      {/each}
+    {/snippet}
     {#snippet leaseTerms(slot: Slot, line: string)}
       <p>
         <strong>{slot.stall_id} · {title(slot.tier)}</strong>
@@ -3188,15 +3213,9 @@
               value={ownerStall.id}
               onchange={(event) => {
                 ownerStallId = event.currentTarget.value;
-                refitCuisine = "";
               }}
             >
-              {#each restaurant.stalls as stall (stall.id)}<option
-                  value={stall.id}
-                  >{stall.id} · {title(
-                    stall.cuisine ?? restaurant.cuisine,
-                  )}</option
-                >{/each}
+              {@render ownerLocationOptions(restaurant)}
             </select></label
           >
         {/if}
@@ -3231,16 +3250,9 @@
                   value={ownerStall.id}
                   onchange={(event) => {
                     ownerStallId = event.currentTarget.value;
-                    refitCuisine = "";
                   }}
                 >
-                  {#each restaurant.stalls as stall (stall.id)}
-                    <option value={stall.id}
-                      >{stall.id} · {title(
-                        stall.cuisine ?? restaurant.cuisine,
-                      )}</option
-                    >
-                  {/each}
+                  {@render ownerLocationOptions(restaurant)}
                 </select>
               </label>
               {#if ownerStall.ready_at && ownerStall.ready_at > view.hall.now}
@@ -3255,14 +3267,37 @@
                   <form
                     onsubmit={(event) => {
                       event.preventDefault();
-                      if (restaurant && ownerStall && refitCuisine)
+                      if (
+                        restaurant &&
+                        ownerStall &&
+                        refitCuisine &&
+                        refitRename?.trim() !== ""
+                      )
                         void submit("refit_location", {
                           restaurant_id: restaurant.id,
                           stall_id: ownerStall.id,
                           cuisine: refitCuisine,
+                          ...(refitRename !== null
+                            ? { stall_name: refitRename }
+                            : {}),
                         });
                     }}
                   >
+                    <label>
+                      {t("stallName")}
+                      <input
+                        bind:value={
+                          () => refitName ?? currentStallName,
+                          (value) => (refitName = value)
+                        }
+                        maxlength="160"
+                        aria-describedby="refit-name-hint"
+                        required
+                      />
+                    </label>
+                    <p class="eyebrow" id="refit-name-hint">
+                      {t("refitNameHint")}
+                    </p>
                     <CuisinePicker
                       cuisines={view.hall.cuisines.filter(
                         (cuisine) => cuisine !== ownerStall?.cuisine,
@@ -3276,7 +3311,8 @@
                     <button
                       disabled={disabled ||
                         !refitCuisine ||
-                        refitCuisine === ownerStall.cuisine}
+                        refitCuisine === ownerStall.cuisine ||
+                        refitRename?.trim() === ""}
                     >
                       {t("refitLocation")} · {cash(
                         ownerStall.refit_cost ?? "0",
