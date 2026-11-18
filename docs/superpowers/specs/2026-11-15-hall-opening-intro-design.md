@@ -22,7 +22,7 @@ and disappearing instantly. The intro reuses that animation.
 
 1. Live hall: a stall's shutter rolls up when the committed view says it
    opened and rolls down when it says it closed.
-2. Intro: on every slow first load, play a ~30 s opening sequence, framed
+2. Intro: on every slow first load, play a ~32 s opening sequence, framed
    as a short film, then hold in a slow loop until the first view arrives,
    then dissolve to the live page.
 3. Normal (awake-server) launches look and behave exactly as today.
@@ -119,7 +119,7 @@ Decided behaviour:
 - The intro module is loaded with a dynamic import when it is about to
   start, so normal launches do not download it.
 
-### What it shows (storyboard, ~30 s)
+### What it shows (storyboard, ~32 s)
 
 A made-up single room built with the real room layout (`room-layout.ts`):
 roughly 8–10 stalls in real spot positions, with blank signs and no
@@ -129,10 +129,10 @@ names, prices or numbers. Night-to-day lighting.
 | --- | --- |
 | 0–4 s | Outside the room's entrance before dawn, camera at walking height. Building dark, sign unlit. |
 | 4–8 s | The sign flickers on, windows light one by one; the camera walks through the entrance. |
-| 8–16 s | The camera walks along the stalls; each shutter rolls up in turn (the Part 1 animation), revealing a lit counter and a cook. |
-| 16–24 s | Staff figures slide the stools into place around the tables within 4.5 s, then walk off round the backs of the stalls; the last are gone before the hold. |
-| 24–30 s | The camera rises to a high overview of the made-up room. |
-| 30 s+ (hold) | The hall slowly rotates while made-up diners wander in through the entrance and queue at stalls, until the server answers. |
+| 8–17.5 s | The camera walks along the stalls as each shutter rolls up in turn, revealing a lit counter and a cook. |
+| 17.5–25.5 s | Staff bend to grip the tops of the stools, slide them into place within 4.5 s, then walk round the backs of the stalls. |
+| 25.5–31.5 s | The camera rises to a high overview of the made-up room. |
+| 31.5 s+ (hold) | The hall slowly rotates while made-up diners wander in through the entrance and queue at stalls, until the server answers. |
 
 Staff use the existing worker look from `people.ts`; diners use the
 existing diner looks. Queues show figures only, never counts.

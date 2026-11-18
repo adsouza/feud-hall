@@ -9,6 +9,7 @@ import {
   carryPoint,
   cartHandlePoint,
   seatedTrayPoint,
+  stoolPushReach,
   personLook,
   posePerson,
   serialFor,
@@ -410,6 +411,32 @@ test("people: both hands of a pushing figure meet at cartHandlePoint", () => {
       cartHandlePoint(look, 0).forward,
       9,
     );
+  }
+});
+
+test("people: stool pushers bend and meet the stool's top with both hands", () => {
+  for (const look of pushLooks()) {
+    for (const stride of [-1, -0.5, 0, 0.5, 1]) {
+      // The intro positions the worker so the hands land 13 cm from the middle.
+      const pose: Pose = {
+        ...stand,
+        z: -0.13 - stoolPushReach(look, stride),
+        stride,
+        walking: true,
+        stoolPush: 1,
+      };
+      const figure = parts(look, pose);
+      const hands = figure.filter((part) => part.kind === "hand");
+      expect(hands).toHaveLength(2);
+      for (const { at } of hands) {
+        expect(at.y).toBeGreaterThan(SEAT_HEIGHT);
+        expect(at.y - FIGURE.handR * look.height).toBeLessThan(SEAT_HEIGHT);
+        expect(Math.hypot(at.x, at.z)).toBeLessThan(0.24);
+      }
+      const head = figure.find((part) => part.kind === "head")!.at;
+      expect(head.y).toBeLessThan(look.height * 0.75);
+      expect(head.z).toBeGreaterThan(pose.z + 0.4);
+    }
   }
 });
 

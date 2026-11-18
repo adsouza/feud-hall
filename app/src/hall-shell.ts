@@ -1,5 +1,6 @@
 import * as T from "three";
 import street from "./assets/hall/street-at-dusk.webp";
+import { SEAT_HEIGHT } from "./people";
 import {
   DOOR_WIDTH,
   ENTRANCE_WIDTH,
@@ -43,7 +44,7 @@ export function createFurniture() {
   const seatGeometry: T.BufferGeometry = new T.CylinderGeometry(
     0.24,
     0.2,
-    0.46,
+    SEAT_HEIGHT,
     10,
   );
   const tableTop: T.Material = new T.MeshStandardMaterial({
@@ -448,7 +449,7 @@ export function createHallShell(
             s = Math.sin(spot.yaw);
           transform.position.set(
             spot.x + c * dx + s * dz,
-            0.23,
+            SEAT_HEIGHT / 2,
             spot.z - s * dx + c * dz,
           );
           transform.updateMatrix();

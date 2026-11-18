@@ -20,9 +20,10 @@ test("intro timeline: beats change at their boundaries", () => {
   expect(introFrame(3999, 9).beat).toBe("outside");
   expect(introFrame(4000, 9).beat).toBe("lights");
   expect(introFrame(8000, 9).beat).toBe("shutters");
-  expect(introFrame(16000, 9).beat).toBe("stools");
-  expect(introFrame(24000, 9).beat).toBe("rise");
-  expect(introFrame(30000, 9).beat).toBe("hold");
+  expect(introFrame(17499, 9).beat).toBe("shutters");
+  expect(introFrame(17500, 9).beat).toBe("stools");
+  expect(introFrame(25500, 9).beat).toBe("rise");
+  expect(introFrame(31500, 9).beat).toBe("hold");
 });
 
 test("intro timeline: dark and shut outside, lit and open in the hold", () => {
@@ -56,7 +57,11 @@ test("intro timeline: shutters rise one after another", () => {
   const f = introFrame(12000, 9);
   expect(f.shutterLevels[0]).toBe(0);
   expect(f.shutterLevels[8]).toBe(1);
-  expect(introFrame(16000, 9).shutterLevels).toEqual(Array(9).fill(0));
+  expect(introFrame(16000, 9).shutterLevels[8]).toBe(1);
+  expect(introFrame(17000, 9).shutterLevels[8]).toBeLessThan(1);
+  expect(introFrame(INTRO_BEATS.stools, 9).shutterLevels).toEqual(
+    Array(9).fill(0),
+  );
 });
 
 test("intro timeline: each shutter starts only once the camera has arrived at its stall", () => {
@@ -157,7 +162,7 @@ test("intro timeline: the street shot holds, then walks in during the lights bea
 });
 
 test("intro timeline: the camera stays inside room 1 from the entrance to the end of the rise", () => {
-  for (let ms = INTRO_DOOR_MS; ms <= 30000; ms += 100) {
+  for (let ms = INTRO_DOOR_MS; ms <= INTRO_BEATS.hold; ms += 100) {
     const [x, , z] = introFrame(ms, 9).camera;
     expect(roomAt(x, z), `at ${ms} ms`).toBe(1);
   }
@@ -192,7 +197,7 @@ test("intro timeline: facade windows light one after another in view", () => {
 });
 
 test("intro timeline: the hold orbits above the stalls", () => {
-  for (let ms = 30000; ms <= 120000; ms += 1000)
+  for (let ms = INTRO_BEATS.hold; ms <= 120000; ms += 1000)
     expect(introFrame(ms, 9).camera[1]).toBeGreaterThan(15);
 });
 

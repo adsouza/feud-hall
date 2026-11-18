@@ -8,9 +8,9 @@ export const INTRO_BEATS = {
   outside: 0,
   lights: 4000,
   shutters: 8000,
-  stools: 16000,
-  rise: 24000,
-  hold: 30000,
+  stools: 17500,
+  rise: 25500,
+  hold: 31500,
 } as const;
 
 export type Beat = keyof typeof INTRO_BEATS;

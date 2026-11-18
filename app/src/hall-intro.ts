@@ -16,7 +16,14 @@ import {
 import { STAFF_SPOTS, queueSpot, toHall, toStall } from "./hall-layout";
 import { createHallLights } from "./hall-lights";
 import { createFurniture, createHallShell } from "./hall-shell";
-import { personLook, type Detail, type Look, type Pose } from "./people";
+import {
+  SEAT_HEIGHT,
+  personLook,
+  stoolPushReach,
+  type Detail,
+  type Look,
+  type Pose,
+} from "./people";
 import { createFaceTexture, createPeople } from "./people-mesh";
 import {
   ROOM_SIDE,
@@ -56,12 +63,12 @@ const ABOVE_CEILING = 10;
 const INSIDE = ROOM_SIDE / 2 - 0.5;
 /** Figures nearer the camera than this are drawn in full. */
 const DETAIL_DISTANCE = 28;
-/** A stool's centre height, as the shell draws its seats. */
-const STOOL_Y = 0.23;
 /** How far out from its seat, away from the table, a stool starts. */
 const STOOL_PULLED = 1.1;
-/** Where a mover stands behind the stool they push. */
-const BEHIND_STOOL = 0.55;
+/** The hands contact the near half of the stool's top. */
+const STOOL_GRIP_INSET = 0.13;
+/** The start and end of each push are spent bending down and straightening up. */
+const STOOL_BEND_SHARE = 0.15;
 /** A mover's share of the stools beat: push one stool, walk, push the next. */
 const FIRST_PUSH_END = 0.35;
 const SECOND_PUSH_START = 0.65;
@@ -257,7 +264,6 @@ export function createHallIntro(
     yaw: number,
     metres = 0,
     walking = false,
-    carrying = false,
   ) {
     figure.x = x;
     figure.z = z;
@@ -265,9 +271,7 @@ export function createHallIntro(
     figure.faceYaw = 0;
     figure.stride = walking ? Math.sin(metres * GAIT) : 0;
     figure.walking = walking;
-    figure.carrying = carrying;
-    figure.pushing = false;
-    figure.seated = false;
+    figure.stoolPush = 0;
   }
 
   const stoolAt = (i: number, u: number): Point => {
@@ -278,22 +282,25 @@ export function createHallIntro(
     };
   };
   /** Behind a stool, facing the table it is pushed towards. */
-  const behind = (i: number, u: number) => {
+  const behind = (i: number, u: number, look: Look, stride = 0) => {
     const at = stoolAt(i, u);
     const { out } = seats[i]!;
+    const distance = stoolPushReach(look, stride) + STOOL_GRIP_INSET;
     return {
-      x: at.x + out.x * BEHIND_STOOL,
-      z: at.z + out.z * BEHIND_STOOL,
+      x: at.x + out.x * distance,
+      z: at.z + out.z * distance,
       yaw: Math.atan2(-out.x, -out.z),
     };
   };
   const exits = staffExits(
-    movers.map(({ pair }) => behind(pair[1]!, 1)),
+    movers.map(({ pair, look }) => behind(pair[1]!, 1, look)),
     placements,
   );
-  const firstPush = (p: number) => T.MathUtils.smoothstep(p, 0, FIRST_PUSH_END);
-  const secondPush = (p: number) =>
-    T.MathUtils.smoothstep(p, SECOND_PUSH_START, 1);
+  const firstPhase = (p: number) => p / FIRST_PUSH_END;
+  const secondPhase = (p: number) =>
+    (p - SECOND_PUSH_START) / (1 - SECOND_PUSH_START);
+  const slide = (phase: number) =>
+    T.MathUtils.smoothstep(phase, STOOL_BEND_SHARE, 1 - STOOL_BEND_SHARE);
 
   const placeTransform = new T.Object3D();
   let placedStools = -1;
@@ -302,11 +309,11 @@ export function createHallIntro(
     placedStools = progress;
     movers.forEach(({ pair: [a, b] }) => {
       for (const [i, u] of [
-        [a!, firstPush(progress)],
-        [b!, secondPush(progress)],
+        [a!, slide(firstPhase(progress))],
+        [b!, slide(secondPhase(progress))],
       ] as const) {
         const at = stoolAt(i, u);
-        placeTransform.position.set(at.x, STOOL_Y, at.z);
+        placeTransform.position.set(at.x, SEAT_HEIGHT / 2, at.z);
         placeTransform.updateMatrix();
         stools.setMatrixAt(i, placeTransform.matrix);
       }
@@ -315,18 +322,26 @@ export function createHallIntro(
   }
 
   /** Behind the stool, facing the table, pushing it in; or walking between. */
-  function poseMover(pair: number[], p: number) {
+  function poseMover(pair: number[], look: Look, p: number) {
     const [a, b] = [pair[0]!, pair[1]!];
     if (p < FIRST_PUSH_END || p >= SECOND_PUSH_START) {
       const i = p < FIRST_PUSH_END ? a : b;
-      const u = p < FIRST_PUSH_END ? firstPush(p) : secondPush(p);
-      const at = behind(i, u);
+      const phase = p < FIRST_PUSH_END ? firstPhase(p) : secondPhase(p);
+      const u = slide(phase);
+      const stride = Math.sin(u * 2 * Math.PI);
+      const at = behind(i, u, look, stride);
       const moving = u > 0 && u < 1;
-      pose(at.x, at.z, at.yaw, u * STOOL_PULLED, moving, moving);
+      pose(at.x, at.z, at.yaw);
+      figure.walking = moving;
+      figure.stride = stride;
+      figure.stoolPush = Math.min(
+        T.MathUtils.smoothstep(phase, 0, STOOL_BEND_SHARE),
+        1 - T.MathUtils.smoothstep(phase, 1 - STOOL_BEND_SHARE, 1),
+      );
       return;
     }
-    const from = behind(a, 1);
-    const to = behind(b, 0);
+    const from = behind(a, 1, look);
+    const to = behind(b, 0, look);
     const w = (p - FIRST_PUSH_END) / (SECOND_PUSH_START - FIRST_PUSH_END);
     const dx = to.x - from.x;
     const dz = to.z - from.z;
@@ -363,7 +378,7 @@ export function createHallIntro(
     if (ms !== null && ms >= INTRO_BEATS.stools)
       movers.forEach((mover, i) => {
         if (ms < STAFF_LEAVE_MS) {
-          poseMover(mover.pair, frame.stoolProgress);
+          poseMover(mover.pair, mover.look, frame.stoolProgress);
           const fade = (ms - INTRO_BEATS.stools) / MOVER_FADE_MS;
           addFigure(mover.look, Math.min(1, fade));
           staff += 1;

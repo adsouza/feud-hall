@@ -1,4 +1,5 @@
 import type { Page, Route } from "@playwright/test";
+import { INTRO_BEATS } from "../../src/hall-intro-timeline";
 import { expect, test } from "./hall";
 
 test.use({
@@ -158,27 +159,29 @@ test("intro: a skip jumps to the hold", async ({ page, hall }) => {
 test("intro: the staff set the stools, then leave before the hold", async ({
   page,
   hall,
-}) => {
-  // A small window keeps the software renderer quick over 30 s of frames.
-  await page.setViewportSize({ width: 480, height: 400 });
+}, info) => {
+  await page.setViewportSize({ width: 720, height: 650 });
   await openHeld(page, hall.origin);
   await startIntro(page);
   const staff = async () =>
     Number(await intro(page).getAttribute("data-intro-staff"));
   // Nobody sets stools while the camera walks the aisle...
-  await page.clock.runFor(14000);
+  await page.clock.runFor(INTRO_BEATS.stools - 2000);
   await expect(intro(page)).toHaveAttribute("data-intro-beat", "shutters");
   expect(await staff()).toBe(0);
   // ...all sixteen are at the tables during the stools beat...
-  await page.clock.runFor(4000);
+  await page.clock.runFor(5300);
   await expect(intro(page)).toHaveAttribute("data-intro-beat", "stools");
   expect(await staff()).toBe(16);
+  await intro(page)
+    .locator("canvas")
+    .screenshot({ path: info.outputPath("pushing-stools.png") });
   // ...some are still walking off as the camera rises...
-  await page.clock.runFor(7000);
+  await page.clock.runFor(INTRO_BEATS.rise - INTRO_BEATS.stools - 2300);
   await expect(intro(page)).toHaveAttribute("data-intro-beat", "rise");
   expect(await staff()).toBeGreaterThan(0);
   // ...and every one has gone round the back of a stall by the hold.
-  await page.clock.runFor(6000);
+  await page.clock.runFor(INTRO_BEATS.hold - INTRO_BEATS.rise);
   await expect(intro(page)).toHaveAttribute("data-intro-beat", "hold");
   expect(await staff()).toBe(0);
 });
@@ -187,14 +190,14 @@ test("intro: diners are coming in when the camera rises to the overview", async 
   page,
   hall,
 }) => {
-  // A small window keeps the software renderer quick over 24 s of frames.
+  // A small window keeps the software renderer quick through the rise.
   await page.setViewportSize({ width: 480, height: 400 });
   await openHeld(page, hall.origin);
   await startIntro(page);
   const inside = async () =>
     Number(await intro(page).getAttribute("data-intro-diners-inside"));
   // Nobody comes in while the stalls open...
-  await page.clock.runFor(17500);
+  await page.clock.runFor(INTRO_BEATS.stools + 1500);
   await expect(intro(page)).toHaveAttribute("data-intro-beat", "stools");
   expect(await inside()).toBe(0);
   // ...but by the rise several are already crossing the floor.

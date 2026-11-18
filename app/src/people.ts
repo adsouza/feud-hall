@@ -226,6 +226,7 @@ export type Pose = {
   carrying: boolean; // both hands hold a tray in front
   pushing: boolean; // both hands on a cart's handle, arms still; beats carrying
   seated: boolean; // sitting on a seat, hands on the table; ignores stride, carrying and pushing
+  stoolPush?: number; // 0 upright, 1 bent with both hands on the stool
 };
 type Emit = (kind: PartKind, matrix: T.Matrix4, colour: number) => void;
 
@@ -236,12 +237,17 @@ const TABLE_TOP = 0.795;
 // Seated arms: the upper arm points well forward, the forearm is solved so the
 // hands rest on the table top.
 const SEATED_UPPER = -1.3;
+const STOOL_BEND = 1.1;
+const STOOL_UPPER = -0.45;
+const STOOL_ARM_OUT = -0.3;
 
 const APRON = 0xf3e6d0;
 const SHOES = 0x2b2623;
 
 // Scratch objects: posePerson allocates nothing per call.
 const ROOT = new T.Matrix4();
+const BENT_TORSO = new T.Matrix4();
+let partRoot = ROOT;
 const LOCAL = new T.Matrix4();
 const OUT = new T.Matrix4();
 const POS = new T.Vector3();
@@ -280,7 +286,7 @@ function place(
     QUAT.setFromEuler(EULER.set(rx, ry, rz, "ZXY")),
     SCALE.set(sx, sy, sz),
   );
-  OUT.multiplyMatrices(ROOT, LOCAL);
+  OUT.multiplyMatrices(partRoot, LOCAL);
   sink(kind, OUT, colour);
 }
 
@@ -328,6 +334,26 @@ function pushFore(look: Look, bob: number): number {
   return -Math.acos(T.MathUtils.clamp(fore, -1, 1));
 }
 
+function stoolFore(look: Look, bob: number): number {
+  const shoulder = F.hipY + bob + (F.shoulderY - F.hipY) * Math.cos(STOOL_BEND);
+  // Place the hands just above the seat, with their lower surface touching it.
+  const grip = SEAT_HEIGHT / look.height + F.handR * 0.75;
+  const drop = (shoulder - grip) / Math.cos(STOOL_ARM_OUT);
+  const fore = (drop - F.upperArmLen * Math.cos(STOOL_UPPER)) / F.forearmLen;
+  return -Math.acos(T.MathUtils.clamp(fore, -1, 1));
+}
+
+/** How far ahead of the worker's feet their hands reach while pushing a stool. */
+export function stoolPushReach(look: Look, stride = 0): number {
+  const fore = stoolFore(look, bobFor(stride));
+  const shoulderZ = (F.shoulderY - F.hipY) * Math.sin(STOOL_BEND);
+  const z =
+    shoulderZ -
+    F.upperArmLen * Math.sin(STOOL_UPPER) -
+    F.forearmLen * Math.sin(fore);
+  return z * look.height * look.width;
+}
+
 function poseParts(look: Look, pose: Pose, detail: Detail): void {
   const full = detail === "full";
   const seated = pose.seated;
@@ -338,8 +364,18 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
   const pushing = pose.pushing && !seated;
   const carrying = pose.carrying && !pushing;
   const pushForeAngle = pushing ? pushFore(look, bob) : 0;
+  const stoolPush = seated ? 0 : (pose.stoolPush ?? 0);
+  const bend = STOOL_BEND * stoolPush;
+  const hipY = F.hipY + bob;
+  const sinBend = Math.sin(bend);
+  const cosBend = Math.cos(bend);
+  const stoolForeAngle = stoolPush ? stoolFore(look, bob) : 0;
   const cap = look.hairStyle === "cap";
 
+  if (stoolPush)
+    partRoot = BENT_TORSO.makeRotationX(bend)
+      .setPosition(0, hipY * (1 - cosBend), -hipY * sinBend)
+      .premultiply(ROOT);
   place(
     "torso",
     look.shirt,
@@ -419,6 +455,7 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
       );
   }
 
+  partRoot = ROOT;
   const legColour = look.skirt ? look.skin : look.trousers;
   const sleeveColour = look.shortSleeves ? look.skin : look.shirt;
   for (let side = 0; side < 2; side++) {
@@ -429,7 +466,7 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
     const hip = seated ? SEATED.tilt - Math.PI / 2 : -F.hipSwing * lead;
     const shin = seated ? 0 : hip + F.kneeBend * Math.max(0, -lead);
     const hx = sx * F.hipX;
-    const hy = F.hipY + bob;
+    const hy = hipY;
     if (full) {
       place("upperLeg", legColour, hx, hy, 0, hip, 0, 0, 1, 1, 1);
       const ky = hy - F.thighLen * Math.cos(hip);
@@ -467,31 +504,36 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
 
     // Arm: counter-swings against the same-side leg, holds the tray, or holds
     // the cart's handle.
-    const upper = seated
+    const uprightUpper = seated
       ? SEATED_UPPER
       : pushing
         ? PUSH_UPPER
         : carrying
           ? F.carryUpper
           : F.armSwing * lead;
-    const fore = seated
+    const uprightFore = seated
       ? SEATED.fore
       : pushing
         ? pushForeAngle
         : carrying
           ? F.carryFore
-          : upper;
-    const out = sx * F.armOut;
+          : uprightUpper;
+    const upper = T.MathUtils.lerp(uprightUpper, STOOL_UPPER, stoolPush);
+    const fore = T.MathUtils.lerp(uprightFore, stoolForeAngle, stoolPush);
+    const out = sx * T.MathUtils.lerp(F.armOut, STOOL_ARM_OUT, stoolPush);
     const ax = sx * F.shoulderX;
-    const ay = F.shoulderY + bob;
+    const ay = stoolPush
+      ? hipY + (F.shoulderY - F.hipY) * cosBend
+      : F.shoulderY + bob;
+    const az = (F.shoulderY - F.hipY) * sinBend;
     const cos = Math.cos(out);
     const sin = Math.sin(out);
     if (full) {
-      place("upperArm", look.shirt, ax, ay, 0, upper, 0, out, 1, 1, 1);
+      place("upperArm", look.shirt, ax, ay, az, upper, 0, out, 1, 1, 1);
       const down = F.upperArmLen * Math.cos(upper);
       const ex = ax + down * sin;
       const ey = ay - down * cos;
-      const ez = -F.upperArmLen * Math.sin(upper);
+      const ez = az - F.upperArmLen * Math.sin(upper);
       place("forearm", sleeveColour, ex, ey, ez, fore, 0, out, 1, 1, 1);
       const lower = F.forearmLen * Math.cos(fore);
       place(
@@ -514,7 +556,7 @@ function poseParts(look: Look, pose: Pose, detail: Detail): void {
         look.shirt,
         ax,
         ay,
-        0,
+        az,
         REACH.angle,
         0,
         out,
