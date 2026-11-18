@@ -167,6 +167,7 @@ const en = {
   refitLocation: "Refit this location",
   stallName: "Stall name",
   refitNameHint: "Edit the name shown to diners. Up to 40 characters.",
+  refitNameServerUpdate: "Stall renaming requires a hall server update.",
   readyIn: "Ready in",
   surrenderLocation: "Surrender closed location",
   surrenderDistressHint:
@@ -677,6 +678,8 @@ const ja: Record<Key, string> = {
   currentLocations: "現在の店舗",
   refitLocation: "この店舗を改装",
   stallName: "店舗の表示名",
+  refitNameServerUpdate:
+    "店舗の表示名を変更するには、ホールのサーバーの更新が必要です。",
   refitNameHint:
     "来店客に表示する店名を変更できます。40文字以内で入力してください。",
   readyIn: "準備完了まで",

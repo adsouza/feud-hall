@@ -538,6 +538,8 @@ with at least one non-whitespace character. The refit event records the name
 when supplied. Earlier events and requests without it keep the location's
 current name. The Hall and dining views expose the stall name, defaulting to
 the restaurant name. Business-level displays use the restaurant name.
+The refit form offers renaming when the owned stall projection includes a
+name. Older servers omit that field and still accept cuisine-only refits.
 
 ### The recorded rule change
 

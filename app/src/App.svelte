@@ -681,13 +681,22 @@
     restaurant?.stalls.find((stall) => stall.id === ownerStallId) ??
       restaurant?.stalls[0],
   );
+  // The server added the owned stall's name in the same release as stall_name.
+  let supportsStallRename = $derived(typeof ownerStall?.name === "string");
   let refitScope = $derived(
     ownerStall && restaurant
-      ? JSON.stringify([restaurant.id, ownerStall.id, ownerStall.cuisine])
+      ? JSON.stringify([
+          restaurant.id,
+          ownerStall.id,
+          ownerStall.cuisine,
+          supportsStallRename,
+        ])
       : "",
   );
   let currentStallName = $derived(ownerStall?.name ?? restaurant?.name ?? "");
-  let refitRename = $derived(refitName === currentStallName ? null : refitName);
+  let refitRename = $derived(
+    supportsStallRename && refitName !== currentStallName ? refitName : null,
+  );
   let businessSections = $derived<BusinessSection[]>([
     ...(restaurant?.stall_limit ? ["locations" as const] : []),
     "menu",
@@ -3284,21 +3293,25 @@
                         });
                     }}
                   >
-                    <label>
-                      {t("stallName")}
-                      <input
-                        bind:value={
-                          () => refitName ?? currentStallName,
-                          (value) => (refitName = value)
-                        }
-                        maxlength="160"
-                        aria-describedby="refit-name-hint"
-                        required
-                      />
-                    </label>
-                    <p class="eyebrow" id="refit-name-hint">
-                      {t("refitNameHint")}
-                    </p>
+                    {#if supportsStallRename}
+                      <label>
+                        {t("stallName")}
+                        <input
+                          bind:value={
+                            () => refitName ?? currentStallName,
+                            (value) => (refitName = value)
+                          }
+                          maxlength="160"
+                          aria-describedby="refit-name-hint"
+                          required
+                        />
+                      </label>
+                      <p class="eyebrow" id="refit-name-hint">
+                        {t("refitNameHint")}
+                      </p>
+                    {:else}
+                      <p>{t("refitNameServerUpdate")}</p>
+                    {/if}
                     <CuisinePicker
                       cuisines={view.hall.cuisines.filter(
                         (cuisine) => cuisine !== ownerStall?.cuisine,

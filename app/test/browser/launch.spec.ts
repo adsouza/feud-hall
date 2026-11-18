@@ -1,4 +1,4 @@
-import { cash, type Slot } from "../../src/api";
+import { cash, type OwnerStall, type Slot, type View } from "../../src/api";
 import { createGuest, expect, state, test } from "./hall";
 
 test.use({
@@ -186,6 +186,42 @@ test("launch owner selects from all cuisines, equips a recipe and expands", asyn
     { stall_id: first.stall_id, name: "Test counter", cuisine: "tamil" },
     { stall_id: second.stall_id, name: "朝の台所", cuisine: "japanese" },
   ]);
+
+  // Older halls accept cuisine refits and omit the owned stall's display name.
+  const olderView: View = structuredClone(afterRefit);
+  for (const stall of olderView.profile!.restaurant!.stalls) delete stall.name;
+  await page.route("**/api/state**", (route) =>
+    route.fulfill({ json: olderView }),
+  );
+  await selectedLocation.selectOption(first.stall_id);
+  await expect(
+    refit.getByText("Stall renaming requires a hall server update."),
+  ).toBeVisible();
+  await expect(refit.getByLabel("Stall name", { exact: true })).toHaveCount(0);
+  await refit.getByRole("radio", { name: "Cantonese", exact: true }).check();
+  const sent = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/api/commands") &&
+      request.postDataJSON().kind === "refit_location",
+  );
+  await refit.getByRole("button", { name: /^Refit this location ·/ }).click();
+  expect((await sent).postDataJSON().payload).toEqual({
+    restaurant_id: afterRefit.profile.restaurant.id,
+    stall_id: first.stall_id,
+    cuisine: "cantonese",
+  });
+  await expect
+    .poll(
+      async () =>
+        (await state(page)).profile.restaurant.stalls.find(
+          (stall: OwnerStall) => stall.id === first.stall_id,
+        )?.cuisine,
+    )
+    .toBe("cantonese");
+  await page.unroute("**/api/state**");
+  await expect(selectedLocation.locator("option:checked")).toHaveText(
+    `Test counter · ${first.stall_id} · Cantonese`,
+  );
   await page.getByRole("button", { name: "Hall", exact: true }).click();
   await page.getByRole("button", { name: "Stall list", exact: true }).click();
   await expect(
