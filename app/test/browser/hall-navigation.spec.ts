@@ -38,6 +38,18 @@ function observeCamera(page: Page) {
     });
   });
 }
+async function cameraPose(page: Page) {
+  const values = await page.evaluate(
+    () => (window as unknown as Probe).hallViewMatrix,
+  );
+  expect(values).toHaveLength(16);
+  const world = new T.Matrix4().fromArray(values).invert();
+  return {
+    position: new T.Vector3().setFromMatrixPosition(world),
+    forward: new T.Vector3(0, 0, -1).transformDirection(world),
+  };
+}
+
 test("every first arrow enters at eye level facing an open stall, then walking resumes", async ({
   page,
   hall,
@@ -57,17 +69,7 @@ test("every first arrow enters at eye level facing an open stall, then walking r
     exact: true,
   });
   await selected.selectOption(snapshot.hall.stalls[0].stall_id);
-  async function pose() {
-    const values = await page.evaluate(
-      () => (window as unknown as Probe).hallViewMatrix,
-    );
-    expect(values).toHaveLength(16);
-    const world = new T.Matrix4().fromArray(values).invert();
-    return {
-      position: new T.Vector3().setFromMatrixPosition(world),
-      forward: new T.Vector3(0, 0, -1).transformDirection(world),
-    };
-  }
+  const pose = () => cameraPose(page);
   const spots = assignSpots(snapshot.hall.stalls);
   for (const key of [
     "ArrowUp",
@@ -141,6 +143,85 @@ test("every first arrow enters at eye level facing an open stall, then walking r
     .locator("canvas")
     .screenshot({ path: info.outputPath("walking-entry.png") });
 });
+
+for (const change of [
+  "stall removal",
+  "wheel zoom",
+  "orbit button",
+  "mouse drag",
+] as const) {
+  test(`walking continues from the same spot after ${change}`, async ({
+    page,
+    hall,
+  }) => {
+    await observeCamera(page);
+    await page.goto(hall.origin);
+    const snapshot = await state(page);
+    await page.route("**/api/state**", (route) =>
+      route.fulfill({ json: snapshot }),
+    );
+    const host = page.locator("[data-hall-canvas]");
+    await expect(host).toHaveAttribute("tabindex", "0");
+    await host.focus();
+    await host.press("ArrowLeft");
+    const entrance = await cameraPose(page);
+    for (let step = 0; step < 9; step++) await host.press("Shift+ArrowRight");
+    const before = await cameraPose(page);
+    expect(before.position.distanceTo(entrance.position)).toBeGreaterThan(0.8);
+
+    if (change === "stall removal") {
+      const selected = page.getByRole("combobox", {
+        name: "Location",
+        exact: true,
+      });
+      const id = await selected.inputValue();
+      expect(id).not.toBe("");
+      snapshot.hall.stalls = snapshot.hall.stalls.filter(
+        (stall: { stall_id: string }) => stall.stall_id !== id,
+      );
+      snapshot.hall.position++;
+      await expect(selected.locator(`option[value="${id}"]`)).toHaveCount(0);
+    } else {
+      if (change === "wheel zoom") {
+        await host.hover();
+        await page.mouse.wheel(0, 200);
+      } else if (change === "mouse drag") {
+        const box = (await host.boundingBox())!;
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        await page.mouse.move(x + 40, y);
+        await page.mouse.up();
+      } else {
+        await page
+          .getByRole("button", { name: "Orbit left", exact: true })
+          .click();
+      }
+      await expect
+        .poll(async () =>
+          (await cameraPose(page)).position.distanceTo(before.position),
+        )
+        .toBeGreaterThan(0.05);
+    }
+    if (change === "orbit button") {
+      await page.getByRole("button", { name: "Profile", exact: true }).click();
+      await page.getByRole("button", { name: "Hall", exact: true }).click();
+      await expect(host).toHaveAttribute("tabindex", "0");
+    }
+    // A turn changes heading while leaving the walker's feet in place.
+    await host.press("ArrowRight");
+    expect(
+      (await cameraPose(page)).position.distanceTo(before.position),
+    ).toBeLessThan(1e-5);
+    await host.press("ArrowUp");
+    const distance = (await cameraPose(page)).position.distanceTo(
+      before.position,
+    );
+    expect(distance).toBeGreaterThan(0.08);
+    expect(distance).toBeLessThan(0.4);
+  });
+}
 
 test("returning to the hall with nothing selected keeps the overview camera", async ({
   page,

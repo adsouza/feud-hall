@@ -55,6 +55,8 @@ type CameraPose = {
   walk?: { stall: string };
 };
 export type CameraState = CameraPose & {
+  /** Floor position to resume after orbiting or zooming during a walk. */
+  pausedWalk?: { position: Point; stall: string };
   /** The room the viewer was in. */
   room?: number;
   inside?: { stall: string; hall: CameraPose };
@@ -251,6 +253,7 @@ export function createHallScene(
   orbit.mouseButtons.LEFT = T.MOUSE.ROTATE;
   orbit.touches.ONE = T.TOUCH.ROTATE;
   let walking: string | null = saved?.walk?.stall ?? null;
+  let pausedWalk = saved?.pausedWalk;
   let insideStall = saved?.inside?.stall ?? "";
   let hallView: CameraPose | undefined = saved?.inside?.hall;
   let readingMenu = saved?.menu?.stall ?? "";
@@ -1079,7 +1082,31 @@ export function createHallScene(
     if (step(position.x, nextZ)) position.z = nextZ;
   }
 
+  function pauseWalk(position: T.Vector3) {
+    if (walking === null) return;
+    pausedWalk = { position: point(position), stall: walking };
+    walking = null;
+    stopWalking();
+  }
+
   function enterWalking() {
+    if (pausedWalk) {
+      const { position, stall } = pausedWalk;
+      pausedWalk = undefined;
+      // A live update may have closed the room while the camera was orbiting.
+      if (walkable(position[0], position[2], openRooms, [])) {
+        const heading = orbit.target
+          .clone()
+          .sub(camera.position)
+          .setLength(WALK_LOOK_DISTANCE);
+        walking = stalls.has(stall) ? stall : "";
+        camera.position.copy(vec(position));
+        orbit.target.copy(camera.position).add(heading);
+        configureCamera();
+        orbit.update();
+        return;
+      }
+    }
     const entrance = walkingEntrance(
       [...stalls.entries()].map(([id, model]) => ({
         id,
@@ -1145,6 +1172,11 @@ export function createHallScene(
     orbit.maxPolarAngle = insideStall
       ? Math.PI - 0.25
       : Math.max(ORBIT_POLAR_LIMIT, Math.PI / 2 + pitch);
+    // Arrow movement while the pointer is down is still walking.
+    if (gestureStart) {
+      gestureStart.position.copy(camera.position);
+      gestureStart.target.copy(orbit.target);
+    }
     return orbit.update();
   }
 
@@ -1172,6 +1204,7 @@ export function createHallScene(
     }
     setInside("");
     if (appearance.motion) {
+      pausedWalk = undefined;
       walking = stall;
       const position = toHall(model.placement, 0, 2.2);
       camera.position.set(position.x, EYE_HEIGHT, position.z);
@@ -1258,7 +1291,7 @@ export function createHallScene(
       !event.metaKey
     ) {
       const id = insideStall || walking || appearance.selected;
-      if (id) {
+      if (id && stalls.has(id)) {
         event.preventDefault();
         actions.interact(id, "counter");
       }
@@ -1381,6 +1414,7 @@ export function createHallScene(
   /** Frame a room's overview. */
   function frameRoom(room: number) {
     const c = roomCentre(room);
+    pausedWalk = undefined;
     walking = null;
     orbit.maxPolarAngle = ORBIT_POLAR_LIMIT;
     orbit.target.set(c.x, 0, c.z);
@@ -1481,6 +1515,7 @@ export function createHallScene(
     setInside("");
     const model = stalls.get(id);
     if (!model || model.placement.room > openRooms) return;
+    pausedWalk = undefined;
     walking = null;
     orbit.target.copy(model.root.localToWorld(new T.Vector3(0, 0.75, 0.35)));
     const offset = new T.Vector3(0.7, 1.65, 7.8).applyAxisAngle(
@@ -1650,12 +1685,20 @@ export function createHallScene(
   host.addEventListener("keyup", keyUp);
   host.addEventListener("blur", stopWalking);
   window.addEventListener("blur", stopWalking);
+  let gestureStart: { position: T.Vector3; target: T.Vector3 } | null = null;
   function orbitChanged() {
+    if (
+      gestureStart &&
+      (gestureStart.position.distanceToSquared(camera.position) > 1e-8 ||
+        gestureStart.target.distanceToSquared(orbit.target) > 1e-8)
+    ) {
+      pauseWalk(gestureStart.position);
+      gestureStart = null;
+    }
     limitTarget();
     draw(performance.now());
   }
   orbit.addEventListener("change", orbitChanged);
-  let gestureStart: { position: T.Vector3; target: T.Vector3 } | null = null;
   orbit.addEventListener("start", () => {
     gestureStart =
       walking !== null && !insideStall && !readingMenu
@@ -1663,12 +1706,6 @@ export function createHallScene(
         : null;
   });
   orbit.addEventListener("end", () => {
-    if (
-      gestureStart &&
-      (gestureStart.position.distanceToSquared(camera.position) > 1e-8 ||
-        gestureStart.target.distanceToSquared(orbit.target) > 1e-8)
-    )
-      walking = null;
     gestureStart = null;
   });
   const resize = new ResizeObserver(() => {
@@ -1818,7 +1855,8 @@ export function createHallScene(
         (!next.ownedStalls.includes(insideStall) || !stalls.has(insideStall))
       )
         setInside("");
-      if (walking && !stalls.has(walking)) walking = null;
+      // An empty stall ID is a walk with no counter selected.
+      if (walking && !stalls.has(walking)) walking = "";
       if (readingMenu && !stalls.has(readingMenu)) readMenu("");
       hasHallView = true;
       if (!document.hidden)
@@ -1910,7 +1948,7 @@ export function createHallScene(
         draw();
         return;
       }
-      if (!readingMenu) walking = null;
+      if (!readingMenu) pauseWalk(camera.position);
       const delta = camera.position.clone().sub(orbit.target);
       delta.setLength(
         T.MathUtils.clamp(
@@ -1924,7 +1962,7 @@ export function createHallScene(
       draw();
     },
     rotate(angle: number) {
-      if (!insideStall && !readingMenu) walking = null;
+      if (!insideStall && !readingMenu) pauseWalk(camera.position);
       const delta = camera.position.clone().sub(orbit.target);
       delta.applyAxisAngle(new T.Vector3(0, 1, 0), angle);
       camera.position.copy(orbit.target).add(delta);
@@ -1935,6 +1973,7 @@ export function createHallScene(
       return {
         ...pose(),
         room: currentRoom,
+        ...(pausedWalk ? { pausedWalk } : {}),
         ...(readingMenu && menuReturn
           ? { menu: { stall: readingMenu, hall: menuReturn } }
           : {}),
