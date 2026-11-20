@@ -1460,7 +1460,7 @@ An open stall with mains on its menu displays a **Sold Out** sign in the 3D hall
 
 People are proportioned figures built in code, with arms and legs, several hair styles, and varied clothing and build. Owners wear an apron so they can be told from diners and kitchen staff. Distant and reduced-detail people are drawn more simply but keep their silhouette. A person's look stays the same for as long as they are in the hall, and walking people fade in and out smoothly.
 
-Closed stalls display a counter placard with the next expected reopening in hall time when an opening is queued and current conditions support a forecast. A stall with an unset reopening time displays that status. The stall inspector and list show the same information.
+Closed stalls display a counter placard with the next expected reopening in hall time when an opening is queued and current conditions support a forecast. The estimate assumes current attendance and operating conditions continue. At their own manually closed stall, owners see when they can open it, including “Now” when eligible. Visitors see an expected time only for a queued opening or the end of cleaning at an otherwise open stall. The stall inspector and list show the same information.
 
 ### Performance and truthful animation
 

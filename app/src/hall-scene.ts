@@ -92,8 +92,7 @@ export type Appearance = {
   pickups: CounterPickup[];
   closedLabel: string;
   cuisineLabel: (id: string) => string;
-  reopeningHeading: string;
-  reopeningTime: (stall: Stall) => string;
+  reopeningSign: (stall: Stall) => { heading: string; value: string };
   detail: boolean;
   motion: boolean;
   tablet: TabletView | null;
@@ -818,8 +817,7 @@ export function createHallScene(
     pickups: [],
     closedLabel: "",
     cuisineLabel: (id) => id,
-    reopeningHeading: "",
-    reopeningTime: () => "",
+    reopeningSign: () => ({ heading: "", value: "" }),
     detail: true,
     motion: true,
     tablet: null,
@@ -1801,12 +1799,8 @@ export function createHallScene(
           now,
         );
         if (!model.open) {
-          paintPlacard(
-            model,
-            stall,
-            next.reopeningHeading,
-            next.reopeningTime(stall),
-          );
+          const { heading, value } = next.reopeningSign(stall);
+          paintPlacard(model, stall, heading, value);
         }
         model.serviceLamp.material = stall.activity?.paused
           ? highlight

@@ -457,6 +457,7 @@ defmodule FeudHall.Application.Management do
           menu:
             Map.new(Progression.stall_menu(state, stall, restaurant), fn {recipe, value} -> {recipe, cents(value)} end),
           lease: Map.take(lease, [:start_hour, :end_hour, :helper_offers, :unattended, :workers, :opening_requested]),
+          manual_open_at: HallManagement.manual_opening_at(state, sid),
           can_open: HallManagement.allow_open(state, sid) == :ok,
           off_duty_roles: HallManagement.off_duty_roles(state, sid, state.now)
         })

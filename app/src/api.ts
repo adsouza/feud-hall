@@ -52,6 +52,7 @@ type Lease = {
   >;
   helper_offers: boolean;
   unattended: boolean;
+  opening_requested?: boolean;
 };
 export type OwnerStall = {
   id: string;
@@ -59,6 +60,7 @@ export type OwnerStall = {
   tier: string;
   mode: string;
   can_open: boolean;
+  manual_open_at?: number | null;
   off_duty_roles?: string[];
   ready_at?: number | null;
   refit_cost?: Money;

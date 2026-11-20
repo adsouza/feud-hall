@@ -855,10 +855,20 @@
       clock,
     });
 
-  function reopeningTime(stall: Stall) {
-    const at = stall.reopens_at;
+  function reopeningSign(stall: Stall) {
+    const owned = restaurant?.stalls.find(
+      (location) => location.id === stall.stall_id,
+    );
+    const manual = owned?.lease.opening_requested === false;
+    const heading = t(manual ? "manualOpening" : "reopeningExpected");
+    const at = manual ? owned.manual_open_at : stall.reopens_at;
+    if (manual && view?.hall.access === "open" && owned.can_open)
+      return { heading, value: t("openNow") };
     if (at == null || !view || at <= view.hall.now)
-      return t("reopeningUnscheduled");
+      return {
+        heading,
+        value: t(manual ? "checkReadiness" : "reopeningUnscheduled"),
+      };
     const dayLength = 24 * 60 * 60 * 1000;
     const day = Math.floor(at / dayLength);
     const today = Math.floor(view.hall.now / dayLength);
@@ -868,7 +878,15 @@
         : day === today + 1
           ? "reopeningTomorrow"
           : "reopeningDay";
-    return t(key).replace("{day}", String(day)).replace("{time}", clock(at));
+    return {
+      heading,
+      value: t(key).replace("{day}", String(day)).replace("{time}", clock(at)),
+    };
+  }
+
+  function reopeningText(stall: Stall) {
+    const { heading, value } = reopeningSign(stall);
+    return heading + " · " + value;
   }
 
   // The original managed hall API did not project its slice catalog's profiles.
@@ -1064,8 +1082,7 @@
       else if (!profile.allowance_claimed)
         add(t("allowance"), { kind: "allowance" });
       if (view.hall.access !== "open") add(t("cleaning"));
-      else if (!stall["open?"])
-        add(t("reopeningExpected") + " · " + reopeningTime(stall));
+      else if (!stall["open?"]) add(reopeningText(stall));
       else {
         add(t("diet") + " · " + title(diet), { kind: "diets" });
         if (!checkoutMenu) add(t("tabletLoading"));
@@ -2844,7 +2861,7 @@
               saved={camera}
               {t}
               {title}
-              {reopeningTime}
+              {reopeningSign}
               select={(id) => (hallSelection = id)}
               inspect={(id) => {
                 if (immersiveHall) hallSelection = id;
@@ -2889,7 +2906,7 @@
               )}
             </p>
             {#if !hallStall["open?"]}
-              <p>{t("reopeningExpected")} · {reopeningTime(hallStall)}</p>
+              <p>{reopeningText(hallStall)}</p>
             {/if}
             <p>{t("hallQueue")} {hallStall.activity?.waiting ?? 0}</p>
             {#if hallStall.activity?.paused}<p>{t("tradingPaused")}</p>{/if}
@@ -2966,7 +2983,7 @@
           <span class="stall-sold-out">{t("soldOut")}</span>
         {/if}
         {#if !stall["open?"]}
-          <p>{t("reopeningExpected")} · {reopeningTime(stall)}</p>
+          <p>{reopeningText(stall)}</p>
         {/if}
         <p>{t("hallQueue")} {stall.activity?.waiting ?? 0}</p>
         <button

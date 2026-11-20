@@ -511,6 +511,48 @@ defmodule FeudHall.Application.ManagementTest do
     refute Map.has_key?(rt.state.owners, {:principal, other})
   end
 
+  test "a present owner's placard distinguishes manual availability from a queued reopening" do
+    rt = boot(InMemoryEventStore, InMemoryEventStore.new())
+    {rt, owner} = register(rt, "owner-device", "Owner")
+    rt = run(rt, "seed", {:system, :admin}, :seed_owner, %{principal: owner, reviewer?: true})
+    rt = client(rt, "owner-device", "reserve", :reserve_stall, %{stall_id: "s001"})
+
+    rt =
+      client(rt, "owner-device", "lease", :create_restaurant, %{
+        restaurant_id: "r1",
+        stall_id: "s001",
+        name: "Kitchen",
+        cuisine: "sichuan"
+      })
+
+    stall = %{stall_id: "s001"}
+    rt = client(rt, "owner-device", "presence", :report_owner_presence, %{present: true})
+    now = rt.state.now
+    assert {:ok, %{profile: %{restaurant: %{stalls: [%{manual_open_at: ^now}]}}}} = Management.view(rt, "owner-device")
+
+    five = Clock.cleaning_end_of(0)
+    rt = client(rt, "owner-device", "shift", :set_staff_schedule, Map.merge(stall, %{start_hour: 4, end_hour: 12}))
+    assert {:ok, %{profile: %{restaurant: %{stalls: [%{manual_open_at: ^five}]}}}} = Management.view(rt, "owner-device")
+    assert {:ok, %{hall: %{stalls: [public]}}} = Management.view(rt, nil)
+    assert public.reopens_at == nil
+    refute Map.has_key?(public, :manual_open_at)
+
+    rt = advance(rt, Clock.service_ms(Clock.cleaning_start_of(0)))
+    rt = client(rt, "owner-device", "queue", :open_stall, stall)
+    assert {:ok, %{hall: %{stalls: [%{reopens_at: nil}]}}} = Management.view(rt, nil)
+
+    rt = client(rt, "owner-device", "back", :report_owner_presence, %{present: true})
+    assert rt.state.management.presence[owner] < five
+    assert {:ok, %{hall: %{stalls: [%{reopens_at: ^five}]}}} = Management.view(rt, nil)
+
+    # Let presence lapse, then return just before reopening.
+    rt = advance(rt, Clock.service_ms(five) - 1)
+    assert {:ok, %{hall: %{stalls: [%{reopens_at: nil}]}}} = Management.view(rt, nil)
+    rt = client(rt, "owner-device", "still-here", :report_owner_presence, %{present: true})
+    rt = advance(rt, Clock.service_ms(five))
+    assert {:ok, %{hall: %{stalls: [%{open?: true, reopens_at: nil}]}}} = Management.view(rt, nil)
+  end
+
   test "fatigue changes new kitchen work and protective breaks stop and resume staffing" do
     rt = boot(InMemoryEventStore, InMemoryEventStore.new())
     {rt, owner} = register(rt, "owner-device", "Owner")
@@ -539,8 +581,10 @@ defmodule FeudHall.Application.ManagementTest do
     rt = advance(rt, Clock.service_ms(15 * Clock.hour()))
     assert rt.state.stalls["s001"].mode == :closed
     refute HallManagement.stage_available?(rt.state, "s001", :prep_cook)
+    break_end = 16 * Clock.hour()
+    assert {:ok, %{hall: %{stalls: [%{reopens_at: ^break_end}]}}} = Management.view(rt, nil)
 
-    rt = advance(rt, Clock.service_ms(16 * Clock.hour()))
+    rt = advance(rt, Clock.service_ms(break_end))
     assert rt.state.stalls["s001"].mode == :open
     assert HallManagement.adapt_course(rt.state, "s001", course) == course
   end

@@ -510,7 +510,7 @@ not medical diagnoses; the launch API has no diagnosis field.
 
 ### Public and private projections
 
-Hall subscribers receive public stall state, menus and prices, visible demand/service indicators, NPC status, and announcements. An owner receives detailed projections for their own business, inventory, ledger, staff, and policies. A selected owned stall can subscribe to detailed production updates. Private business state is never placed on a public broadcast topic.
+Hall subscribers receive public stall state, menus and prices, visible demand/service indicators, NPC status, and announcements. The public reopening estimate uses the queued opening, staff coverage, cleaning window, and current operating authorization. Only the owner projection includes the earliest eligible manual opening for a location without a queued opening. An owner receives detailed projections for their own business, inventory, ledger, staff, and policies. A selected owned stall can subscribe to detailed production updates. Private business state is never placed on a public broadcast topic.
 
 The management view derives `hall.stalls[].sold_out` from committed stock and the effective menu at each open stall. It computes unreserved, unexpired stock once per open restaurant and uses the checkout ingredient resolver with the restaurant's substitution policies. The public flag is true when the stall lists mains and none can be made. The flag is independent of a particular diner's dietary requirements and queue position. The payload exposes the flag without the stock counts or policies behind it.
 

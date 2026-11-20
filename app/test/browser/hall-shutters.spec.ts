@@ -111,6 +111,12 @@ async function closeOwnedStall(
         paused: false,
       };
     }
+  const location = snapshot.profile!.restaurant!.stalls[0];
+  location.lease.opening_requested = false;
+  location.can_open = false;
+  const day = 24 * 3_600_000;
+  location.manual_open_at =
+    (Math.floor(snapshot.hall.now / day) + 1) * day + 8 * 3_600_000;
   snapshot.hall.position += 1;
   return { host, readings, people, drawnOpen };
 }
@@ -119,12 +125,31 @@ test("hall shutters: a stall that closes rolls its shutter down", async ({
   page,
   hall,
 }) => {
+  // Observe the text sent to the placard texture itself.
+  const placardLines: string[] = [];
+  await page.exposeFunction("recordPlacardLine", (line: string) => {
+    placardLines.push(line);
+  });
+  await page.addInitScript(() => {
+    const fillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (...args) {
+      if (this.canvas.width === 512 && this.canvas.height === 180)
+        void (
+          window as unknown as {
+            recordPlacardLine: (line: string) => Promise<void>;
+          }
+        ).recordPlacardLine(args[0]);
+      fillText.apply(this, args);
+    };
+  });
   const { host, readings } = await closeOwnedStall(
     page,
     hall,
     "Shutter roller",
   );
   await expect.poll(readings).toContain("1");
+  await expect.poll(() => placardLines).toContain("Tomorrow 08:00");
+  expect(placardLines).toContain("You can open");
   await expect(host).toHaveAttribute("data-hall-shutters-moving", "0");
 });
 

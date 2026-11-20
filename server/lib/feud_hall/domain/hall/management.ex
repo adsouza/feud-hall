@@ -454,21 +454,24 @@ defmodule FeudHall.Domain.Hall.Management do
 
   def allow_open(state, sid) do
     case get_in(state, [:management, :leases, sid]) do
-      nil ->
-        :ok
+      nil -> :ok
+      lease -> allow_open_at(state, state.stalls[sid], lease, state.now)
+    end
+  end
 
-      lease ->
-        restaurant = state.restaurants[state.stalls[sid].restaurant]
+  # Project shift and refit times while holding the current operating conditions
+  # (including a connected owner's renewable presence) constant.
+  defp allow_open_at(state, stall, lease, at) do
+    restaurant = state.restaurants[stall.restaurant]
 
-        cond do
-          Progression.distressed?(state, restaurant.id) -> {:error, :business_distressed}
-          Population.closing?(state, restaurant.id) -> {:error, :npc_retiring}
-          Map.get(state.stalls[sid], :ready_at, 0) > state.now -> {:error, :location_refitting}
-          not staffed?(state, sid, state.now) -> {:error, :staff_off_duty}
-          lease.arrears > 0 -> {:error, :unpaid_rent}
-          not operating_authorized?(state, sid, restaurant) -> {:error, :owner_absent}
-          true -> :ok
-        end
+    cond do
+      Progression.distressed?(state, restaurant.id) -> {:error, :business_distressed}
+      Population.closing?(state, restaurant.id) -> {:error, :npc_retiring}
+      Map.get(stall, :ready_at, 0) > at -> {:error, :location_refitting}
+      not Staff.covered?(lease.workers, at) -> {:error, :staff_off_duty}
+      lease.arrears > 0 -> {:error, :unpaid_rent}
+      not operating_authorized?(state, stall.id, restaurant) -> {:error, :owner_absent}
+      true -> :ok
     end
   end
 
@@ -488,52 +491,65 @@ defmodule FeudHall.Domain.Hall.Management do
 
     if stall.mode == :closed or state.access == :cleaning do
       case get_in(state, [:management, :leases, sid]) do
-        %{opening_requested: true} = lease -> next_eligible_opening(state, stall, lease)
+        %{opening_requested: true} = lease -> next_eligible_opening(state, stall, lease, :scheduled)
         nil when stall.mode == :open -> Clock.next_cleaning_end(state.now)
         _ -> nil
       end
     end
   end
 
-  defp next_eligible_opening(state, stall, lease) do
-    day = Clock.day_of(state.now)
+  @doc "When the owner could next open a closed stall that has no queued opening."
+  def manual_opening_at(state, sid) do
+    stall = state.stalls[sid]
+
+    case get_in(state, [:management, :leases, sid]) do
+      %{opening_requested: false} = lease when stall.mode == :closed ->
+        next_eligible_opening(state, stall, lease, :manual)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp next_eligible_opening(state, stall, lease, kind) do
     hour = Clock.hour()
+    ready = Map.get(stall, :ready_at, 0)
+
+    # Scheduled openings are enforced on the next management boundary. An
+    # owner may open directly as soon as the refit ends.
+    earliest = max(ready, if(kind == :manual, do: state.now, else: state.now + 1))
+    refit_boundary = if kind == :manual, do: earliest, else: div(ready + hour - 1, hour) * hour
+    day = Clock.day_of(earliest)
     roster = Map.values(lease.workers)
     starts = for d <- day..(day + 1), worker <- roster, do: d * Clock.day() + worker.start_hour * hour
     breaks = for %{break_until: at} <- roster, is_integer(at), do: at
-    ready = Map.get(stall, :ready_at, 0)
-    refit_boundary = div(ready + hour - 1, hour) * hour
 
     boundaries = [
-      state.management.next_hour,
       refit_boundary,
+      state.management.next_hour,
       Clock.cleaning_end_of(day),
       Clock.cleaning_end_of(day + 1)
     ]
 
     (boundaries ++ starts ++ breaks)
-    |> Enum.filter(&(&1 > state.now and not Clock.cleaning?(&1)))
+    |> Enum.filter(&(&1 >= earliest and not Clock.cleaning?(&1)))
     |> Enum.uniq()
     |> Enum.sort()
     |> Enum.find(fn at ->
-      future = %{state | now: at}
+      forecast_lease = if Enum.any?(breaks, &(&1 <= at)), do: resume_breaks(lease, at), else: lease
+      allow_open_at(state, stall, forecast_lease, at) == :ok
+    end)
+  end
 
-      future =
-        if Enum.any?(breaks, &(&1 <= at)) do
-          update_in(future.management.leases[stall.id].workers, fn workers ->
-            Map.new(workers, fn
-              {id, %{break_until: until} = worker} when is_integer(until) and until <= at ->
-                {id, Staff.transition(worker, :recovered, at)}
+  defp resume_breaks(lease, at) do
+    update_in(lease.workers, fn workers ->
+      Map.new(workers, fn
+        {id, %{break_until: until} = worker} when is_integer(until) and until <= at ->
+          {id, Staff.transition(worker, :recovered, at)}
 
-              entry ->
-                entry
-            end)
-          end)
-        else
-          future
-        end
-
-      allow_open(future, stall.id) == :ok
+        entry ->
+          entry
+      end)
     end)
   end
 

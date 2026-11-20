@@ -31,7 +31,7 @@
     onTabletAction,
     t,
     title,
-    reopeningTime,
+    reopeningSign,
     select,
     inspect,
     interact,
@@ -60,7 +60,7 @@
     saved: CameraState | undefined;
     t: (key: Key) => string;
     title: (id: string) => string;
-    reopeningTime: (stall: Stall) => string;
+    reopeningSign: (stall: Stall) => { heading: string; value: string };
     select: (id: string) => void;
     inspect: (id: string) => void;
     interact: (id: string, target: HallTarget) => void;
@@ -165,8 +165,7 @@
       pickups,
       closedLabel: t("closed").toUpperCase(),
       cuisineLabel: title,
-      reopeningHeading: t("reopeningExpected"),
-      reopeningTime,
+      reopeningSign,
       detail: !reduced,
       motion: !motionPreference && !reduced,
       tablet,
